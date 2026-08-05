@@ -43,36 +43,33 @@ Add to your AI provider's config file (e.g., `~/.claude/config.json`):
 
 ```json
 {
-  "mcp": {
+  "mcpServers": {
     "nexhunter": {
-      "type": "local",
-      "command": [
-        "/path/to/python",
+      "command": "python3",
+      "args": [
         "-m",
         "nexhunter.api.mcp",
         "--server",
         "http://127.0.0.1:8888"
       ],
-      "environment": {
-        "PYTHONPATH": "/path/to/nexhunter"
-      },
-      "enabled": true
+      "description": "NexHunter v1.0.0 - AI-Driven Security Assessment Platform. 164 tools, 18 agents, 9 workflows.",
+      "timeout": 300,
+      "alwaysAllow": []
     }
   }
 }
 ```
 
-Replace `/path/to/python` with your Python executable path and `/path/to/nexhunter` with NexHunter repo location.
+Replace `python3` with full path to Python interpreter and `127.0.0.1:8888` with your server address.
 
-**Example (Linux/macOS/Windows):**
-- `/usr/bin/python3` → `/home/user/nexhunter`
-- `C:\Python\python.exe` → `C:\Users\user\nexhunter`
-- `.venv/Scripts/python.exe` → `./nexhunter`
+**Examples:**
+- Linux/macOS: `python3` or `/usr/bin/python3`
+- Windows: `C:\Python\python.exe` or `.venv\Scripts\python.exe`
 
 **Usage:**
 ```
 "Scan example.com with nexhunter"
-→ AI model automatically discovers and uses tools
+→ AI model automatically discovers and uses 164 tools
 ```
 
 ---
