@@ -9,7 +9,7 @@
         Advanced AI-Driven Security Assessment Platform
     </strong>
 
-![Version](https://img.shields.io/badge/version-1.0.0-blue) ![Python](https://img.shields.io/badge/python-3.8+-green) ![Tools](https://img.shields.io/badge/tools-164-blue) ![Tests](https://img.shields.io/badge/tests-100%25-green)
+![Version](https://img.shields.io/badge/version-1.0.0-blue) ![Python](https://img.shields.io/badge/python-3.8+-green) ![Tools](https://img.shields.io/badge/tools-164-blue) ![Tests](https://img.shields.io/badge/tests-77%20passing-green)
 </div>
 
 ---
@@ -33,7 +33,7 @@ python -m nexhunter.api.mcp --server http://127.0.0.1:8888
 - **9 Assessment Workflows** (bug bounty, pentest, API, cloud, mobile, DevSecOps)
 - **184 MCP Tools** for AI integration
 - **Universal MCP Support** (Claude, Grok, Gemini, GPT-4, Llama, Mistral, custom)
-- **100% Test Coverage** (12/12 tests passing)
+- **77 tests passing** across auth, authorization, engagement scope, policy, redaction, audit, enforcement, and MCP registration
 
 ---
 
@@ -147,7 +147,7 @@ Replace `python3` with full path to Python interpreter and `127.0.0.1:8888` with
 | Workflows | 9 |
 | Assessment Phases | 73 |
 | MCP Tools | 184 |
-| Test Coverage | 100% |
+| Tests Passing | 77 |
 
 ---
 
