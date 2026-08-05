@@ -7,16 +7,26 @@ Tools are generated from the central registry rather than hand-written, and
 filtered by profile so a client is shown only the tools for its job. Listing a
 tool is a usability decision; execution remains the server's.
 
+Configuration: flags override NEXHUNTER_MCP_* environment variables, which
+override defaults. Nothing else configures the bridge.
+
+    Flag            Env var                     Default
+    --server        (none)                      http://127.0.0.1:8888
+    --profile       NEXHUNTER_MCP_PROFILE       nexhunter-full
+    --tool-limit    NEXHUNTER_MCP_TOOL_LIMIT    (no cap)
+    --max-output    NEXHUNTER_MCP_MAX_OUTPUT    4000
+
 Usage:
     python -m nexhunter.api.server --port 8888          # start the server first
     python -m nexhunter.api.mcp --server http://127.0.0.1:8888
-    python -m nexhunter.api.mcp --profile nexhunter-web
+    python -m nexhunter.api.mcp --profile nexhunter-web --tool-limit 30
     python -m nexhunter.api.mcp --list-profiles
 """
 
 import argparse
 import inspect
 import json
+import logging
 import os
 import sys
 import urllib.parse
@@ -28,6 +38,8 @@ from fastmcp import FastMCP
 
 from nexhunter.core import tools as T
 from nexhunter.api import mcp_profiles
+
+log = logging.getLogger("nexhunter.mcp")
 
 SERVER = "http://127.0.0.1:8888"
 # Which slice of the registry this bridge exposes. Overridden by --profile or
@@ -348,12 +360,15 @@ def resource_available_tools() -> str:
     )
 
 
+def _profiles_summary() -> dict:
+    """Which profile is active and what each profile exposes."""
+    return {"active": PROFILE_NAME, "profiles": mcp_profiles.summarize()}
+
+
 @mcp.resource("nexhunter://profiles")
 def resource_profiles() -> str:
     """Available MCP profiles and how many tools each exposes."""
-    return _render(
-        {"active": PROFILE_NAME, "profiles": mcp_profiles.summarize()}
-    )
+    return _render(_profiles_summary())
 
 
 @mcp.resource("nexhunter://executions")
@@ -377,9 +392,7 @@ def resource_status() -> str:
 @mcp.tool()
 def list_profiles() -> str:
     """List MCP profiles, the tools each exposes, and which one is active."""
-    return _render(
-        {"active": PROFILE_NAME, "profiles": mcp_profiles.summarize()}
-    )
+    return _render(_profiles_summary())
 
 
 @mcp.tool()
@@ -482,9 +495,11 @@ _REGISTERED_TOOL_COUNT = register_profile_tools()
 
 
 def main():
-    global SERVER, PROFILE_NAME, TOOL_LIMIT
-    parser = argparse.ArgumentParser(description="nexhunter MCP bridge")
-    parser.add_argument("--server", default="http://127.0.0.1:8888", help="nexhunter server URL")
+    global SERVER, PROFILE_NAME, TOOL_LIMIT, MAX_OUTPUT
+    parser = argparse.ArgumentParser(
+        description="nexhunter MCP bridge. Flags override NEXHUNTER_MCP_* env vars."
+    )
+    parser.add_argument("--server", default=SERVER, help="nexhunter server URL")
     parser.add_argument(
         "--profile",
         default="",
@@ -502,8 +517,8 @@ def main():
         "--max-output",
         type=int,
         default=None,
-        help="max chars kept per string field in tool results (default 4000, "
-             "or NEXHUNTER_MCP_MAX_OUTPUT). Keeps large tool output from "
+        help="max chars kept per string field in tool results. Defaults to "
+             "NEXHUNTER_MCP_MAX_OUTPUT or 4000. Keeps large tool output from "
              "flooding the LLM context window",
     )
     parser.add_argument("--list-profiles", action="store_true", help="print profiles and exit")
@@ -516,27 +531,31 @@ def main():
                   f"({row['available_tool_count']} installed)  {row['description']}")
         return
 
+    # Flags override env vars, which override defaults; one pass, one truth.
+    import_time_profile = PROFILE_NAME
     SERVER = args.server.rstrip("/")
-    if args.tool_limit is not None:
-        TOOL_LIMIT = str(args.tool_limit)
+    PROFILE_NAME = args.profile or PROFILE_NAME
+    env_limit = int(TOOL_LIMIT) if TOOL_LIMIT else None
+    limit = args.tool_limit if args.tool_limit is not None else env_limit
     if args.max_output is not None:
-        global MAX_OUTPUT
         MAX_OUTPUT = args.max_output
 
-    # Re-register when a profile is requested that differs from the default
-    # applied at import time, or when a tool limit changes the payload.
-    limit = int(TOOL_LIMIT) if TOOL_LIMIT else None
-    if args.profile and args.profile != PROFILE_NAME:
-        PROFILE_NAME = args.profile
-        register_profile_tools(PROFILE_NAME, limit)
-    elif limit:
+    # Re-register only when the runtime settings differ from the import-time
+    # defaults, so a plain `python -m nexhunter.api.mcp` stays a no-op and a
+    # re-registration of identical tools is never attempted.
+    if (args.profile and args.profile != import_time_profile) or args.tool_limit is not None:
         register_profile_tools(PROFILE_NAME, limit)
 
-    if args.debug:
-        profile = mcp_profiles.get_profile(PROFILE_NAME)
-        exposed = len(mcp_profiles.tools_for(profile))
-        print(f"[nexhunter-mcp] server={SERVER} profile={profile.name} "
-              f"tools={exposed} limit={limit}", file=sys.stderr)
+    logging.basicConfig(
+        level=logging.DEBUG if args.debug else logging.INFO,
+        format="[nexhunter-mcp] %(levelname)s %(message)s",
+    )
+    log.info(
+        "server=%s profile=%s tools=%d limit=%s max_output=%d",
+        SERVER, PROFILE_NAME,
+        len(mcp_profiles.tools_for(mcp_profiles.get_profile(PROFILE_NAME))),
+        limit, MAX_OUTPUT,
+    )
 
     mcp.run()
 
