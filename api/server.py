@@ -60,9 +60,7 @@ import dataclasses
 import json
 import logging
 import os
-import subprocess
 import sys
-import threading
 import time
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -94,75 +92,6 @@ EXEC = ExecutionService()
 ORCHESTRATOR = AutonomousOrchestrator(execution_service=EXEC, finding_store=FINDINGS)
 
 
-class ProcessManager:
-    def __init__(self):
-        self.procs = {}
-
-    def start(self, cmd, name):
-        try:
-            p = subprocess.Popen(
-                cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True,
-                errors="replace",
-                creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
-            )
-        except FileNotFoundError:
-            return {"ok": False, "error": f"binary '{cmd[0]}' not found on PATH"}
-        rec = {"pid": p.pid, "cmd": cmd, "name": name, "started": time.time(), "running": True, "output": []}
-        self.procs[p.pid] = rec
-
-        def pump():
-            for line in p.stdout:
-                rec["output"].append(line.rstrip())
-                if len(rec["output"]) > 200:
-                    rec["output"].pop(0)
-            rec["running"] = False
-
-        threading.Thread(target=pump, daemon=True).start()
-        return {"ok": True, "pid": p.pid, "name": name, "cmd": cmd}
-
-    def start_and_wait(self, cmd, name, timeout=300):
-        r = self.start(cmd, name)
-        if not r["ok"]:
-            return r
-        rec = self.procs[r["pid"]]
-        deadline = time.time() + timeout
-        while rec["running"] and time.time() < deadline:
-            time.sleep(0.2)
-        return {"ok": not rec["running"], "pid": r["pid"], "timed_out": rec["running"], "output": "\n".join(rec["output"])}
-
-    def list(self):
-        return [
-            {"pid": pid, "name": r["name"], "cmd": r["cmd"], "running": r["running"], "uptime_s": round(time.time() - r["started"], 1), "lines": len(r["output"])}
-            for pid, r in self.procs.items()
-        ]
-
-    def status(self, pid):
-        r = self.procs.get(pid)
-        if not r:
-            return {"ok": False, "error": "no such process"}
-        return {"ok": True, "pid": pid, "running": r["running"], "uptime_s": round(time.time() - r["started"], 1), "output": r["output"][-50:]}
-
-    def terminate(self, pid):
-        r = self.procs.get(pid)
-        if not r:
-            return {"ok": False, "error": "no such process"}
-        try:
-            if os.name == "nt":
-                subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"], capture_output=True)
-            else:
-                subprocess.run(["kill", "-9", str(pid)], capture_output=True)
-        except Exception as e:
-            return {"ok": False, "error": str(e)}
-        r["running"] = False
-        return {"ok": True, "pid": pid}
-
-
-PM = ProcessManager()
-
-
 class Telemetry:
     def __init__(self):
         self.count = 0
@@ -183,7 +112,7 @@ class Telemetry:
             "cache_hits": ENGINE.cache_hits,
             "cache_evictions": ENGINE.cache_evictions,
             "findings": len(ENGINE.findings),
-            "processes": len(PM.procs),
+            "processes": len(EXEC.list_processes()),
         }
 
 
@@ -280,6 +209,7 @@ class Handler(BaseHTTPRequestHandler):
             tool_name=tool_name,
             params=body.get("params", {}),
             run_async=bool(body.get("async")),
+            no_cache=bool(body.get("no_cache")),
         )
 
     def _start_autonomous(self, body):
@@ -340,11 +270,20 @@ class Handler(BaseHTTPRequestHandler):
         elif path == "/api/telemetry":
             self._json(200, TEL.stats())
         elif path == "/api/cache/stats":
-            self._json(200, {"entries": len(ENGINE._cache), "hits": ENGINE.cache_hits, "evictions": ENGINE.cache_evictions})
+            # Primary: the result cache on the single execution path. The legacy
+            # Engine LRU (used by /api/probe, /api/portscan, ...) is reported
+            # alongside it rather than in place of it.
+            stats = dict(EXEC.cache.stats())
+            stats["legacy_engine_cache"] = {
+                "entries": len(ENGINE._cache),
+                "hits": ENGINE.cache_hits,
+                "evictions": ENGINE.cache_evictions,
+            }
+            self._json(200, stats)
         elif path == "/api/agents/list":
             self._json(200, [{"name": a.name, "desc": a.desc} for a in AGENTS.values()])
         elif path == "/api/processes/list":
-            self._json(200, PM.list())
+            self._json(200, {"ok": True, "processes": EXEC.list_processes()})
         elif path == "/api/findings":
             self._json(200, json.loads(ENGINE.report("json")))
         elif path == "/api/tools":
@@ -424,12 +363,13 @@ class Handler(BaseHTTPRequestHandler):
         elif path.startswith("/api/executions/"):
             self._json(*self._execution_get(path))
         elif path.startswith("/api/processes/status/"):
-            self._json(200, PM.status(int(path.rsplit("/", 1)[1])))
+            result = EXEC.process_status(path.rsplit("/", 1)[1])
+            self._json(200 if result.get("ok") else 404, result)
         elif path == "/api/visual/dashboard":
             metrics = DashboardMetrics()
             metrics.requests = getattr(TEL, "total_requests", 0)
             metrics.findings = len(ENGINE.findings) if hasattr(ENGINE, "findings") else 0
-            metrics.processes = len(PM.procs)
+            metrics.processes = len(EXEC.list_processes())
             self._json(200, metrics.to_dict())
         elif path == "/api/visual/vulnerabilities":
             findings = ENGINE.findings if hasattr(ENGINE, "findings") else []
@@ -454,6 +394,8 @@ class Handler(BaseHTTPRequestHandler):
         fn = None
         if path == "/api/command":
             fn = lambda: self._command(body)
+        elif path == "/api/cache/clear":
+            fn = lambda: {"ok": True, "cleared": EXEC.cache.clear()}
         elif path == "/api/autonomous":
             fn = lambda: self._start_autonomous(body)
         elif path == "/api/plan":
@@ -501,9 +443,9 @@ class Handler(BaseHTTPRequestHandler):
         elif path == "/api/tools/ctf-solver":
             fn = lambda: ENHANCED_AGENTS["ctf_solver"].execute(ENGINE, body)
         elif path.startswith("/api/processes/terminate/"):
-            fn = lambda: PM.terminate(int(path.rsplit("/", 1)[1]))
+            fn = lambda: EXEC.terminate_process(path.rsplit("/", 1)[1])
         elif path == "/api/processes/terminate":
-            fn = lambda: PM.terminate(int(body.get("pid", 0)))
+            fn = lambda: EXEC.terminate_process(body.get("pid") or body.get("execution_id", ""))
         elif path in ("/api/probe", "/api/portscan", "/api/webscan", "/api/recon", "/api/assess"):
             engine_flow = {"target": body.get("target", ""), "ports": body.get("ports", ""), "domain": body.get("domain", "")}
             fn = {

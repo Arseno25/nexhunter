@@ -59,8 +59,8 @@ def test_no_builder_splits_a_parameter_into_argv():
         params = {key: (probe if default is None else default) for key, default in spec.params.items()}
         try:
             argv = spec.build_cmd(params)
-        except Exception:
-            continue  # builders that reject the probe are fine
+        except Exception:  # noqa: S112 - builder that rejects the probe is skipped
+            continue
         if not argv:
             continue
 
@@ -134,7 +134,7 @@ def test_free_text_values_stay_single_arguments():
         }
         try:
             argv = spec.build_cmd(params)
-        except Exception:
+        except Exception:  # noqa: S112 - categories without a builder are skipped
             continue
         if not argv:
             continue
@@ -168,6 +168,44 @@ def test_no_shell_true_anywhere_in_execution_paths():
 
     assert not offenders, f"shell=True found at: {', '.join(offenders)}"
     print("  [OK] No shell=True in any non-test module")
+
+
+def test_process_spawning_has_a_single_home():
+    """Only the ProcessRunner spawns processes; the API layer has no second path.
+
+    The legacy ProcessManager in the API server spawned arbitrary commands with
+    subprocess.Popen and killed arbitrary pids with `kill -9`, bypassing the
+    execution record and its state machine. Both are gone; process spawning and
+    termination live only in execution/runner.py. This fails if either creeps
+    back into the interface layer.
+    """
+    print("[TEST] Process spawning has a single home...")
+
+    root = Path(__file__).parent.parent
+    spawn = re.compile(r"subprocess\.Popen|os\.killpg|CREATE_NEW_PROCESS_GROUP")
+    raw_kill = re.compile(r"kill\s+-9|taskkill")
+    offenders = []
+
+    for path in root.rglob("*.py"):
+        parts = set(path.parts)
+        if "test" in path.name or parts & {"__pycache__", ".venv", "venv", "site-packages"}:
+            continue
+        rel = path.relative_to(root).as_posix()
+        # The runner is the one place allowed to spawn and signal process trees.
+        if rel == "execution/runner.py":
+            continue
+        text = path.read_text(encoding="utf-8", errors="replace")
+        for number, line in enumerate(text.splitlines(), start=1):
+            if line.strip().startswith("#"):
+                continue
+            if spawn.search(line) or raw_kill.search(line):
+                offenders.append(f"{rel}:{number}")
+
+    assert not offenders, (
+        "process spawning/killing must live only in execution/runner.py, found: "
+        + ", ".join(offenders)
+    )
+    print("  [OK] Only the runner spawns and signals processes")
 
 
 def test_cloud_and_container_tools_are_fixed_actions():
@@ -212,6 +250,7 @@ if __name__ == "__main__":
     test_shell_metacharacters_rejected_by_typed_validation()
     test_free_text_values_stay_single_arguments()
     test_no_shell_true_anywhere_in_execution_paths()
+    test_process_spawning_has_a_single_home()
     test_cloud_and_container_tools_are_fixed_actions()
     test_removed_passthrough_tools_are_gone()
     print("\n=== All No-Passthrough Tests Passed ===\n")

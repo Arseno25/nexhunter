@@ -7,7 +7,7 @@
 
   <p>Safe orchestration of security tools for <em>authorized</em> assessments.</p>
 
-![Version](https://img.shields.io/badge/version-2.0.0-blue) ![Python](https://img.shields.io/badge/python-3.10%2B-green) ![Tests](https://img.shields.io/badge/tests-143%20passing-green)
+![Version](https://img.shields.io/badge/version-2.0.0-blue) ![Python](https://img.shields.io/badge/python-3.10%2B-green) ![Tests](https://img.shields.io/badge/tests-260%20passing-green)
 </div>
 
 ---
@@ -276,6 +276,11 @@ curl -X POST http://127.0.0.1:8888/api/command \
 | `GET /api/autonomous[/{id}]` | Run status and result |
 | `GET /api/findings` | Findings |
 | `GET /api/mcp/profiles` | Profile definitions |
+| `GET /api/cache/stats` | Result-cache telemetry (hits, misses, evictions, hit rate) |
+| `POST /api/cache/clear` | Drop every cached result |
+| `GET /api/processes/list` | Executions currently running, with live pid |
+| `GET /api/processes/status/{pid}` | Live status of one running process (by pid or execution id) |
+| `POST /api/processes/terminate/{pid}` | Terminate a running process through the same cancel path |
 
 The server binds to `127.0.0.1` by default and `doctor` fails loudly on any
 other binding unless `NEXHUNTER_EXTERNAL_BIND_ALLOWED` is set.
@@ -304,6 +309,9 @@ NEXHUNTER_DATA_DIR=./nexhunter_data
 NEXHUNTER_MCP_PROFILE=nexhunter-full
 NEXHUNTER_DESTRUCTIVE_TOOLS_ENABLED=false
 NEXHUNTER_INTRUSIVE_TOOLS_ENABLED=false
+NEXHUNTER_CACHE_ENABLED=true                 # cache deterministic tool results
+NEXHUNTER_CACHE_TTL=300                       # seconds; 0 disables expiry
+NEXHUNTER_CACHE_MAX_ENTRIES=256
 ```
 
 See [.env.example](.env.example).
@@ -311,7 +319,7 @@ See [.env.example](.env.example).
 ## Testing
 
 ```bash
-pytest                                                    # 143 tests
+pytest                                                    # 260 tests
 pytest --cov=nexhunter --cov-report=term-missing          # coverage
 ```
 

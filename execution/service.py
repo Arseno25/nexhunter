@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, Optional
 
 from nexhunter.core import tools as T
+from nexhunter.execution.cache import ResultCache
 from nexhunter.execution.models import ExecutionRecord, ExecutionStatus
 from nexhunter.execution.registry import ExecutionRegistry
 from nexhunter.execution.runner import ProcessRunner, RunResult
@@ -61,10 +62,14 @@ class ExecutionService:
         registry: Optional[ExecutionRegistry] = None,
         runner: Optional[ProcessRunner] = None,
         redactor: Optional[SecretRedactor] = None,
+        cache: Optional[ResultCache] = None,
     ):
         self.registry = registry or ExecutionRegistry()
         self.runner = runner or ProcessRunner()
         self.redactor = redactor or SecretRedactor()
+        # Result cache for the one execution path. Only deterministic terminal
+        # results are stored; see execution/cache.py.
+        self.cache = cache or ResultCache.from_env()
         # Captured output per execution. Bounded and lock-guarded: the server
         # is threaded and this must not grow for the life of the process.
         self._outputs: "OrderedDict[str, tuple]" = OrderedDict()
@@ -76,13 +81,34 @@ class ExecutionService:
         tool_name: str,
         params: Dict[str, Any],
         run_async: bool = False,
+        no_cache: bool = False,
     ) -> Dict[str, Any]:
-        """Run one registered tool. Returns an API-shaped result dict."""
+        """Run one registered tool. Returns an API-shaped result dict.
+
+        A deterministic terminal result is served from the cache when the same
+        tool and normalized parameters were run before. A cache hit returns the
+        original execution's result (with ``cached: True``) and does not mint a
+        new record, so the state machine is never asked for an illegal jump.
+        """
         spec = T.get_tool_spec(tool_name)
         if spec is None:
             return _error("UNKNOWN_TOOL", f"unknown tool: {tool_name}")
 
         params = params or {}
+
+        # Cache probe. Normalize once (pure, cheap) to build the key; on a valid
+        # hit we return without touching the runner or the registry. On an
+        # invalid or missing entry we fall through to the full path below, which
+        # re-normalizes and produces the proper record and error.
+        cache_key: Optional[str] = None
+        if self.cache.enabled and spec.cacheable and not no_cache:
+            probe_merged, probe_err = spec.normalize(params)
+            if probe_err is None:
+                cache_key = ResultCache.key_for(tool_name, probe_merged)
+                cached = self.cache.get(cache_key)
+                if cached is not None:
+                    return {**cached.result, "cached": True}
+
         record = ExecutionRecord(
             tool_name=tool_name,
             risk_level=spec.risk_level,
@@ -130,16 +156,21 @@ class ExecutionService:
         if run_async:
             thread = threading.Thread(
                 target=self._run_and_record,
-                args=(record, cmd, spec.timeout, workspace),
+                args=(record, cmd, spec.timeout, workspace, cache_key),
                 daemon=True,
             )
             thread.start()
-            return {"ok": True, "execution_id": record.id, "status": record.status.value, "async": True}
+            return {"ok": True, "execution_id": record.id, "status": record.status.value, "async": True, "cached": False}
 
-        self._run_and_record(record, cmd, spec.timeout, workspace)
-        return self._result(record, include_output=True)
+        self._run_and_record(record, cmd, spec.timeout, workspace, cache_key)
+        result = self._result(record, include_output=True)
+        result["cached"] = False
+        return result
 
-    def _run_and_record(self, record: ExecutionRecord, cmd, timeout: int, workspace: Workspace) -> None:
+    def _run_and_record(
+        self, record: ExecutionRecord, cmd, timeout: int, workspace: Workspace,
+        cache_key: Optional[str] = None,
+    ) -> None:
         """Run the process and fold its outcome into the record."""
         record.transition(ExecutionStatus.RUNNING)
         log.info(_tool_line(
@@ -148,7 +179,14 @@ class ExecutionService:
         ))
         cancel: Callable[[], bool] = lambda: self.registry.is_cancelled(record.id)
 
-        result = self.runner.run(cmd, timeout=timeout, workdir=workspace.root, cancel=cancel)
+        # Record the OS pid the moment the child starts, so the process is
+        # visible in list_processes() while it is still running -- not only
+        # after it exits.
+        on_spawn: Callable[[int], None] = lambda pid: setattr(record, "pid", pid)
+
+        result = self.runner.run(
+            cmd, timeout=timeout, workdir=workspace.root, cancel=cancel, on_spawn=on_spawn
+        )
 
         record.exit_code = result.exit_code
         record.stdout_bytes = result.stdout_bytes
@@ -172,6 +210,11 @@ class ExecutionService:
 
         self._log_outcome(record)
         self.registry.clear_cancel(record.id)
+
+        # Cache only deterministic terminal outcomes. A timeout or termination
+        # is a fact about this run, not a durable answer about the target.
+        if cache_key and record.status in (ExecutionStatus.COMPLETED, ExecutionStatus.FAILED):
+            self.cache.put(cache_key, self._result(record, include_output=True), record.id)
 
     def _log_outcome(self, record: ExecutionRecord) -> None:
         """Emit one terminal tool-event line for the logs."""
@@ -225,6 +268,74 @@ class ExecutionService:
             return _error("NOT_RUNNING", f"execution is already {record.status.value}")
         self.registry.request_cancel(execution_id)
         return {"ok": True, "execution_id": execution_id, "status": "terminating"}
+
+    # -- live process management ------------------------------------------
+    # Processes are the running side of executions: there is no separate
+    # process table and no second way to spawn or kill. A "process" is just an
+    # execution in RUNNING state that has been assigned an OS pid.
+
+    def _running_records(self) -> list:
+        return [
+            r for r in self.registry.list(ExecutionStatus.RUNNING)
+            if r.pid is not None
+        ]
+
+    def _resolve(self, ident):
+        """Find the running record for an execution id or an OS pid."""
+        for record in self._running_records():
+            if str(record.id) == str(ident) or str(record.pid) == str(ident):
+                return record
+        return None
+
+    @staticmethod
+    def _process_view(record: ExecutionRecord) -> Dict[str, Any]:
+        return {
+            "pid": record.pid,
+            "execution_id": record.id,
+            "tool": record.tool_name,
+            "target": record.target,
+            "risk_level": record.risk_level,
+            "status": record.status.value,
+            "uptime_s": record.duration_seconds,
+        }
+
+    def list_processes(self) -> list:
+        """Every execution currently running, with its live OS pid."""
+        return [self._process_view(r) for r in self._running_records()]
+
+    def process_status(self, ident) -> Dict[str, Any]:
+        """Live status of one running process, by execution id or pid."""
+        record = self._resolve(ident)
+        if record is None:
+            return _error("NOT_FOUND", f"no running process: {ident}")
+        view = self._process_view(record)
+        view["ok"] = True
+        view["recent_output"] = self._tail_workspace(record)
+        return view
+
+    def terminate_process(self, ident) -> Dict[str, Any]:
+        """Terminate a running process, by execution id or pid.
+
+        Routes through the same cancellation path as terminate(): the request
+        is recorded, the process tree is signalled, and the record moves to
+        TERMINATED. There is no raw kill.
+        """
+        record = self._resolve(ident)
+        if record is None:
+            return _error("NOT_FOUND", f"no running process: {ident}")
+        return self.terminate(record.id)
+
+    def _tail_workspace(self, record: ExecutionRecord, lines: int = 50) -> str:
+        """Last few lines of a running execution's stdout, redacted."""
+        if not record.workspace_path:
+            return ""
+        stdout = Path(record.workspace_path) / "stdout.log"
+        try:
+            text = stdout.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            return ""
+        tail = "\n".join(text.splitlines()[-lines:])
+        return self.redactor.redact_string(tail)
 
     def artifacts(self, execution_id: str) -> Dict[str, Any]:
         """List artifacts produced inside an execution's workspace."""

@@ -231,6 +231,23 @@ NEXHUNTER_DATA_DIR/
         └── <tool artifacts>
 ```
 
+## Result caching and live processes
+
+Both sit on the one execution path and add no way to reach the OS.
+
+- **Result cache** (`execution/cache.py`). Keyed by the tool name and its
+  *normalized* parameters, it stores only deterministic terminal outcomes
+  (completed or failed); a timeout or termination is never cached. A hit returns
+  the original execution's result with `cached: true` and mints no new record,
+  so the state machine is never asked for an illegal jump. Values are hashed
+  into the key, so no parameter — secret or otherwise — is recoverable from it.
+  `no_cache` on a request forces a fresh run.
+- **Live processes.** A "process" is just an execution in `running` state that
+  has been assigned an OS pid (recorded the moment the child spawns). There is
+  no separate process table and no second way to spawn or kill: terminating by
+  pid resolves to the owning execution and goes through the same cancellation
+  path as `terminate`, ending in `terminated` — never a raw `kill`.
+
 ## Deliberate non-goals
 
 - **No autonomous attack decisions.** Intrusive and destructive actions are
@@ -250,6 +267,7 @@ NEXHUNTER_DATA_DIR/
 | `execution/workspace.py` | Per-execution isolated directories |
 | `execution/runner.py` | Process spawning, tree termination, output caps |
 | `execution/registry.py` | Concurrency-safe, bounded record store |
+| `execution/cache.py` | LRU+TTL cache of deterministic terminal results |
 | `execution/service.py` | The single execution path |
 | `core/params.py` | Typed parameter validation and secret naming |
 | `core/risk.py` | Risk levels shared by registry and orchestrator |

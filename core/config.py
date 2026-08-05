@@ -1,8 +1,16 @@
 """nexhunter.config - centralized configuration."""
 
-# Cache settings
+# Cache settings (legacy Engine LRU, used by /api/probe, /api/portscan, ...)
 CACHE_MAX = 128
 CACHE_CLEANUP_THRESHOLD = 0.8
+
+# Result cache for the single execution path (ExecutionService). Only
+# deterministic terminal results (completed/failed) are stored; a timeout or a
+# termination says nothing durable about the target and is never cached.
+# Overridable per-process via NEXHUNTER_CACHE_ENABLED / _TTL / _MAX.
+RESULT_CACHE_ENABLED = True
+RESULT_CACHE_TTL = 300  # seconds; 0 disables expiry
+RESULT_CACHE_MAX = 256  # entries
 
 # Tool execution
 DEFAULT_TOOL_TIMEOUT = 300

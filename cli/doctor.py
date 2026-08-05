@@ -82,6 +82,22 @@ def _check_dependencies() -> List[Tuple[str, str]]:
     return results
 
 
+def _check_browser_engine() -> Tuple[str, str]:
+    """Report whether browser_crawl can drive a real headless browser."""
+    import importlib.util
+
+    has_selenium = importlib.util.find_spec("selenium") is not None
+    chrome = next((b for b in T._CHROME_BINARIES if T.which(b)), None)
+    if has_selenium and chrome:
+        return OK, f"Browser engine ready (selenium + {chrome})"
+    missing = []
+    if not has_selenium:
+        missing.append("selenium (pip install nexhunter[browser])")
+    if not chrome:
+        missing.append("a Chrome/Chromium binary")
+    return WARN, f"browser_crawl falls back to static crawl, no JS: missing {', '.join(missing)}"
+
+
 def _check_execution() -> Tuple[str, str]:
     """Confirm we can actually spawn a process and read its output."""
     from nexhunter.execution.runner import ProcessRunner
@@ -112,6 +128,7 @@ def run(check_versions: bool = True, show_all_tools: bool = False) -> int:
         _check_binding(),
     ]
     core.extend(_check_dependencies())
+    core.append(_check_browser_engine())
     core.append(_check_execution())
     sections.append(("Core", core))
 

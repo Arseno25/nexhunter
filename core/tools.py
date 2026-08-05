@@ -1,5 +1,6 @@
 """nexhunter.tools - 150+ security tools registry with ToolSpec pattern."""
 
+import importlib.util
 import json
 import shutil
 import subprocess
@@ -40,6 +41,29 @@ def _infer_risk(name: str, binary: str) -> str:
         if any(kw in hay for kw in keywords):
             return level
     return "active"
+
+
+# Chrome/Chromium binary names the Selenium driver can drive, in the order a
+# Linux/macOS/Windows install is likely to expose them.
+_CHROME_BINARIES = (
+    "google-chrome", "google-chrome-stable", "chromium", "chromium-browser",
+    "chrome", "chrome.exe",
+)
+
+
+def browser_engine_available() -> bool:
+    """True when the headless browser crawl can really run.
+
+    browser_crawl shells out to `python -m nexhunter.agents.browser_cli`, so a
+    plain `which python` says nothing about whether it can drive a browser. The
+    real requirements are the Selenium library and a Chrome/Chromium binary; the
+    tool degrades to a static crawl without them, but it is not "available" as a
+    browser engine, and reporting otherwise is the kind of unverified claim the
+    registry avoids.
+    """
+    if importlib.util.find_spec("selenium") is None:
+        return False
+    return any(which(binary) for binary in _CHROME_BINARIES)
 
 
 def _infer_target_param(params: dict[str, Any]) -> str | None:
@@ -150,9 +174,17 @@ class ToolSpec:
     category: str | None = None
     # stable | beta | experimental | disabled. None => derived from STABLE_TOOLS.
     maturity: str | None = None
+    # Whether a deterministic terminal result may be cached. False for tools
+    # that observe live state (packet/traffic capture), where a repeat is a
+    # fresh observation, not the same answer.
+    cacheable: bool = True
     # Typed parameter schemas. None => inferred from the `params` dict, so the
     # several hundred legacy entries gain validation without being rewritten.
     param_specs: tuple | None = None
+    # Custom availability probe. None => the binary is present on PATH. Set this
+    # when the binary alone does not prove the tool can run -- e.g. a wrapper
+    # that shells out to Chrome or imports an optional library at runtime.
+    availability_check: Callable | None = None
 
     def __post_init__(self):
         if self.timeout == DEFAULT_TOOL_TIMEOUT and self.name in TOOL_TIMEOUTS:
@@ -183,7 +215,17 @@ class ToolSpec:
 
     @property
     def available(self) -> bool:
-        """True when the tool's binary is present on PATH."""
+        """True when the tool can actually run.
+
+        By default that means the binary is on PATH; a tool with a custom
+        availability probe (e.g. one needing Chrome and an optional library)
+        defers to that instead.
+        """
+        if self.availability_check is not None:
+            try:
+                return bool(self.availability_check())
+            except Exception:  # noqa: BLE001 - a probe that errors means "not available"
+                return False
         return which(self.binary) is not None
 
     def describe(self) -> dict:
@@ -195,6 +237,7 @@ class ToolSpec:
             "category": self.category,
             "risk_level": self.risk_level,
             "maturity": self.maturity,
+            "cacheable": self.cacheable,
             "timeout_s": self.timeout,
             "parameters": {
                 spec.name: spec.describe() for spec in (self.param_specs or ())
@@ -478,11 +521,11 @@ _tool_specs = {
     # ==================== WIRELESS/NETWORK MONITORING ====================
     "airodump": ToolSpec(
         name="airodump", binary="airodump-ng", description="Wireless network sniffer",
-        params={"interface": None}, timeout=30,
+        params={"interface": None}, timeout=30, cacheable=False,
         builder=lambda p: ["airodump-ng", p["interface"]]),
     "aireplay": ToolSpec(
         name="aireplay", binary="aireplay-ng", description="Wireless network traffic injector",
-        params={"interface": None}, timeout=30,
+        params={"interface": None}, timeout=30, cacheable=False,
         builder=lambda p: ["aireplay-ng", "-h", p["interface"]]),
     "aircrack": ToolSpec(
         name="aircrack", binary="aircrack-ng", description="WEP/WPA password cracker",
@@ -490,11 +533,11 @@ _tool_specs = {
         builder=lambda p: ["aircrack-ng", p["capfile"]]),
     "tcpdump": ToolSpec(
         name="tcpdump", binary="tcpdump", description="Packet sniffer",
-        params={"interface": "any"}, timeout=30,
+        params={"interface": "any"}, timeout=30, cacheable=False,
         builder=lambda p: ["tcpdump", "-i", p["interface"], "-n", "-l"]),
     "tshark": ToolSpec(
         name="tshark", binary="tshark", description="Wireshark command-line packet analyzer",
-        params={"interface": "any"}, timeout=30,
+        params={"interface": "any"}, timeout=30, cacheable=False,
         builder=lambda p: ["tshark", "-i", p["interface"]]),
 
     # ==================== VULNERABILITY DATABASES ====================
@@ -1054,7 +1097,7 @@ _tool_specs = {
     # ==================== WIRELESS ====================
     "kismet": ToolSpec(
         name="kismet", binary="kismet", description="Passive wireless network detector and channel capture",
-        params={"capture_file": ""}, timeout=600, risk_level="passive",
+        params={"capture_file": ""}, timeout=600, risk_level="passive", cacheable=False,
         builder=lambda p: ["kismet", "--no-gpsd", "--no-server"] + (["--logfile", p["capture_file"]] if p["capture_file"] else [])),
     "airgeddon": ToolSpec(
         name="airgeddon", binary="bash", description="Multipurpose wireless attack framework (airgeddon.sh)",
@@ -1208,12 +1251,12 @@ _tool_specs = {
     # ==================== NETWORK: CAPTURE & ENUMERATION ====================
     "tcpdump_capture": ToolSpec(
         name="tcpdump_capture", binary="tcpdump", description="Live packet capture",
-        params={"interface": "any", "count": 100, "port": ""}, timeout=120,
+        params={"interface": "any", "count": 100, "port": ""}, timeout=120, cacheable=False,
         builder=lambda p: ["tcpdump", "-i", p["interface"], "-c", str(p["count"])]
         + (["port", str(p["port"])] if p["port"] else []) + ["-w", "capture.pcap"]),
     "tshark_capture": ToolSpec(
         name="tshark_capture", binary="tshark", description="Live packet analysis",
-        params={"interface": "any", "count": 100}, timeout=120,
+        params={"interface": "any", "count": 100}, timeout=120, cacheable=False,
         builder=lambda p: ["tshark", "-i", p["interface"], "-c", str(p["count"])],
     ),
     "enum4linux_ng": ToolSpec(
@@ -1356,7 +1399,7 @@ _tool_specs = {
     "browser_crawl": ToolSpec(
         name="browser_crawl", binary="python", description="Headless browser crawl: DOM, JS runtime, screenshots",
         params={"url": None, "wait": 3, "screenshot": False, "dom_depth": 0}, timeout=120,
-        category="web", parser="browser_json",
+        category="web", parser="browser_json", availability_check=browser_engine_available,
         builder=lambda p: ["python", "-m", "nexhunter.agents.browser_cli", "-u", p["url"], "--wait", str(p["wait"])]
         + (["--screenshot"] if p["screenshot"] else [])
         + (["--dom-depth", str(p["dom_depth"])] if p["dom_depth"] else [])),

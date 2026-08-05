@@ -143,11 +143,14 @@ class ProcessRunner:
         timeout: int,
         workdir: Path,
         cancel: Optional[callable] = None,
+        on_spawn: Optional[callable] = None,
     ) -> RunResult:
         """Execute cmd, writing output into workdir.
 
         cmd must be an argument list; there is no shell involved anywhere in
         this path. `cancel` is polled to support external termination.
+        `on_spawn`, if given, is called with the child pid the moment it starts,
+        so a live process is visible before it finishes.
         """
         if not cmd:
             return RunResult(exit_code=None, error="empty command", error_code="EMPTY_COMMAND")
@@ -167,6 +170,11 @@ class ProcessRunner:
                     cwd=str(workdir),
                     **_spawn_kwargs(),
                 )
+                if on_spawn is not None:
+                    try:
+                        on_spawn(proc.pid)
+                    except Exception:  # noqa: BLE001 - telemetry must not break a run
+                        pass
                 result = self._supervise(proc, timeout, stdout_path, stderr_path, cancel)
         except FileNotFoundError:
             return RunResult(
