@@ -201,6 +201,54 @@ Interfaces: `POST /api/autonomous`, `GET /api/autonomous[/<id>]`, and the MCP
 tools `autonomous_assess` / `autonomous_status`. Walkthrough in
 `docs/how-it-works.md`.
 
+## Exploit Kit (agents/exploit_kit)
+
+Replaced the monolithic `agents/exploit_ai.py` (1,327 lines, one SyntaxError,
+duplicated helpers) with a modular package of eight independent agents,
+auto-registered through the same `agents/` discovery — no server or MCP changes
+were needed. Functionally equivalent to HexStrike's exploit agents but with
+original names, structure, and payload data (ATM: Amati–Tiru–Modifikasi, not
+1:1 copy).
+
+| Module | Agent | Replaces | Scope |
+|---|---|---|---|
+| `forge.py` | `switchblade` | `payload_gen` | 11 attack types × complexity × tech context |
+| `forge.py` | `ghost_wright` | `payload_advanced` | evasion 4 level + size/quote constraints |
+| `cve.py` | `cve_smith` | `exploit_cve` | NVD fetch → classify → Python exploit builder |
+| `salvo.py` | `fireworks` | `attack_suite` | multi-category suite via real agent orchestration |
+| `impact.py` | `rangefinder` | `payload_tester` | all 7 HTTP methods, data/headers injection |
+| `plan.py` | `blitzplan` | `attack_chain` | objective-based attack chains |
+| `plan.py` | `warroom` | `attack_chains` | web/network/cloud chain templates |
+| `autopilot.py` | `autopilot` | `autonomous_exploit` | optimizer-driven real engine execution |
+
+Design:
+
+- `core.py` is the single source of payload data: 11 attack categories,
+  per-technology contexts, shell payloads (bash/nc/python3/php/powershell/
+  socat), DB error markers for SQLi detection, encoding/obfuscation helpers.
+- `salvo`, `blitzplan`, and `autopilot` call other agents / the engine instead
+  of re-implementing their logic, so payload knowledge lives in exactly one
+  place.
+- `autopilot` runs tools only through `get_tool_spec` availability checks and
+  the same `RiskLevel` ceiling used by the orchestrator: intrusive tools are
+  skipped unless `authorized=True`, anything above the ceiling is surfaced as
+  `recommended_next` for human approval. Exploitation never runs unattended.
+- `rangefinder` detects reflected payloads, SQL error signatures, SSTI
+  stacktraces, time-based responses, LFI/XXE/SSRF/open-redirect markers.
+- Original bug fixes from the old module carried over: `%{0}` PowerShell
+  templates escaped for `.format()`, missing `target_url` parameter in exploit
+  builders, wrong context constant names.
+
+Tests: `tests/test_exploit_kit.py` — 59 tests covering registration (new
+agents present, old names removed), every attack category, every evasion level,
+constraint application, all HTTP methods against a local echo server, exploit
+code generation per kind, chain plans, and autopilot risk-ceiling behavior.
+
+```
+$ pytest -q tests/test_exploit_kit.py
+59 passed
+```
+
 ## Testing Results
 
 ```
