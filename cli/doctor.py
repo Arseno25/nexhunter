@@ -66,17 +66,47 @@ def _check_binding() -> Tuple[str, str]:
     return FAIL, f"Server binds to {host} but NEXHUNTER_EXTERNAL_BIND_ALLOWED is not set"
 
 
-def _check_enforcement() -> Tuple[str, str]:
-    enforcing = os.environ.get("NEXHUNTER_ENFORCE", "").lower() in {"1", "true", "yes", "on"}
-    engagement = os.environ.get("NEXHUNTER_ENGAGEMENT", "").strip()
+def _check_enforcement() -> List[Tuple[str, str]]:
+    """Report the enforcement posture and whether any scope is actually usable."""
+    from nexhunter.engagements.store import EngagementStore
+    from nexhunter.security.enforcement import _default_enforce
+
+    results: List[Tuple[str, str]] = []
+    enforcing = _default_enforce()
+    engagement_file = os.environ.get("NEXHUNTER_ENGAGEMENT", "").strip()
 
     if not enforcing:
-        return WARN, "Scope enforcement off (development mode; no engagement scope is applied)"
-    if not engagement:
-        return FAIL, "Enforcement on but NEXHUNTER_ENGAGEMENT is unset; every execution will be denied"
-    if not Path(engagement).is_file():
-        return FAIL, f"Engagement file not found: {engagement}"
-    return OK, f"Enforcement on, engagement loaded from {engagement}"
+        results.append((WARN, "Scope enforcement OFF (NEXHUNTER_ENFORCE=false; no scope is applied)"))
+    else:
+        results.append((OK, "Scope enforcement on"))
+
+    if engagement_file:
+        if Path(engagement_file).is_file():
+            results.append((OK, f"Engagement file: {engagement_file}"))
+        else:
+            results.append((FAIL, f"NEXHUNTER_ENGAGEMENT points at a missing file: {engagement_file}"))
+        return results
+
+    try:
+        active = [e for e in EngagementStore().list() if e.is_active()]
+    except OSError as exc:
+        results.append((FAIL, f"Could not read engagements: {exc}"))
+        return results
+
+    if active:
+        names = ", ".join(e.id for e in active)
+        if len(active) > 1:
+            results.append((WARN, f"{len(active)} active engagements ({names}); "
+                                  "requests must name one with engagement_id"))
+        else:
+            results.append((OK, f"Active engagement: {names}"))
+    elif enforcing:
+        results.append((FAIL, "No active engagement; every execution will be denied. "
+                              "Create one: nexhunter engagement create --id ENG-001 --target <host>"))
+    else:
+        results.append((WARN, "No active engagement (enforcement is off, so nothing is checked)"))
+
+    return results
 
 
 def _check_destructive_flags() -> List[Tuple[str, str]]:
@@ -130,8 +160,8 @@ def run(check_versions: bool = True, show_all_tools: bool = False) -> int:
         _check_data_dir(),
         _check_token(),
         _check_binding(),
-        _check_enforcement(),
     ]
+    core.extend(_check_enforcement())
     core.extend(_check_dependencies())
     core.append(_check_execution())
     sections.append(("Core", core))

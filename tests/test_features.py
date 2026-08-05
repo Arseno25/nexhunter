@@ -143,61 +143,50 @@ def test_dashboard_metrics():
     print("  [OK] Dashboard Metrics working")
 
 
+# These four tests used to wrap their assertions in try/except and return
+# False on failure. Under pytest a returned value is ignored, so a broken
+# workflow still reported as passing -- the tests could not fail. Assertions
+# now propagate, which is the only thing pytest treats as a failure.
+
 def test_workflows():
     """Test all workflows."""
     print("[TEST] Workflows...")
     target = "example.com"
 
+    assert WORKFLOW_TYPES, "no workflows registered"
     for wf_type, wf_class in WORKFLOW_TYPES.items():
-        print(f"  Testing {wf_type}...", end=" ")
-        try:
-            workflow = wf_class(target)
-            assert hasattr(workflow, "phases")
-            assert len(workflow.phases) > 0
-            print("[OK]")
-        except Exception as e:
-            print(f"[FAIL] ({e})")
-            return False
+        workflow = wf_class(target)
+        assert hasattr(workflow, "phases"), f"{wf_type} has no phases attribute"
+        assert len(workflow.phases) > 0, f"{wf_type} defines no phases"
 
-    print("  [OK] All workflows working")
-    return True
+    print(f"  [OK] {len(WORKFLOW_TYPES)} workflows define phases")
 
 
 def test_enhanced_agents():
     """Test enhanced agents."""
     print("[TEST] Enhanced Agents...")
-    for agent_name, agent in ENHANCED_AGENTS.items():
-        print(f"  Testing {agent_name}...", end=" ")
-        try:
-            assert hasattr(agent, "name")
-            assert hasattr(agent, "execute")
-            assert agent.name != ""
-            print("[OK]")
-        except Exception as e:
-            print(f"[FAIL] ({e})")
-            return False
 
-    print("  [OK] All enhanced agents working")
-    return True
+    assert ENHANCED_AGENTS, "no enhanced agents registered"
+    for agent_name, agent in ENHANCED_AGENTS.items():
+        assert hasattr(agent, "name"), f"{agent_name} has no name"
+        assert hasattr(agent, "execute"), f"{agent_name} has no execute()"
+        assert agent.name, f"{agent_name} has an empty name"
+
+    print(f"  [OK] {len(ENHANCED_AGENTS)} enhanced agents well-formed")
 
 
 def test_workflow_agents():
     """Test workflow agents."""
     print("[TEST] Workflow Agents...")
-    for agent_name, agent in WORKFLOW_AGENTS.items():
-        print(f"  Testing {agent_name}...", end=" ")
-        try:
-            assert hasattr(agent, "name")
-            assert hasattr(agent, "execute")
-            result = agent.execute(None, {"target": "example.com"})
-            assert "ok" in result
-            print("[OK]")
-        except Exception as e:
-            print(f"[FAIL] ({e})")
-            return False
 
-    print("  [OK] All workflow agents working")
-    return True
+    assert WORKFLOW_AGENTS, "no workflow agents registered"
+    for agent_name, agent in WORKFLOW_AGENTS.items():
+        assert hasattr(agent, "name"), f"{agent_name} has no name"
+        assert hasattr(agent, "execute"), f"{agent_name} has no execute()"
+        result = agent.execute(None, {"target": "example.com"})
+        assert "ok" in result, f"{agent_name} returned no 'ok' key: {result}"
+
+    print(f"  [OK] {len(WORKFLOW_AGENTS)} workflow agents respond")
 
 
 def test_integration():
@@ -205,44 +194,26 @@ def test_integration():
     print("[TEST] Integration Scenarios...")
 
     # Bug bounty workflow with OSINT
-    print("  Testing Bug Bounty + OSINT...", end=" ")
-    try:
-        workflow = BugBountyWorkflow("example.com")
-        osint = OsintCollector()
-        osint.add_subdomain("app.example.com", "1.2.3.4")
-        assert len(osint.to_dict()["subdomains"]) > 0
-        print("[OK]")
-    except Exception as e:
-        print(f"[FAIL] ({e})")
-        return False
+    BugBountyWorkflow("example.com")
+    osint = OsintCollector()
+    osint.add_subdomain("app.example.com", "1.2.3.4")
+    assert len(osint.to_dict()["subdomains"]) > 0
 
     # API workflow with vulnerability analysis
-    print("  Testing API + Vulnerability Analysis...", end=" ")
-    try:
-        api_workflow = ApiSecurityWorkflow("https://api.example.com")
-        analyzer = VulnerabilityAnalyzer()
-        analyzer.add_vulnerability("API Auth Bypass", "CWE-287", 9.1, "critical", "Access")
-        chains = analyzer.detect_chains()
-        print("[OK]")
-    except Exception as e:
-        print(f"[FAIL] ({e})")
-        return False
+    ApiSecurityWorkflow("https://api.example.com")
+    analyzer = VulnerabilityAnalyzer()
+    analyzer.add_vulnerability("API Auth Bypass", "CWE-287", 9.1, "critical", "Access")
+    chains = analyzer.detect_chains()
+    assert chains is not None, "detect_chains should return a result, not None"
 
     # Cloud workflow with threat intel
-    print("  Testing Cloud + Threat Intel...", end=" ")
-    try:
-        cloud_workflow = CloudSecurityWorkflow("aws-account")
-        intel = ThreatIntelligence()
-        intel.add_ioc("S3_BUCKET", "public-bucket")
-        risk = intel.assess_risk()
-        assert "risk_level" in risk
-        print("[OK]")
-    except Exception as e:
-        print(f"[FAIL] ({e})")
-        return False
+    CloudSecurityWorkflow("aws-account")
+    intel = ThreatIntelligence()
+    intel.add_ioc("S3_BUCKET", "public-bucket")
+    risk = intel.assess_risk()
+    assert "risk_level" in risk
 
     print("  [OK] All integration scenarios working")
-    return True
 
 
 def run_all_tests():

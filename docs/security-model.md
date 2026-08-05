@@ -110,10 +110,11 @@ one that does not exist.
   the tool's own resolution. The window is small but real; it is not closed.
 - **Redaction is pattern-based.** It catches known secret shapes. A credential
   in an unusual format may pass through.
-- **Enforcement is opt-in today.** `NEXHUNTER_ENFORCE` defaults to off because
-  engagement management has no API yet. In that mode authentication is still
-  honored and everything is still audited, but scope is not applied. Production
-  use means turning it on.
+- **Enforcement can be turned off.** `NEXHUNTER_ENFORCE` defaults to **on**; a
+  fresh install with no engagement denies everything. Setting it to `false` for
+  local development keeps authentication and auditing but applies no scope, and
+  nothing stops that setting reaching production except your own discipline.
+  `doctor` reports the posture.
 - **Coverage is 63%, not 100%.** Security modules are 87–100%; legacy agent and
   engine code is well below. Measured, not claimed.
 
@@ -122,15 +123,22 @@ one that does not exist.
 ```bash
 export NEXHUNTER_ENVIRONMENT=production
 export NEXHUNTER_API_TOKEN="$(python -c 'import secrets; print(secrets.token_urlsafe(32))')"
-export NEXHUNTER_ENFORCE=true
-export NEXHUNTER_ENGAGEMENT=/etc/nexhunter/engagement.json
+export NEXHUNTER_ENFORCE=true          # the default; stated here for clarity
 export NEXHUNTER_BIND_HOST=127.0.0.1
 export NEXHUNTER_DESTRUCTIVE_TOOLS_ENABLED=false
 export NEXHUNTER_INTRUSIVE_TOOLS_ENABLED=false
 ```
 
-Verify with `nexhunter doctor`. It fails loudly on the combination that denies
-every execution (enforcement on, no engagement configured).
+Declare the scope, then verify:
+
+```bash
+nexhunter engagement create --id ENG-2026-001 \
+  --target example.com --deny admin.example.com --risk passive --risk active
+nexhunter doctor
+```
+
+`doctor` fails loudly when enforcement is on with no active engagement, since
+that denies every execution.
 
 ## Reporting a vulnerability
 

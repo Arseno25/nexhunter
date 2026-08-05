@@ -53,6 +53,7 @@ class ExecutionService:
         auth_header: Optional[str] = None,
         source_ip: str = "unknown",
         run_async: bool = False,
+        engagement_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Run one registered tool. Returns an API-shaped result dict."""
         spec = T.get_tool_spec(tool_name)
@@ -62,7 +63,7 @@ class ExecutionService:
         params = params or {}
         record = ExecutionRecord(
             tool_name=tool_name,
-            engagement_id=self._engagement_id(),
+            engagement_id=self._engagement_id(engagement_id),
             risk_level=spec.risk_level,
             redacted_parameters=self.redactor.redact_dict(dict(params)),
         )
@@ -82,9 +83,14 @@ class ExecutionService:
             target=record.target or "",
             risk_level=risk_level_from_str(spec.risk_level),
             source_ip=source_ip,
+            engagement_id=engagement_id,
         )
         record.request_id = gate_result.request_id
         record.policy_code = gate_result.policy.policy_code
+        if gate_result.engagement is not None:
+            # Record the engagement the gate actually resolved, which may have
+            # been inferred rather than named.
+            record.engagement_id = gate_result.engagement.id
         if not gate_result.allowed:
             result = self._fail(
                 record,
@@ -199,8 +205,12 @@ class ExecutionService:
         )
         return {"ok": True, "execution_id": execution_id, "artifacts": workspace.list_artifacts()}
 
-    def _engagement_id(self) -> str:
-        engagement = getattr(self.gate, "engagement", None)
+    def _engagement_id(self, requested: Optional[str] = None) -> str:
+        """The engagement a record belongs to, before the gate has resolved one."""
+        if requested:
+            return requested
+        resolver = getattr(self.gate, "resolve_engagement", None)
+        engagement = resolver() if resolver else getattr(self.gate, "engagement", None)
         return engagement.id if engagement else UNSCOPED
 
     def _fail(self, record: ExecutionRecord, code: str, message: str, blocked: bool) -> Dict[str, Any]:

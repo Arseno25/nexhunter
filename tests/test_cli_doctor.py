@@ -86,13 +86,46 @@ def test_python_binary_is_detected():
 # doctor
 # --------------------------------------------------------------------------
 
-def test_doctor_runs_and_reports():
-    """doctor produces a report and exits cleanly on a working install."""
-    print("[TEST] doctor runs...")
+class _Env:
+    """Set environment variables for the duration of a block, then restore."""
+
+    def __init__(self, **values):
+        self.values = values
+        self.previous = {}
+
+    def __enter__(self):
+        for key, value in self.values.items():
+            self.previous[key] = os.environ.get(key)
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+        return self
+
+    def __exit__(self, *exc):
+        for key, value in self.previous.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+
+
+def _doctor(**env) -> tuple:
+    """Run doctor under a temporary environment, returning (code, output)."""
     buffer = io.StringIO()
-    with redirect_stdout(buffer):
+    with _Env(**env), redirect_stdout(buffer):
         code = doctor.run(check_versions=False)
-    output = buffer.getvalue()
+    return code, buffer.getvalue()
+
+
+def test_doctor_runs_and_reports(tmp: Path):
+    """doctor produces a full report and exits cleanly on a working install."""
+    print("[TEST] doctor runs...")
+    code, output = _doctor(
+        NEXHUNTER_DATA_DIR=str(tmp),
+        NEXHUNTER_ENFORCE="false",
+        NEXHUNTER_ENGAGEMENT=None,
+    )
 
     assert code == 0, f"doctor reported failures on a working install:\n{output}"
     for section in ["NexHunter Doctor", "Core", "Security", "Stable tools"]:
@@ -102,46 +135,79 @@ def test_doctor_runs_and_reports():
     print("  [OK] doctor reported all sections")
 
 
-def test_doctor_warns_without_token():
+def test_doctor_passes_with_an_active_engagement(tmp: Path):
+    """Enforcement on plus a valid engagement is a healthy install."""
+    print("[TEST] doctor passes with an engagement...")
+    from datetime import datetime, timedelta
+
+    from nexhunter.engagements.store import EngagementStore
+
+    now = datetime.utcnow()
+    EngagementStore(base_dir=tmp).create({
+        "id": "ENG-DOCTOR",
+        "name": "Doctor test",
+        "status": "active",
+        "starts_at": (now - timedelta(hours=1)).isoformat(),
+        "expires_at": (now + timedelta(days=1)).isoformat(),
+        "scope": {"allowed_targets": ["example.com"], "allowed_risk_levels": ["passive"]},
+    })
+
+    code, output = _doctor(
+        NEXHUNTER_DATA_DIR=str(tmp),
+        NEXHUNTER_ENFORCE="true",
+        NEXHUNTER_ENGAGEMENT=None,
+    )
+
+    assert code == 0, f"expected a clean report with an active engagement:\n{output}"
+    assert "Scope enforcement on" in output
+    assert "ENG-DOCTOR" in output
+    print("  [OK] Active engagement reported as healthy")
+
+
+def test_doctor_warns_without_token(tmp: Path):
     """doctor warns when no API token is configured."""
     print("[TEST] doctor warns on missing token...")
-    previous = os.environ.pop("NEXHUNTER_API_TOKEN", None)
-    try:
-        buffer = io.StringIO()
-        with redirect_stdout(buffer):
-            doctor.run(check_versions=False)
-        assert "API token not configured" in buffer.getvalue()
-    finally:
-        if previous is not None:
-            os.environ["NEXHUNTER_API_TOKEN"] = previous
+    _, output = _doctor(
+        NEXHUNTER_DATA_DIR=str(tmp),
+        NEXHUNTER_ENFORCE="false",
+        NEXHUNTER_API_TOKEN=None,
+    )
+    assert "API token not configured" in output
     print("  [OK] Missing token warned")
 
 
-def test_doctor_fails_on_enforcement_without_engagement():
+def test_doctor_fails_on_a_fresh_enforcing_install(tmp: Path):
     """Enforcement on with no engagement is a failure, not a warning.
 
-    That combination denies every execution, so it must be loud.
+    That combination denies every execution, so it has to be loud -- and the
+    message has to say how to fix it, since this is what a fresh install looks
+    like now that enforcement is the default.
     """
-    print("[TEST] doctor fails on enforcement misconfiguration...")
-    previous_enforce = os.environ.get("NEXHUNTER_ENFORCE")
-    previous_engagement = os.environ.get("NEXHUNTER_ENGAGEMENT")
-    os.environ["NEXHUNTER_ENFORCE"] = "true"
-    os.environ.pop("NEXHUNTER_ENGAGEMENT", None)
-    try:
-        buffer = io.StringIO()
-        with redirect_stdout(buffer):
-            code = doctor.run(check_versions=False)
-        output = buffer.getvalue()
-        assert code == 1, "expected a non-zero exit for this misconfiguration"
-        assert "NEXHUNTER_ENGAGEMENT is unset" in output
-    finally:
-        if previous_enforce is None:
-            os.environ.pop("NEXHUNTER_ENFORCE", None)
-        else:
-            os.environ["NEXHUNTER_ENFORCE"] = previous_enforce
-        if previous_engagement is not None:
-            os.environ["NEXHUNTER_ENGAGEMENT"] = previous_engagement
-    print("  [OK] Misconfiguration reported as a failure")
+    print("[TEST] doctor fails on a fresh enforcing install...")
+    code, output = _doctor(
+        NEXHUNTER_DATA_DIR=str(tmp),
+        NEXHUNTER_ENFORCE="true",
+        NEXHUNTER_ENGAGEMENT=None,
+    )
+
+    assert code == 1, f"expected a non-zero exit with no engagement:\n{output}"
+    assert "No active engagement" in output
+    assert "nexhunter engagement create" in output, "the failure should say how to fix it"
+    print("  [OK] Reported as a failure, with the fix")
+
+
+def test_doctor_flags_a_missing_engagement_file(tmp: Path):
+    """A NEXHUNTER_ENGAGEMENT pointing at nothing is reported."""
+    print("[TEST] doctor flags a missing engagement file...")
+    code, output = _doctor(
+        NEXHUNTER_DATA_DIR=str(tmp),
+        NEXHUNTER_ENFORCE="true",
+        NEXHUNTER_ENGAGEMENT=str(tmp / "does-not-exist.json"),
+    )
+
+    assert code == 1
+    assert "missing file" in output
+    print("  [OK] Missing engagement file reported")
 
 
 # --------------------------------------------------------------------------
@@ -258,9 +324,16 @@ if __name__ == "__main__":
     test_ip_address_is_not_a_version()
     test_missing_binary_reported_not_raised()
     test_python_binary_is_detected()
-    test_doctor_runs_and_reports()
-    test_doctor_warns_without_token()
-    test_doctor_fails_on_enforcement_without_engagement()
+    with tempfile.TemporaryDirectory() as raw:
+        test_doctor_runs_and_reports(Path(raw))
+    with tempfile.TemporaryDirectory() as raw:
+        test_doctor_passes_with_an_active_engagement(Path(raw))
+    with tempfile.TemporaryDirectory() as raw:
+        test_doctor_warns_without_token(Path(raw))
+    with tempfile.TemporaryDirectory() as raw:
+        test_doctor_fails_on_a_fresh_enforcing_install(Path(raw))
+    with tempfile.TemporaryDirectory() as raw:
+        test_doctor_flags_a_missing_engagement_file(Path(raw))
     test_registry_list_and_filter()
     test_registry_info()
     test_profiles_command()

@@ -76,10 +76,16 @@ from nexhunter.security.authentication import TokenValidator, AuthenticationErro
 from nexhunter.security.enforcement import SecurityGate, risk_level_from_str
 from nexhunter.execution.service import ExecutionService
 from nexhunter.api import mcp_profiles
+from nexhunter.engagements.store import (
+    EngagementError,
+    EngagementStore,
+    engagement_to_dict,
+)
 
 ENGINE = Engine()
 TOKEN_VALIDATOR = TokenValidator()
-GATE = SecurityGate(token_validator=TOKEN_VALIDATOR)
+STORE = EngagementStore()
+GATE = SecurityGate(token_validator=TOKEN_VALIDATOR, engagement_store=STORE)
 # Single execution path shared with the MCP server: validate, authorize, run,
 # record. Nothing else in this module spawns a process.
 EXEC = ExecutionService(gate=GATE)
@@ -273,7 +279,23 @@ class Handler(BaseHTTPRequestHandler):
             auth_header=self.headers.get("Authorization"),
             source_ip=self._source_ip(),
             run_async=bool(body.get("async")),
+            engagement_id=body.get("engagement_id") or None,
         )
+
+    def _create_engagement(self, body):
+        """Create an engagement. Validation failures are reported, not raised."""
+        try:
+            engagement = STORE.create(body)
+        except EngagementError as exc:
+            return {"ok": False, "error": str(exc), "code": "INVALID_ENGAGEMENT"}
+        return {"ok": True, "engagement": engagement_to_dict(engagement)}
+
+    def _set_engagement_status(self, engagement_id, body):
+        try:
+            engagement = STORE.set_status(engagement_id, str(body.get("status", "")))
+        except EngagementError as exc:
+            return {"ok": False, "error": str(exc), "code": "INVALID_ENGAGEMENT"}
+        return {"ok": True, "engagement": engagement_to_dict(engagement)}
 
     def do_GET(self):
         t0 = time.time()
@@ -336,6 +358,24 @@ class Handler(BaseHTTPRequestHandler):
                     },
                     "installed_tools": sorted(s.name for s in installed),
                 })
+            elif path == "/api/engagements":
+                query = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+                active_only = (query.get("active") or [None])[0] == "true"
+                engagements = STORE.list(active_only=active_only)
+                self._json(200, {
+                    "ok": True,
+                    "count": len(engagements),
+                    "enforcing": GATE.enforce,
+                    "engagements": [engagement_to_dict(e) for e in engagements],
+                })
+            elif path.startswith("/api/engagements/"):
+                engagement_id = path[len("/api/engagements/"):].strip("/")
+                engagement = STORE.get(engagement_id)
+                if engagement is None:
+                    self._json(404, {"ok": False, "error": f"no such engagement: {engagement_id}",
+                                     "code": "NOT_FOUND"})
+                else:
+                    self._json(200, {"ok": True, "engagement": engagement_to_dict(engagement)})
             elif path == "/api/mcp/profiles":
                 self._json(200, {"ok": True, "profiles": mcp_profiles.summarize()})
             elif path.startswith("/api/tools/"):
@@ -383,6 +423,11 @@ class Handler(BaseHTTPRequestHandler):
             fn = None
             if path == "/api/command":
                 fn = lambda: self._command(body)
+            elif path == "/api/engagements":
+                fn = lambda: self._create_engagement(body)
+            elif path.startswith("/api/engagements/") and path.endswith("/status"):
+                engagement_id = path[len("/api/engagements/"):-len("/status")].strip("/")
+                fn = lambda: self._set_engagement_status(engagement_id, body)
             elif path.startswith("/api/executions/") and path.endswith("/terminate"):
                 execution_id = path[len("/api/executions/"):-len("/terminate")].strip("/")
                 fn = lambda: EXEC.terminate(execution_id)

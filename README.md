@@ -7,7 +7,7 @@
 
   <p>Secure-by-default orchestration of security tools for <em>authorized</em> assessments.</p>
 
-![Version](https://img.shields.io/badge/version-2.0.0-blue) ![Python](https://img.shields.io/badge/python-3.10%2B-green) ![Tests](https://img.shields.io/badge/tests-140%20passing-green) ![Coverage](https://img.shields.io/badge/coverage-63%25-yellow)
+![Version](https://img.shields.io/badge/version-2.0.0-blue) ![Python](https://img.shields.io/badge/python-3.10%2B-green) ![Tests](https://img.shields.io/badge/tests-158%20passing-green) ![Coverage](https://img.shields.io/badge/coverage-63%25-yellow)
 </div>
 
 ---
@@ -59,6 +59,11 @@ cd nexhunter
 pip install -e ".[mcp]"
 
 nexhunter doctor          # check this installation can actually run
+
+# Declare what you are authorized to test. Nothing runs until you do.
+nexhunter engagement create --id ENG-001 \
+  --target example.com --target '*.example.com' \
+  --deny admin.example.com --risk passive --risk active
 ```
 
 Then start the server and, optionally, the MCP bridge:
@@ -165,7 +170,11 @@ nexhunter registry list --category recon      # browse the registry
 nexhunter registry check                      # which binaries are installed
 nexhunter registry info nmap_scan             # describe one tool
 nexhunter profiles                            # MCP profiles
-nexhunter engagement validate scope.json      # check a scope file before relying on it
+nexhunter engagement create --id ENG-001 --target example.com
+nexhunter engagement list                     # stored engagements
+nexhunter engagement show ENG-001             # one engagement's scope
+nexhunter engagement status ENG-001 paused    # pause, complete, cancel, resume
+nexhunter engagement validate scope.json      # check a file before relying on it
 ```
 
 `doctor` reports what is true about your environment and never changes it:
@@ -212,6 +221,10 @@ curl -H "Authorization: Bearer $NEXHUNTER_API_TOKEN" \
 | `GET /api/executions/{id}/output` | Captured output, redacted |
 | `GET /api/executions/{id}/artifacts` | Artifacts in that execution's workspace |
 | `POST /api/executions/{id}/terminate` | Stop a running execution and its children |
+| `POST /api/engagements` | Create an engagement |
+| `GET /api/engagements` | List engagements |
+| `GET /api/engagements/{id}` | One engagement's scope |
+| `POST /api/engagements/{id}/status` | Pause, complete, cancel, resume |
 | `GET /api/findings` | Findings |
 | `GET /api/mcp/profiles` | Profile definitions |
 
@@ -232,8 +245,8 @@ actions (`aws_get_caller_identity`, `kubectl_get_pods`,
 
 ```bash
 NEXHUNTER_API_TOKEN=              # required in production
-NEXHUNTER_ENFORCE=false           # true = require engagement scope
-NEXHUNTER_ENGAGEMENT=             # path to engagement JSON
+NEXHUNTER_ENFORCE=true            # default; false disables scope for local dev
+NEXHUNTER_ENGAGEMENT=             # optional: a single fixed engagement file
 NEXHUNTER_BIND_HOST=127.0.0.1
 NEXHUNTER_DATA_DIR=
 NEXHUNTER_MCP_PROFILE=nexhunter-core
@@ -241,14 +254,16 @@ NEXHUNTER_DESTRUCTIVE_TOOLS_ENABLED=false
 NEXHUNTER_INTRUSIVE_TOOLS_ENABLED=false
 ```
 
-See [.env.example](.env.example). Enforcement is opt-in today because engagement
-management has no API yet; in the default mode authentication is honored and
-everything is audited, but scope is not applied.
+See [.env.example](.env.example). **Enforcement is on by default.** A fresh
+install with no engagement denies every execution and tells you how to create
+one — refusing until someone declares what is in scope is the safe posture for
+a tool that runs scanners. Set `NEXHUNTER_ENFORCE=false` for local development
+against your own hosts.
 
 ## Testing
 
 ```bash
-pytest                                                    # 140 tests
+pytest                                                    # 158 tests
 pytest --cov=nexhunter --cov-report=term-missing          # coverage
 ```
 
@@ -272,14 +287,12 @@ The gap is legacy agent and engine code. That number is measured, not claimed.
 ## Limitations
 
 - Not a sandbox. Tools run with the server process's privileges.
-- Enforcement is opt-in until engagement management gets an API.
 - Scope is checked at request time; DNS can change afterwards.
 - Redaction is pattern-based and may miss unusual credential formats.
 - Findings are not yet normalized to a single schema.
 
 ## Roadmap
 
-- Engagement management API, so enforcement can default to on
 - Typed parameter schemas (hostname, cidr, url, port) at the registry level
 - Finding normalization with SARIF export
 - Structured workflows with visible phases

@@ -21,10 +21,11 @@ were found and fixed, and two secret leaks were found while testing. Coverage
 is now **63% measured** overall and 87–100% across the security and execution
 modules. That number is stated as measured rather than rounded up.
 
+Scope enforcement is **on by default**: a fresh install with no engagement
+denies every execution and tells the operator how to declare one.
+
 **Not finished:** typed parameter schemas, finding normalization, the target
-profiler, and workflow migration to the new execution layer. Scope enforcement
-is implemented and tested but ships opt-in, because engagement management has
-no API yet.
+profiler, and workflow migration to the new execution layer.
 
 ## Original Architecture
 
@@ -355,7 +356,7 @@ nexhunter doctor          # fails loudly if this is misconfigured
 | Variable | Default | Purpose |
 |---|---|---|
 | `NEXHUNTER_API_TOKEN` | *(unset)* | Bearer token; unset means no authentication |
-| `NEXHUNTER_ENFORCE` | `false` | Require engagement scope |
+| `NEXHUNTER_ENFORCE` | `true` | Require engagement scope; false disables it |
 | `NEXHUNTER_ENGAGEMENT` | *(unset)* | Path to engagement JSON |
 | `NEXHUNTER_DEFAULT_ROLE` | `operator` | Role granted to an authenticated caller |
 | `NEXHUNTER_BIND_HOST` | `127.0.0.1` | Listen address |
@@ -381,8 +382,9 @@ the repository.
 
 ## Remaining Risks
 
-1. **Enforcement is opt-in.** The default posture authenticates and audits but
-   does not apply scope. Highest-value next change.
+1. **Enforcement can still be disabled** with `NEXHUNTER_ENFORCE=false`, and
+   nothing prevents that reaching production except discipline. `doctor`
+   reports the posture.
 2. **Coverage is 63%, not 80%.** Legacy modules are thin.
 3. **Not a sandbox.** Tools run with the server process's privileges.
 4. **TOCTOU on DNS.** Scope is checked at request time; the tool resolves again
@@ -399,12 +401,10 @@ the repository.
 
 ## Recommended Next Phase
 
-1. Engagement management API and storage, then flip `NEXHUNTER_ENFORCE` to
-   default on. Everything else is secondary to this.
-2. Typed parameter schemas (`hostname`, `cidr`, `url`, `port`, `file`) with
+1. Typed parameter schemas (`hostname`, `cidr`, `url`, `port`, `file`) with
    per-parameter `secret` markers, which also retires the short-flag map.
-3. Migrate workflows onto `ExecutionService`.
-4. Finding normalization: SHA-256 fingerprints, deduplication, SARIF export.
-5. Raise coverage on `api/server.py`, `core/engine.py`, and `agents/`.
-6. Run CI on a remote and fix what it surfaces.
-7. Evidence-based target profiler.
+2. Migrate workflows onto `ExecutionService`.
+3. Finding normalization: SHA-256 fingerprints, deduplication, SARIF export.
+4. Raise coverage on `api/server.py`, `core/engine.py`, and `agents/`.
+5. Run CI on a remote and fix what it surfaces.
+6. Evidence-based target profiler.

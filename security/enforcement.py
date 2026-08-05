@@ -39,6 +39,24 @@ def _env_flag(name: str) -> bool:
     return os.environ.get(name, "").strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _default_enforce() -> bool:
+    """Whether scope enforcement is on when not stated explicitly.
+
+    Defaults to ON. A fresh install with no engagement therefore denies every
+    execution -- which is the correct posture for a tool that runs scanners:
+    refusing until someone declares what is in scope is safe, quietly scanning
+    whatever it is pointed at is not.
+
+    Set NEXHUNTER_ENFORCE=false for local development against your own hosts.
+    """
+    raw = os.environ.get("NEXHUNTER_ENFORCE", "").strip().lower()
+    if raw in {"1", "true", "yes", "on"}:
+        return True
+    if raw in {"0", "false", "no", "off"}:
+        return False
+    return True
+
+
 def _load_engagement(path: Optional[str]) -> Optional[Engagement]:
     """Load a single active engagement from a JSON file, if configured.
 
@@ -86,6 +104,7 @@ class GateResult:
     policy: ExecutionPolicy
     auth_context: Optional[AuthContext]
     request_id: str
+    engagement: Optional[Engagement] = None
 
 
 class SecurityGate:
@@ -97,15 +116,38 @@ class SecurityGate:
         policy_engine: Optional[PolicyEngine] = None,
         audit_logger: Optional[AuditLogger] = None,
         enforce: Optional[bool] = None,
+        engagement_store=None,
     ):
         self.token_validator = token_validator or TokenValidator()
         self.policy_engine = policy_engine or PolicyEngine()
         self.audit = audit_logger or AuditLogger()
-        self.enforce = _env_flag("NEXHUNTER_ENFORCE") if enforce is None else enforce
+        self.enforce = _default_enforce() if enforce is None else enforce
         # Role granted to an authenticated caller when no per-user store exists.
         role_name = os.environ.get("NEXHUNTER_DEFAULT_ROLE", "operator")
         self.default_role: Role = ROLES.get(role_name, ROLES["operator"])
+
+        # Engagements are resolved per request from the store. The file-based
+        # NEXHUNTER_ENGAGEMENT remains supported for a single fixed scope.
+        self.store = engagement_store
+        if self.store is None:
+            from nexhunter.engagements.store import EngagementStore
+
+            self.store = EngagementStore()
         self.engagement = _load_engagement(os.environ.get("NEXHUNTER_ENGAGEMENT"))
+
+    def resolve_engagement(self, engagement_id: Optional[str] = None):
+        """Find the engagement an execution belongs to.
+
+        Resolution order: the id the caller named, then a file-configured
+        engagement, then the store's single active engagement. Ambiguity is
+        never guessed at -- with more than one active engagement and no id, this
+        returns None and the policy engine denies.
+        """
+        if engagement_id:
+            return self.store.get(engagement_id)
+        if self.engagement is not None:
+            return self.engagement
+        return self.store.default_engagement()
 
     def _auth_context(self, auth_header: Optional[str], source_ip: str, request_id: str) -> Optional[AuthContext]:
         """Build an AuthContext for a validated caller, else None."""
@@ -128,10 +170,12 @@ class SecurityGate:
         risk_level: RiskLevel,
         source_ip: str = "unknown",
         request_id: Optional[str] = None,
+        engagement_id: Optional[str] = None,
     ) -> GateResult:
         """Authorize one tool execution. Always writes an audit record."""
         request_id = request_id or uuid.uuid4().hex[:12]
         ctx = self._auth_context(auth_header, source_ip, request_id)
+        engagement = self.resolve_engagement(engagement_id)
 
         if ctx is None:
             self.audit.log_auth_failure(source_ip, "invalid or missing token", request_id)
@@ -143,11 +187,33 @@ class SecurityGate:
             return GateResult(False, policy, None, request_id)
 
         if self.enforce:
-            policy = self.policy_engine.check_execution(
-                ctx, self.engagement, tool_name, target, risk_level
-            )
+            if engagement is None:
+                # Say which of the two cases this is, because the fix differs:
+                # create an engagement, or name the one you meant.
+                active = [e for e in self.store.list() if e.is_active()]
+                if engagement_id:
+                    reason = f"No engagement found with id {engagement_id!r}"
+                elif len(active) > 1:
+                    reason = (
+                        f"{len(active)} active engagements; name one with engagement_id "
+                        f"({', '.join(e.id for e in active)})"
+                    )
+                else:
+                    reason = (
+                        "No active engagement. Create one with POST /api/engagements "
+                        "or `nexhunter engagement create`."
+                    )
+                policy = ExecutionPolicy(
+                    decision=PolicyDecision.DENIED,
+                    reason=reason,
+                    policy_code="ENGAGEMENT_REQUIRED",
+                )
+            else:
+                policy = self.policy_engine.check_execution(
+                    ctx, engagement, tool_name, target, risk_level
+                )
         else:
-            # Dev mode: identity resolved, no engagement scope enforced.
+            # Development mode: identity resolved and audited, scope not applied.
             policy = ExecutionPolicy(
                 decision=PolicyDecision.ALLOWED,
                 reason="Execution authorized (enforcement disabled)",
@@ -155,9 +221,9 @@ class SecurityGate:
             )
 
         self.audit.log_policy_decision(
-            ctx, self.engagement, tool_name, target, risk_level, policy
+            ctx, engagement, tool_name, target, risk_level, policy
         )
-        return GateResult(policy.is_allowed, policy, ctx, request_id)
+        return GateResult(policy.is_allowed, policy, ctx, request_id, engagement)
 
 
 def risk_level_from_str(value: str) -> RiskLevel:
