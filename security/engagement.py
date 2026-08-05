@@ -2,10 +2,21 @@
 
 import ipaddress
 import re
+import socket
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import List, Optional, Tuple
+from typing import Callable, List, Optional, Sequence, Tuple
 from enum import Enum
+
+
+def _dns_resolve(host: str) -> List[ipaddress._BaseAddress]:
+    """Resolve a hostname to every address it points at.
+
+    Raises OSError when resolution fails; callers must treat that as a denial
+    (a name we cannot resolve is a name whose scope we cannot verify).
+    """
+    infos = socket.getaddrinfo(host, None, proto=socket.IPPROTO_TCP)
+    return list({ipaddress.ip_address(info[4][0]) for info in infos})
 
 
 class RiskLevel(Enum):
@@ -66,47 +77,69 @@ class Engagement:
 class TargetValidator:
     """Validate targets against engagement scope."""
 
-    # Cloud metadata endpoints to block
+    # Cloud metadata endpoints. Blocked unconditionally: reaching one of these
+    # from inside a target's network is SSRF, never a legitimate scan target.
     METADATA_IPS = {
-        ipaddress.IPv4Address("169.254.169.254"),  # AWS, Azure, GCP
-        ipaddress.IPv4Address("169.254.169.253"),  # Azure
+        ipaddress.ip_address("169.254.169.254"),  # AWS, Azure, GCP, OpenStack
+        ipaddress.ip_address("169.254.169.253"),  # Azure secondary
+        ipaddress.ip_address("100.100.100.200"),  # Alibaba Cloud
+        ipaddress.ip_address("fd00:ec2::254"),  # AWS IMDS over IPv6
     }
 
-    # Private/reserved IP ranges
-    RESERVED_RANGES = [
-        ipaddress.IPv4Network("0.0.0.0/8"),
-        ipaddress.IPv4Network("10.0.0.0/8"),
-        ipaddress.IPv4Network("127.0.0.0/8"),  # loopback
-        ipaddress.IPv4Network("169.254.0.0/16"),  # link-local
-        ipaddress.IPv4Network("172.16.0.0/12"),
-        ipaddress.IPv4Network("192.168.0.0/16"),
-        ipaddress.IPv4Network("224.0.0.0/4"),  # multicast
-        ipaddress.IPv4Network("240.0.0.0/4"),  # reserved
-        ipaddress.IPv4Network("255.255.255.255/32"),  # broadcast
-    ]
+    # Hostnames that front a metadata service.
+    METADATA_HOSTS = {
+        "metadata.google.internal",
+        "metadata.goog",
+        "instance-data",
+    }
+
+    # Injectable so tests (and offline runs) do not depend on real DNS.
+    resolver: Callable[[str], List[ipaddress._BaseAddress]] = staticmethod(_dns_resolve)
 
     @staticmethod
-    def is_reserved_ip(ip_str: str) -> Tuple[bool, Optional[str]]:
-        """Check if IP is in reserved ranges."""
+    def _normalize_ip(ip: ipaddress._BaseAddress) -> ipaddress._BaseAddress:
+        """Unwrap IPv4-mapped IPv6 (::ffff:169.254.169.254) to its IPv4 form.
+
+        Without this, an attacker reaches a blocked IPv4 address by writing it
+        in IPv6 notation.
+        """
+        mapped = getattr(ip, "ipv4_mapped", None)
+        return mapped or ip
+
+    @classmethod
+    def is_metadata_ip(cls, ip_str: str) -> bool:
+        """Check if an address is a known cloud metadata endpoint."""
         try:
-            ip = ipaddress.ip_address(ip_str)
+            ip = cls._normalize_ip(ipaddress.ip_address(str(ip_str)))
+        except ValueError:
+            return False
+        return ip in cls.METADATA_IPS
 
-            # IPv4 checks
-            if isinstance(ip, ipaddress.IPv4Address):
-                if ip in TargetValidator.METADATA_IPS:
-                    return True, "Cloud metadata endpoint"
+    @classmethod
+    def is_reserved_ip(cls, ip_str: str) -> Tuple[bool, Optional[str]]:
+        """Check if an address is loopback, private, or otherwise not routable.
 
-                for reserved in TargetValidator.RESERVED_RANGES:
-                    if ip in reserved:
-                        return True, f"Reserved range: {reserved}"
-
-            # IPv6 loopback
-            if isinstance(ip, ipaddress.IPv6Address) and ip.is_loopback:
-                return True, "IPv6 loopback"
-
-            return False, None
+        Uses the stdlib classification so IPv6 (link-local, unique-local,
+        IPv4-mapped) is covered as thoroughly as IPv4.
+        """
+        try:
+            ip = cls._normalize_ip(ipaddress.ip_address(str(ip_str)))
         except ValueError:
             return False, None
+
+        if ip in cls.METADATA_IPS:
+            return True, "Cloud metadata endpoint"
+        for flag, reason in (
+            ("is_loopback", "Loopback address"),
+            ("is_link_local", "Link-local address"),
+            ("is_multicast", "Multicast address"),
+            ("is_unspecified", "Unspecified address"),
+            ("is_private", "Private address"),
+            ("is_reserved", "Reserved address"),
+        ):
+            if getattr(ip, flag, False):
+                return True, reason
+        return False, None
 
     @staticmethod
     def is_valid_hostname(hostname: str) -> bool:
@@ -157,67 +190,171 @@ class TargetValidator:
         """
         Validate if target is allowed in engagement scope.
 
+        Fails closed: anything this function cannot positively verify against an
+        active engagement is denied.
+
         Returns: (is_allowed, reason)
         """
+        # No engagement means no authorization to scan anything.
         if not engagement:
-            return True, None
+            return False, "No engagement context; scope cannot be verified"
 
-        # Check engagement is active
         if not engagement.is_active(now):
             return False, "Engagement is not active"
 
-        # Denied targets always take precedence
-        if cls._matches_any_pattern(target, engagement.scope.denied_targets):
+        allowed = engagement.scope.allowed_targets
+        denied = engagement.scope.denied_targets
+
+        # An empty allow-list authorizes nothing, it does not authorize everything.
+        if not allowed:
+            return False, "Engagement has an empty allowed-target list"
+
+        host = cls._extract_host(target)
+        if not host:
+            return False, "Target could not be parsed into a host"
+
+        # Denied entries always win over allowed entries.
+        if cls._matches_any_pattern(host, denied):
             return False, "Target is in denied list"
 
-        # Check allowed targets
-        if engagement.scope.allowed_targets:
-            if not cls._matches_any_pattern(target, engagement.scope.allowed_targets):
-                return False, "Target is not in allowed list"
+        if not cls._matches_any_pattern(host, allowed):
+            return False, "Target is not in allowed list"
 
-        # Check for reserved IPs
-        try:
-            # Try to parse as IP
-            is_reserved, reason = cls.is_reserved_ip(target)
-            if is_reserved:
-                # Allow if explicitly in allowed_targets
-                if not cls._matches_any_pattern(target, engagement.scope.allowed_targets):
-                    return False, reason or "Reserved IP address"
-        except (ValueError, ipaddress.AddressValueError):
-            pass  # Not an IP, continue with hostname validation
+        if host.lower() in cls.METADATA_HOSTS:
+            return False, "Cloud metadata endpoint"
+
+        # A host named only by wildcard is authorized by name, not by address.
+        named_literally = cls._is_literal_allow(host, allowed)
+
+        addresses, resolve_error = cls._target_addresses(host)
+        if resolve_error:
+            return False, resolve_error
+
+        # Check every address the name actually points at. This is what stops
+        # DNS rebinding and hostnames aimed at internal or metadata addresses.
+        for ip in addresses:
+            if cls.is_metadata_ip(str(ip)):
+                return False, f"Cloud metadata endpoint ({ip})"
+            if cls._matches_any_pattern(str(ip), denied):
+                return False, f"Resolved address {ip} is in denied list"
+
+            is_reserved, reason = cls.is_reserved_ip(str(ip))
+            if not is_reserved:
+                continue
+
+            # Non-routable space needs explicit authorization: either an
+            # address-shaped scope entry covering this exact address, or the
+            # host named literally. A wildcard domain must never be enough --
+            # otherwise *.example.com silently reaches RFC1918 or link-local.
+            if named_literally or cls._address_explicitly_allowed(ip, allowed):
+                continue
+            return False, f"{reason or 'Reserved address'} ({ip})"
 
         return True, None
 
+    @classmethod
+    def _address_explicitly_allowed(cls, ip, allowed: Sequence[str]) -> bool:
+        """True when an IP/CIDR entry in the scope covers this address.
+
+        Only address-shaped entries count; a wildcard hostname never authorizes
+        an address it merely happens to resolve to.
+        """
+        for pattern in allowed:
+            candidate = (pattern or "").strip().lower()
+            if not candidate or candidate.startswith("*."):
+                continue
+            try:
+                if "/" in candidate:
+                    network = ipaddress.ip_network(candidate, strict=False)
+                else:
+                    network = ipaddress.ip_network(f"{candidate}/{ipaddress.ip_address(candidate).max_prefixlen}")
+            except ValueError:
+                continue  # hostname entry, not an address
+            if ip.version == network.version and ip in network:
+                return True
+        return False
+
     @staticmethod
-    def _matches_any_pattern(target: str, patterns: List[str]) -> bool:
-        """Check if target matches any pattern (supports wildcards)."""
-        target_lower = target.lower()
+    def _extract_host(target: str) -> str:
+        """Reduce a URL or host:port target to its bare host."""
+        host = (target or "").strip()
+        if not host:
+            return ""
+        if "://" in host:
+            host = host.split("://", 1)[1]
+        host = host.split("/", 1)[0].split("?", 1)[0]
+        if host.startswith("["):  # [2001:db8::1]:443
+            host = host[1:].split("]", 1)[0]
+        elif host.count(":") == 1:  # host:port, never bare IPv6
+            host = host.split(":", 1)[0]
+        return host.rstrip(".").lower()
+
+    @classmethod
+    def _is_literal_allow(cls, host: str, allowed: Sequence[str]) -> bool:
+        """True when the engagement names this host exactly.
+
+        Deliberately excludes wildcard and CIDR matches so that widening the
+        scope cannot quietly authorize reserved address space.
+        """
+        return host.lower() in {cls._extract_host(p) for p in allowed}
+
+    @classmethod
+    def _target_addresses(cls, host: str) -> Tuple[List[ipaddress._BaseAddress], Optional[str]]:
+        """Return every address a target resolves to, or a denial reason."""
+        try:
+            return [cls._normalize_ip(ipaddress.ip_address(host))], None
+        except ValueError:
+            pass  # Not a literal address; resolve it.
+
+        try:
+            addresses = [cls._normalize_ip(ip) for ip in cls.resolver(host)]
+        except OSError as exc:
+            return [], f"DNS resolution failed for {host}: {exc}"
+
+        if not addresses:
+            return [], f"DNS resolution returned no addresses for {host}"
+        return addresses, None
+
+    @staticmethod
+    def _matches_any_pattern(target: str, patterns: Sequence[str]) -> bool:
+        """Check if target matches any pattern (supports wildcards and CIDRs)."""
+        target_lower = (target or "").strip().rstrip(".").lower()
+        if not target_lower:
+            return False
 
         for pattern in patterns:
-            pattern_lower = pattern.lower()
+            pattern_lower = (pattern or "").strip().rstrip(".").lower()
+            if not pattern_lower:
+                continue
 
             # Exact match
             if pattern_lower == target_lower:
                 return True
 
-            # Wildcard subdomain match (*.example.com matches sub.example.com)
+            # Wildcard subdomain match: *.example.com covers sub.example.com.
+            # The leading dot is required -- a bare suffix test would also match
+            # evil-example.com, which is a different domain entirely.
             if pattern_lower.startswith("*."):
-                domain_part = pattern_lower[2:]
-                if target_lower.endswith(domain_part) and "." in target_lower:
-                    # Ensure it's a subdomain, not partial domain match
-                    prefix = target_lower[: -len(domain_part) - 1]
-                    if "." not in prefix:  # Only one level of subdomain
+                suffix = pattern_lower[2:]
+                if not suffix:
+                    continue
+                if target_lower.endswith("." + suffix):
+                    label = target_lower[: -(len(suffix) + 1)]
+                    if label and "." not in label:  # single label deep
                         return True
 
             # CIDR match
             if "/" in pattern_lower:
                 try:
                     network = ipaddress.ip_network(pattern_lower, strict=False)
-                    ip = ipaddress.ip_address(target_lower)
-                    if ip in network:
-                        return True
                 except ValueError:
-                    pass
+                    continue
+                try:
+                    ip = TargetValidator._normalize_ip(ipaddress.ip_address(target_lower))
+                except ValueError:
+                    continue
+                if ip.version == network.version and ip in network:
+                    return True
 
         return False
 

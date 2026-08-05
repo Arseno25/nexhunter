@@ -7,6 +7,8 @@ from datetime import datetime, timedelta
 # Add parent to path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
+import ipaddress
+
 from nexhunter.security.engagement import (
     Engagement,
     EngagementScope,
@@ -14,6 +16,45 @@ from nexhunter.security.engagement import (
     TargetValidator,
     ScopeEnforcer,
 )
+
+# Stub DNS so scope tests never touch the network. Anything not listed here
+# resolves to a public address; add entries to model rebinding scenarios.
+FAKE_DNS = {
+    "example.com": ["93.184.216.34"],
+    "app.example.com": ["93.184.216.35"],
+    "admin.example.com": ["93.184.216.36"],
+    "other.com": ["8.8.8.8"],
+    "evil-example.com": ["45.33.32.156"],
+    "rebind.example.com": ["169.254.169.254"],
+    "internal.example.com": ["10.0.0.5"],
+    "mapped.example.com": ["::ffff:169.254.169.254"],
+}
+
+
+def _fake_resolver(host):
+    addrs = FAKE_DNS.get(host.lower())
+    if addrs is None:
+        raise OSError(f"no fake DNS entry for {host}")
+    return [ipaddress.ip_address(a) for a in addrs]
+
+
+TargetValidator.resolver = staticmethod(_fake_resolver)
+
+
+def _engagement(allowed, denied=None, risk_levels=None, status="active"):
+    """Build an active engagement with the given scope."""
+    return Engagement(
+        id="ENG-TEST",
+        name="Test",
+        status=status,
+        scope=EngagementScope(
+            allowed_targets=allowed,
+            denied_targets=denied or [],
+            allowed_risk_levels=risk_levels or [RiskLevel.PASSIVE, RiskLevel.ACTIVE],
+        ),
+        starts_at=datetime.utcnow() - timedelta(hours=1),
+        expires_at=datetime.utcnow() + timedelta(hours=1),
+    )
 
 
 def test_target_validator_reserved_ips():
@@ -272,6 +313,119 @@ def test_loopback_blocked_by_default():
     print("  [OK] Loopback protection working")
 
 
+def test_wildcard_does_not_match_sibling_domain():
+    """*.example.com must not match evil-example.com (dot boundary required)."""
+    print("[TEST] Wildcard requires a dot boundary...")
+
+    assert not TargetValidator._matches_any_pattern("evil-example.com", ["*.example.com"])
+    assert not TargetValidator._matches_any_pattern("notexample.com", ["*.example.com"])
+    assert TargetValidator._matches_any_pattern("app.example.com", ["*.example.com"])
+
+    engagement = _engagement(["*.example.com"])
+    is_allowed, reason = TargetValidator.validate_target("evil-example.com", engagement)
+    assert not is_allowed, "evil-example.com must not fall inside *.example.com"
+    assert "not in allowed list" in reason
+
+    print("  [OK] Sibling domain rejected")
+
+
+def test_no_engagement_fails_closed():
+    """A missing engagement denies rather than allows."""
+    print("[TEST] Missing engagement fails closed...")
+
+    is_allowed, reason = TargetValidator.validate_target("example.com", None)
+    assert not is_allowed, "No engagement must deny"
+    assert "No engagement" in reason
+
+    print("  [OK] Missing engagement denied")
+
+
+def test_empty_allowlist_fails_closed():
+    """An empty allow-list authorizes nothing."""
+    print("[TEST] Empty allow-list fails closed...")
+
+    engagement = _engagement([])
+    is_allowed, reason = TargetValidator.validate_target("example.com", engagement)
+    assert not is_allowed, "Empty allow-list must deny"
+    assert "empty allowed-target list" in reason
+
+    print("  [OK] Empty allow-list denied")
+
+
+def test_dns_rebinding_to_metadata_blocked():
+    """A permitted name resolving to the metadata IP is still denied."""
+    print("[TEST] DNS rebinding to metadata blocked...")
+
+    engagement = _engagement(["*.example.com"])
+    is_allowed, reason = TargetValidator.validate_target("rebind.example.com", engagement)
+    assert not is_allowed, "Name resolving to metadata IP must be denied"
+    assert "metadata" in reason.lower()
+
+    print("  [OK] Rebinding to metadata denied")
+
+
+def test_ipv4_mapped_ipv6_metadata_blocked():
+    """::ffff:169.254.169.254 is the metadata IP and must be treated as such."""
+    print("[TEST] IPv4-mapped IPv6 metadata blocked...")
+
+    assert TargetValidator.is_metadata_ip("::ffff:169.254.169.254")
+
+    engagement = _engagement(["*.example.com"])
+    is_allowed, reason = TargetValidator.validate_target("mapped.example.com", engagement)
+    assert not is_allowed, "IPv4-mapped metadata address must be denied"
+    assert "metadata" in reason.lower()
+
+    print("  [OK] IPv4-mapped metadata denied")
+
+
+def test_wildcard_does_not_authorize_internal_address():
+    """A wildcard allow must not pull private space into scope."""
+    print("[TEST] Wildcard does not authorize private space...")
+
+    engagement = _engagement(["*.example.com"])
+    is_allowed, reason = TargetValidator.validate_target("internal.example.com", engagement)
+    assert not is_allowed, "Name resolving to RFC1918 must be denied under a wildcard"
+    assert "private" in reason.lower()
+
+    # Naming it literally is an explicit, auditable authorization.
+    literal = _engagement(["internal.example.com"])
+    is_allowed, reason = TargetValidator.validate_target("internal.example.com", literal)
+    assert is_allowed, f"Literal allow should authorize internal host, got: {reason}"
+
+    print("  [OK] Private space needs a literal allow")
+
+
+def test_unresolvable_target_denied():
+    """A name we cannot resolve is a name whose scope we cannot verify."""
+    print("[TEST] Unresolvable target denied...")
+
+    engagement = _engagement(["*.example.com"])
+    is_allowed, reason = TargetValidator.validate_target("ghost.example.com", engagement)
+    assert not is_allowed, "Unresolvable target must be denied"
+    assert "DNS resolution failed" in reason
+
+    print("  [OK] Unresolvable target denied")
+
+
+def test_url_target_is_reduced_to_host():
+    """URL and host:port forms are validated by their host."""
+    print("[TEST] URL target reduced to host...")
+
+    assert TargetValidator._extract_host("https://app.example.com/admin?x=1") == "app.example.com"
+    assert TargetValidator._extract_host("example.com:8443") == "example.com"
+    assert TargetValidator._extract_host("[2001:db8::1]:443") == "2001:db8::1"
+
+    engagement = _engagement(["*.example.com"], denied=["admin.example.com"])
+    is_allowed, _ = TargetValidator.validate_target("https://app.example.com/x", engagement)
+    assert is_allowed, "URL against an allowed host should pass"
+
+    is_allowed, reason = TargetValidator.validate_target("https://admin.example.com/x", engagement)
+    assert not is_allowed, "URL against a denied host must fail"
+    assert "denied" in reason.lower()
+
+    print("  [OK] URL reduced to host before scope check")
+
+
 if __name__ == "__main__":
     print("\n=== Engagement Scope Tests ===\n")
     test_target_validator_reserved_ips()
@@ -284,4 +438,12 @@ if __name__ == "__main__":
     test_scope_enforcer_check_execution()
     test_scope_enforcer_raises()
     test_loopback_blocked_by_default()
+    test_wildcard_does_not_match_sibling_domain()
+    test_no_engagement_fails_closed()
+    test_empty_allowlist_fails_closed()
+    test_dns_rebinding_to_metadata_blocked()
+    test_ipv4_mapped_ipv6_metadata_blocked()
+    test_wildcard_does_not_authorize_internal_address()
+    test_unresolvable_target_denied()
+    test_url_target_is_reduced_to_host()
     print("\n=== All Engagement Scope Tests Passed ===\n")
