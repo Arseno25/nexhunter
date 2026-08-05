@@ -9,6 +9,12 @@ class Agent:
     name = ""
     desc = ""
     param_schema = {}  # {param_name: (required: bool, type)}
+    # True for agents that take attack-side actions (payload delivery, exploit
+    # generation) reaching the network outside the ExecutionService gate. The
+    # API refuses to run these unless intrusive tooling is explicitly enabled,
+    # so offensive capability is opt-in and consistent with the tool registry's
+    # own risk ceiling rather than exposed by default.
+    offensive = False
 
     def __init__(self, ctx):
         self.ctx = ctx

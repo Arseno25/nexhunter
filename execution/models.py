@@ -2,7 +2,7 @@
 
 import uuid
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Dict, Optional
 
@@ -68,7 +68,7 @@ class ExecutionRecord:
     risk_level: str = "active"
     redacted_parameters: Dict[str, Any] = field(default_factory=dict)
     redacted_command: list = field(default_factory=list)
-    created_at: datetime = field(default_factory=datetime.utcnow)
+    created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     started_at: Optional[datetime] = None
     completed_at: Optional[datetime] = None
     exit_code: Optional[int] = None
@@ -88,16 +88,16 @@ class ExecutionRecord:
 
         self.status = new_status
         if new_status is ExecutionStatus.RUNNING:
-            self.started_at = datetime.utcnow()
+            self.started_at = datetime.now(timezone.utc)
         elif new_status.is_terminal:
-            self.completed_at = datetime.utcnow()
+            self.completed_at = datetime.now(timezone.utc)
 
     @property
     def duration_seconds(self) -> Optional[float]:
         """Wall-clock runtime, once the execution has started."""
         if not self.started_at:
             return None
-        end = self.completed_at or datetime.utcnow()
+        end = self.completed_at or datetime.now(timezone.utc)
         return round((end - self.started_at).total_seconds(), 3)
 
     def to_dict(self) -> Dict[str, Any]:

@@ -12,7 +12,7 @@ import hashlib
 import json
 import re
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Dict, List, Optional
 
@@ -154,8 +154,8 @@ class Finding:
     cwe_ids: List[str] = field(default_factory=list)
     cvss_score: Optional[float] = None
     location: Optional[str] = None      # file path, URL path, or port
-    first_seen_at: datetime = field(default_factory=datetime.utcnow)
-    last_seen_at: datetime = field(default_factory=datetime.utcnow)
+    first_seen_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    last_seen_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     id: str = ""
 
     def __post_init__(self):

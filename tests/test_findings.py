@@ -3,7 +3,7 @@
 import json
 import sys
 import threading
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
@@ -157,7 +157,7 @@ def test_fingerprint_ignores_run_specific_fields():
     original = _finding(execution_id="exec-1")
     rerun = _finding(
         execution_id="exec-2",
-        first_seen_at=datetime.utcnow() + timedelta(days=1),
+        first_seen_at=datetime.now(timezone.utc) + timedelta(days=1),
         severity="critical",
     )
 

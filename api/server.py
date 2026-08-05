@@ -3,7 +3,7 @@
 Architecture:
   Tool Registry → ToolSpec class with validation
   Engine Layer → Orchestration with caching, parallel execution
-  Agent Layer → 18 specialized agents (13 core + 5 enhanced)
+  Agent Layer → auto-discovered agents (core + enhanced; offensive ones gated)
   API Layer → HTTP REST endpoints
 
 Features:
@@ -117,6 +117,23 @@ class Telemetry:
 
 
 TEL = Telemetry()
+
+
+def _intrusive_enabled() -> bool:
+    """True when intrusive tooling (incl. offensive agents) is explicitly on."""
+    return os.environ.get("NEXHUNTER_INTRUSIVE_TOOLS_ENABLED", "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def offensive_agent_blocked(name: str) -> bool:
+    """True when an agent takes attack-side actions and intrusive is not enabled.
+
+    The /api/agents route runs agents directly, outside the ExecutionService
+    gate and its risk ceiling. Offensive agents (the exploit_kit package) are
+    therefore refused unless intrusive tooling is explicitly enabled, keeping
+    the default posture consistent with the tool registry.
+    """
+    cls = AGENTS.get(name)
+    return bool(cls is not None and getattr(cls, "offensive", False) and not _intrusive_enabled())
 
 
 def _analyze_target(target):
@@ -430,6 +447,12 @@ class Handler(BaseHTTPRequestHandler):
             name = path.rsplit("/", 1)[1]
             if name in ENHANCED_AGENTS:
                 fn = lambda: ENHANCED_AGENTS[name].execute(ENGINE, body)
+            elif offensive_agent_blocked(name):
+                fn = lambda: {
+                    "ok": False, "code": "OFFENSIVE_AGENT_DISABLED",
+                    "error": (f"agent '{name}' takes attack-side actions outside the "
+                              "execution gate; set NEXHUNTER_INTRUSIVE_TOOLS_ENABLED=true to allow"),
+                }
             else:
                 fn = lambda: run_agent(ENGINE, name, body)
         elif path == "/api/flow/bugbounty":

@@ -2,7 +2,7 @@
 
 import html
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Sequence
 
 from nexhunter.findings.models import Category, Finding, Severity
@@ -39,7 +39,7 @@ def to_markdown(findings: Sequence[Finding], title: str = "Security Assessment F
     should not have to sort facts from findings.
     """
     lines = [f"# {title}", ""]
-    lines.append(f"Generated {datetime.utcnow().isoformat(timespec='seconds')}Z")
+    lines.append(f"Generated {datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')}")
     lines.append("")
 
     vulnerabilities = [f for f in findings if f.is_vulnerability]
@@ -185,7 +185,7 @@ def to_html(findings: Sequence[Finding], title: str = "Security Assessment Findi
 </head>
 <body>
 <h1>{html.escape(title)}</h1>
-<div class="meta">Generated {datetime.utcnow().isoformat(timespec="seconds")}Z ·
+<div class="meta">Generated {datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")} ·
   {len(vulnerabilities)} finding(s), {len(findings)} record(s) total</div>
 <div>{chips}</div>
 <div class="wrap">

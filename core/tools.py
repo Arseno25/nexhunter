@@ -145,6 +145,25 @@ STABLE_TOOLS = frozenset({
     "kubectl_get_namespaces", "docker_list_containers",
 })
 
+# Registered but not honestly usable as written, so they are not counted as a
+# working capability and drop out of the focused profiles (they remain only in
+# nexhunter-full). Two kinds live here:
+#   * invented/placeholder binaries whose CLI does not exist as invoked, or
+#     GUI/framework tools that cannot run as a one-shot command line;
+#   * builders with hardcoded stand-in arguments (a fixed username/wordlist, a
+#     local script path) that are demos, not real invocations.
+# Promoting one out of here means giving it a real builder, a parser, and a test.
+EXPERIMENTAL_TOOLS = frozenset({
+    # invented / non-existent binaries
+    "cve_search", "nist_tool", "qualys", "censys", "zoomeye", "chimera", "unicorn",
+    # real tools, but not invocable as a single one-shot command as wired
+    "maltego", "spiderfoot", "w3af", "beef", "empire", "cobalt_strike", "havoc",
+    "veil", "evasion", "social_engineer_toolkit", "phishing_framework",
+    "empire_persistence",
+    # builders with hardcoded stand-in arguments (canned demos, not real runs)
+    "hydra", "linpeas", "dirty_cow",
+})
+
 
 def _infer_category(name: str, binary: str) -> str:
     """Infer a tool's category from its name and binary."""
@@ -196,7 +215,12 @@ class ToolSpec:
         if self.category is None:
             self.category = _infer_category(self.name, self.binary)
         if self.maturity is None:
-            self.maturity = "stable" if self.name in STABLE_TOOLS else "beta"
+            if self.name in STABLE_TOOLS:
+                self.maturity = "stable"
+            elif self.name in EXPERIMENTAL_TOOLS:
+                self.maturity = "experimental"
+            else:
+                self.maturity = "beta"
         if self.param_specs is None:
             self.param_specs = tuple(
                 P.spec_from_legacy(key, default) for key, default in self.params.items()
@@ -1252,8 +1276,10 @@ _tool_specs = {
     "tcpdump_capture": ToolSpec(
         name="tcpdump_capture", binary="tcpdump", description="Live packet capture",
         params={"interface": "any", "count": 100, "port": ""}, timeout=120, cacheable=False,
-        builder=lambda p: ["tcpdump", "-i", p["interface"], "-c", str(p["count"])]
-        + (["port", str(p["port"])] if p["port"] else []) + ["-w", "capture.pcap"]),
+        # A tcpdump filter expression ("port 80") must come last, after the
+        # options; -w is an option, so the filter follows it.
+        builder=lambda p: ["tcpdump", "-i", p["interface"], "-c", str(p["count"]), "-w", "capture.pcap"]
+        + (["port", str(p["port"])] if p["port"] else [])),
     "tshark_capture": ToolSpec(
         name="tshark_capture", binary="tshark", description="Live packet analysis",
         params={"interface": "any", "count": 100}, timeout=120, cacheable=False,

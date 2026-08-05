@@ -24,7 +24,7 @@ import logging
 import threading
 import uuid
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Dict, List, Optional, Sequence
 
@@ -290,7 +290,7 @@ class RunRecord:
     errors: List[dict] = field(default_factory=list)
     plan: Optional[List[dict]] = None                    # AI-proposed, approved steps
     profile: Optional[dict] = None
-    started_at: datetime = field(default_factory=datetime.utcnow)
+    started_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     completed_at: Optional[datetime] = None
 
     @property
@@ -522,7 +522,7 @@ class AutonomousOrchestrator:
             record.status = RunStatus.FAILED
         finally:
             record.current_phase = "done"
-            record.completed_at = datetime.utcnow()
+            record.completed_at = datetime.now(timezone.utc)
             done_ok = record.status is RunStatus.COMPLETED
             elapsed = (record.completed_at - record.started_at).total_seconds()
             tone = c["GREEN"] if done_ok else c["RED"]

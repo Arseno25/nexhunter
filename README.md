@@ -115,21 +115,21 @@ narrows that to one job.
 | Profile | Tools | Purpose |
 |---|---:|---|
 | `nexhunter-core` | 12 | Status, findings, executions, passive stable checks only |
-| `nexhunter-recon` | 24 | Host discovery, DNS, subdomains, service identification |
+| `nexhunter-recon` | 23 | Host discovery, DNS, subdomains, service identification |
 | `nexhunter-web` | 37 | Content discovery, injection testing, template scanning, TLS, browser crawl (incl. sqlmap/ffuf/nikto) |
 | `nexhunter-api` | 7 | Schema and parameter discovery (arjun), JWT, GraphQL |
 | `nexhunter-code` | 16 | Static analysis, secret scanning, dependency review |
 | `nexhunter-cloud` | 8 | Read-only cloud posture |
 | `nexhunter-container` | 14 | Container and Kubernetes review |
 | `nexhunter-forensics` | 28 | Offline artifact, steganography, and binary analysis |
-| `nexhunter-osint` | 10 | OSINT: usernames, emails, footprinting, CVE lookup |
+| `nexhunter-osint` | 5 | OSINT: usernames, emails, footprinting, CVE lookup |
 | `nexhunter-wireless` | 7 | Wireless recon and assessment (destructive withheld) |
-| `nexhunter-privesc` | 7 | Local privilege escalation discovery |
-| `nexhunter-payloads` | 10 | Payload generation, C2 integration (never auto-executed) |
-| `nexhunter-vulnscan` | 10 | Vulnerability scanners and IDS tooling |
+| `nexhunter-privesc` | 5 | Local privilege escalation discovery |
+| `nexhunter-payloads` | 3 | Payload generation, C2 integration (never auto-executed) |
+| `nexhunter-vulnscan` | 8 | Vulnerability scanners and IDS tooling |
 | `nexhunter-mobile` | 6 | APK inspection, decompilation, runtime exploration |
-| `nexhunter-ctf` | 91 | All CTF domains: web, crypto, RE/pwn, forensics, OSINT |
-| `nexhunter-full` | 250 | **Default (no `--profile`).** Everything non-destructive. Large payload |
+| `nexhunter-ctf` | 86 | All CTF domains: web, crypto, RE/pwn, forensics, OSINT |
+| `nexhunter-full` | 250 | **Default (no `--profile`).** Everything non-destructive (incl. experimental). Large payload |
 
 ```bash
 nexhunter profiles                          # list them
@@ -292,7 +292,8 @@ Maturity is asserted per tool, never guessed.
 | Level | Meaning | Count |
 |---|---:|---:|
 | **stable** | Command builder, availability check, tests | 24 |
-| **beta** | Registered and validated, less exercised | 180 |
+| **beta** | Registered and validated, less exercised | 206 |
+| **experimental** | Registered but not honestly usable as written (placeholder binary or hardcoded stand-in args); kept out of the focused profiles | 22 |
 
 Cloud, container, and orchestration access is exposed as fixed read-only
 actions (`aws_get_caller_identity`, `kubectl_get_pods`,

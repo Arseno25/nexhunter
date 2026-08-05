@@ -11,7 +11,7 @@ import ipaddress
 import os
 import re
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 # Target modality detection. A target string tells us which kind of assessment
@@ -74,7 +74,7 @@ class TargetProfile:
     technologies: list[Observation] = field(default_factory=list)
     services: list[Observation] = field(default_factory=list)
     observations: list[Observation] = field(default_factory=list)
-    updated_at: datetime = field(default_factory=datetime.utcnow)
+    updated_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
     def technology_names(self) -> list[str]:
         return sorted({o.value.lower() for o in self.technologies})
@@ -197,7 +197,7 @@ class Profiler:
         handler = getattr(self, f"_from_{self._family(tool_name)}", None)
         if handler:
             handler(profile, tool_name, parsed, execution_id)
-        profile.updated_at = datetime.utcnow()
+        profile.updated_at = datetime.now(timezone.utc)
         return profile
 
     # -- per-tool-family extraction ----------------------------------------

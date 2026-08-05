@@ -91,12 +91,12 @@ class SecretRedactor:
                 r"\b\d{4}[\s\-]?\d{4}[\s\-]?\d{4}[\s\-]?\d{4}\b",
             ],
         ),
-        RedactionPattern(
-            name="EMAIL",
-            patterns=[
-                r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b",
-            ],
-        ),
+        # Email addresses are deliberately NOT redacted: in this tool they are
+        # normal output -- the very findings an OSINT or recon run exists to
+        # surface (theHarvester, whois, subdomain enumeration). Masking them
+        # would destroy results, not protect a secret. Credentials that happen
+        # to contain an email are still caught by the key-name and secret-value
+        # paths above.
         RedactionPattern(
             name="SLACK_TOKEN",
             patterns=[
