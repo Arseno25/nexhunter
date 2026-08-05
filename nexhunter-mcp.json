@@ -1,19 +1,16 @@
 {
-  "$schema": "https://opencode.ai/config.json",
-  "mcp": {
+  "mcpServers": {
     "nexhunter": {
-      "type": "local",
-      "command": [
-        "D:/project/belajar-apaaja/.venv/Scripts/python.exe",
+      "command": "python3",
+      "args": [
         "-m",
         "nexhunter.api.mcp",
         "--server",
         "http://127.0.0.1:8888"
       ],
-      "environment": {
-        "PYTHONPATH": "D:/project/belajar-apaaja"
-      },
-      "enabled": true
+      "description": "NexHunter v1.0.0 - AI-Driven Security Assessment Platform. 164 tools, 18 agents, 9 workflows. Configure IP and port as needed.",
+      "timeout": 300,
+      "alwaysAllow": []
     }
   }
 }

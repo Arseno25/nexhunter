@@ -8,7 +8,7 @@
         "--server",
         "http://127.0.0.1:8888"
       ],
-      "description": "NexHunter v1.0.0 - AI-Driven Security Assessment Platform. 164 tools, 9 workflows, 18 agents. Configure IP and port as needed.",
+      "description": "NexHunter v1.0.0 - AI-Driven Security Assessment Platform. 164 tools, 18 agents, 9 workflows. Configure IP and port as needed.",
       "timeout": 300,
       "alwaysAllow": []
     }
