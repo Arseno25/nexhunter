@@ -1,12 +1,19 @@
-"""mcp.py - MCP bridge to the nexhunter HTTP server.
+"""mcp.py - FastMCP bridge to the nexhunter HTTP server.
 
-Architecture base: thin MCP layer proxying tool calls to the server.
-Original code. All clients share one engine, one cache, and one process
-manager on the server side.
+A thin MCP layer that proxies every call to the server's REST API, so MCP and
+REST share one execution path, one policy engine, and one audit log. The bridge
+holds no tool logic of its own: anything the policy engine would refuse over
+REST it also refuses here.
+
+Tools are generated from the central registry rather than hand-written, and
+filtered by profile so a client is shown only the tools for its job. Listing a
+tool is a usability decision; authorizing it remains the server's.
 
 Usage:
-    python -m nexhunter.api.server --port 8888     # start server first
+    python -m nexhunter.api.server --port 8888          # start the server first
     python -m nexhunter.api.mcp --server http://127.0.0.1:8888
+    python -m nexhunter.api.mcp --profile nexhunter-web
+    python -m nexhunter.api.mcp --list-profiles
 """
 
 import argparse
@@ -14,6 +21,7 @@ import inspect
 import json
 import os
 import sys
+import urllib.parse
 import urllib.request
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -21,8 +29,12 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from fastmcp import FastMCP
 
 from nexhunter.core import tools as T
+from nexhunter.api import mcp_profiles
 
 SERVER = "http://127.0.0.1:8888"
+# Which slice of the registry this bridge exposes. Overridden by --profile or
+# NEXHUNTER_MCP_PROFILE before tools are registered.
+PROFILE_NAME = os.environ.get("NEXHUNTER_MCP_PROFILE", mcp_profiles.DEFAULT_PROFILE)
 # Bearer token forwarded to the server. Read from env so the MCP bridge works
 # against a token-protected (enforced) server without code changes.
 API_TOKEN = os.environ.get("NEXHUNTER_API_TOKEN", "")
@@ -228,20 +240,153 @@ def _register(name, spec):
     mcp.tool()(fn)
 
 
-for _name, _spec in T.TOOLS.items():
-    _register(_name, _spec)
+def register_profile_tools(profile_name: str = None) -> int:
+    """Register the registry tools this profile exposes. Returns the count.
+
+    Generating from the registry keeps MCP and REST in step: a tool added,
+    reclassified, or removed in one place shows up correctly in both, and
+    there is no hand-maintained MCP file to drift.
+    """
+    profile = mcp_profiles.get_profile(profile_name or PROFILE_NAME)
+    selected = mcp_profiles.tools_for(profile)
+    for name, spec in selected.items():
+        _register(name, spec)
+    return len(selected)
+
+
+# ---------------------------------------------------------------------------
+# Resources: read-only context a client can pull without spending a tool call.
+# ---------------------------------------------------------------------------
+
+@mcp.resource("nexhunter://tools")
+def resource_tools() -> str:
+    """Every tool in the registry with category, risk, maturity, availability."""
+    return json.dumps([spec.describe() for spec in T.TOOLS.values()], indent=1)
+
+
+@mcp.resource("nexhunter://tools/stable")
+def resource_stable_tools() -> str:
+    """Only tools marked stable: parsed, documented, and covered by tests."""
+    return json.dumps(
+        [spec.describe() for spec in T.TOOLS.values() if spec.maturity == "stable"],
+        indent=1,
+    )
+
+
+@mcp.resource("nexhunter://tools/available")
+def resource_available_tools() -> str:
+    """Tools whose binary is actually installed on this host."""
+    return json.dumps(
+        [spec.describe() for spec in T.TOOLS.values() if spec.available],
+        indent=1,
+    )
+
+
+@mcp.resource("nexhunter://profiles")
+def resource_profiles() -> str:
+    """Available MCP profiles and how many tools each exposes."""
+    return json.dumps(
+        {"active": PROFILE_NAME, "profiles": mcp_profiles.summarize()},
+        indent=1,
+    )
+
+
+@mcp.resource("nexhunter://executions")
+def resource_executions() -> str:
+    """Recent executions with status, duration, and policy decision."""
+    return json.dumps(api("/api/executions"), indent=1)
+
+
+@mcp.resource("nexhunter://findings")
+def resource_findings() -> str:
+    """Findings recorded so far."""
+    return json.dumps(api("/api/findings"), indent=1)
+
+
+@mcp.resource("nexhunter://system/status")
+def resource_status() -> str:
+    """Server health, enforcement posture, and tool availability."""
+    return json.dumps(api("/health"), indent=1)
+
+
+@mcp.tool()
+def list_profiles() -> str:
+    """List MCP profiles, the tools each exposes, and which one is active."""
+    return json.dumps(
+        {"active": PROFILE_NAME, "profiles": mcp_profiles.summarize()},
+        indent=1,
+    )
+
+
+@mcp.tool()
+def tool_info(name: str) -> str:
+    """Describe one registered tool: parameters, risk level, maturity, availability."""
+    spec = T.get_tool_spec(name)
+    if spec is None:
+        return json.dumps({"ok": False, "error": f"unknown tool: {name}"})
+    return json.dumps(spec.describe(), indent=1)
+
+
+@mcp.tool()
+def executions(engagement_id: str = "") -> str:
+    """List recorded executions, newest first, optionally for one engagement."""
+    path = "/api/executions"
+    if engagement_id:
+        path += f"?engagement_id={urllib.parse.quote(engagement_id)}"
+    return json.dumps(api(path), indent=1)
+
+
+@mcp.tool()
+def execution_output(execution_id: str) -> str:
+    """Captured stdout and stderr for one execution, with secrets redacted."""
+    return json.dumps(api(f"/api/executions/{urllib.parse.quote(execution_id)}/output"), indent=1)
+
+
+@mcp.tool()
+def execution_terminate(execution_id: str) -> str:
+    """Terminate a running execution and everything it spawned."""
+    return json.dumps(api(f"/api/executions/{urllib.parse.quote(execution_id)}/terminate", {}), indent=1)
+
+
+_REGISTERED_TOOL_COUNT = register_profile_tools()
 
 
 def main():
-    global SERVER, API_TOKEN
+    global SERVER, API_TOKEN, PROFILE_NAME
     parser = argparse.ArgumentParser(description="nexhunter MCP bridge")
     parser.add_argument("--server", default="http://127.0.0.1:8888", help="nexhunter server URL")
     parser.add_argument("--token", default="", help="bearer token (else NEXHUNTER_API_TOKEN)")
+    parser.add_argument(
+        "--profile",
+        default="",
+        help=f"tool profile to expose (default: {mcp_profiles.DEFAULT_PROFILE}). "
+             f"One of: {', '.join(sorted(mcp_profiles.PROFILES))}",
+    )
+    parser.add_argument("--list-profiles", action="store_true", help="print profiles and exit")
     parser.add_argument("--debug", action="store_true")
     args = parser.parse_args()
+
+    if args.list_profiles:
+        for row in mcp_profiles.summarize():
+            print(f"{row['name']:22} {row['tool_count']:4} tools "
+                  f"({row['available_tool_count']} installed)  {row['description']}")
+        return
+
     SERVER = args.server.rstrip("/")
     if args.token:
         API_TOKEN = args.token
+
+    # Re-register when a profile is requested that differs from the default
+    # applied at import time.
+    if args.profile and args.profile != PROFILE_NAME:
+        PROFILE_NAME = args.profile
+        register_profile_tools(PROFILE_NAME)
+
+    if args.debug:
+        profile = mcp_profiles.get_profile(PROFILE_NAME)
+        print(f"[nexhunter-mcp] server={SERVER} profile={profile.name} "
+              f"tools={len(mcp_profiles.tools_for(profile))}", file=sys.stderr)
+
     mcp.run()
 
 

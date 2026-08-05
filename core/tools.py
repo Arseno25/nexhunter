@@ -47,6 +47,59 @@ def _infer_target_param(params: Dict[str, Any]) -> Optional[str]:
     return None
 
 
+# Category drives MCP profile membership: a client asking for the web profile
+# should not be handed forensics tooling. Order matters; first hit wins.
+_CATEGORY_KEYWORDS = (
+    ("code", ("semgrep", "bandit", "pylint", "sonar", "checkmarx", "gitleaks",
+              "trufflehog", "snyk", "dependency", "retire", "safety", "npm_audit")),
+    ("container", ("docker", "kubectl", "kube", "trivy", "clair", "grype",
+                   "helm", "podman", "container")),
+    ("cloud", ("aws", "gcloud", "azure", "prowler", "scoutsuite", "cloudsplaining",
+               "s3", "cloudmapper", "pacu", "steampipe")),
+    ("forensics", ("volatility", "sleuthkit", "autopsy", "binwalk", "exiftool",
+                   "foremost", "bulk_extractor", "plaso", "yara", "capa")),
+    ("binary", ("ghidra", "radare", "r2", "objdump", "readelf", "checksec",
+                "gdb", "strings", "ropgadget", "pwntools", "angr")),
+    ("crypto", ("hashid", "hashcat", "john", "openssl", "testssl", "sslscan",
+                "sslyze", "cipher")),
+    ("api", ("graphql", "swagger", "openapi", "postman", "arjun", "kiterunner")),
+    ("web", ("nuclei", "ffuf", "gobuster", "nikto", "sqlmap", "dalfox", "wpscan",
+             "joomscan", "drupscan", "zap", "burp", "httpx", "katana", "whatweb",
+             "wafw00f", "xsstrike", "commix", "feroxbuster", "dirsearch", "curl",
+             "hakrawler", "gau", "waybackurls", "http")),
+    ("recon", ("nmap", "masscan", "rustscan", "subfinder", "amass", "assetfinder",
+               "dns", "whois", "shodan", "censys", "theharvester", "recon",
+               "fierce", "dnsx", "naabu", "host", "nslookup", "sublist3r")),
+    ("network", ("aircrack", "tcpdump", "tshark", "wireshark", "enum4linux",
+                 "smbmap", "ldapsearch", "snmp", "responder", "netexec", "crackmap",
+                 "impacket", "arp", "netcat", "socat")),
+    ("exploitation", ("metasploit", "msf", "empire", "cobalt", "havoc", "sliver",
+                      "exploit", "hydra", "medusa", "ncrack", "patator")),
+    ("mobile", ("apktool", "jadx", "frida", "objection", "mobsf", "androguard")),
+)
+
+# Maturity is asserted per tool, never guessed: claiming a tool is "stable"
+# without a parser, a fixture, and a test is exactly the kind of unverified
+# claim this project is meant to stop making. Anything not listed is beta.
+STABLE_TOOLS = frozenset({
+    "nmap_scan", "httpx_probe", "nuclei_scan", "subfinder_enum", "dns_lookup",
+    "whois_lookup", "curl_headers", "nikto_scan", "ffuf_scan", "gobuster_dir",
+    "gobuster_dns", "amass_enum", "assetfinder", "host_lookup", "nslookup",
+    "wpscan_scan", "semgrep", "trivy", "testssl",
+    "aws_get_caller_identity", "aws_list_s3_buckets", "kubectl_get_pods",
+    "kubectl_get_namespaces", "docker_list_containers",
+})
+
+
+def _infer_category(name: str, binary: str) -> str:
+    """Infer a tool's category from its name and binary."""
+    hay = f"{name} {binary}".lower()
+    for category, keywords in _CATEGORY_KEYWORDS:
+        if any(kw in hay for kw in keywords):
+            return category
+    return "other"
+
+
 @dataclass
 class ToolSpec:
     """Tool specification with validation and execution."""
@@ -62,6 +115,10 @@ class ToolSpec:
     risk_level: Optional[str] = None
     # Which param carries the scope target (for scope enforcement). None => inferred.
     target_param: Optional[str] = None
+    # Grouping used by MCP profiles. None => inferred from name/binary.
+    category: Optional[str] = None
+    # stable | beta | experimental | disabled. None => derived from STABLE_TOOLS.
+    maturity: Optional[str] = None
 
     def __post_init__(self):
         if self.timeout == DEFAULT_TOOL_TIMEOUT and self.name in TOOL_TIMEOUTS:
@@ -70,6 +127,33 @@ class ToolSpec:
             self.risk_level = _infer_risk(self.name, self.binary)
         if self.target_param is None:
             self.target_param = _infer_target_param(self.params)
+        if self.category is None:
+            self.category = _infer_category(self.name, self.binary)
+        if self.maturity is None:
+            self.maturity = "stable" if self.name in STABLE_TOOLS else "beta"
+
+    @property
+    def available(self) -> bool:
+        """True when the tool's binary is present on PATH."""
+        return which(self.binary) is not None
+
+    def describe(self) -> dict:
+        """Registry metadata, for the tools API and MCP resources."""
+        return {
+            "name": self.name,
+            "description": self.description,
+            "binary": self.binary,
+            "category": self.category,
+            "risk_level": self.risk_level,
+            "maturity": self.maturity,
+            "timeout_s": self.timeout,
+            "parameters": {
+                key: {"required": default is None, "default": default}
+                for key, default in self.params.items()
+            },
+            "target_param": self.target_param,
+            "available": self.available,
+        }
 
     def target_of(self, params: dict) -> str:
         """Extract the scope target value from params."""
@@ -282,10 +366,10 @@ _tool_specs = {
         name="gdb", binary="gdb", description="GNU debugger",
         params={"file": None}, timeout=60,
         builder=lambda p: ["gdb", "-batch", "-ex", "info functions", p["file"]]),
-    "strace": ToolSpec(
-        name="strace", binary="strace", description="System call tracer",
-        params={"command": None}, timeout=30,
-        builder=lambda p: ["strace", "-e", "trace=all", p["command"]]),
+    "strace_binary": ToolSpec(
+        name="strace_binary", binary="strace", description="Trace system calls made by a binary",
+        params={"file": None}, timeout=30, category="binary",
+        builder=lambda p: ["strace", "-f", "-e", "trace=all", "--", p["file"]]),
     "ltrace": ToolSpec(
         name="ltrace", binary="ltrace", description="Library call tracer",
         params={"file": None}, timeout=30,
@@ -372,26 +456,66 @@ _tool_specs = {
         builder=lambda p: ["cve_search", p["query"]]),
 
     # ==================== CONTAINER & CLOUD ====================
-    "docker": ToolSpec(
-        name="docker", binary="docker", description="Docker container tool",
-        params={"command": "ps"}, timeout=30,
-        builder=lambda p: ["docker", p["command"]]),
-    "kubectl": ToolSpec(
-        name="kubectl", binary="kubectl", description="Kubernetes client",
-        params={"command": "get pods"}, timeout=30,
-        builder=lambda p: ["kubectl", p["command"]]),
-    "aws_cli": ToolSpec(
-        name="aws_cli", binary="aws", description="AWS CLI",
-        params={"command": "s3 ls"}, timeout=60,
-        builder=lambda p: ["aws"] + p["command"].split()),
-    "gcloud": ToolSpec(
-        name="gcloud", binary="gcloud", description="Google Cloud CLI",
-        params={"command": "compute instances list"}, timeout=60,
-        builder=lambda p: ["gcloud"] + p["command"].split()),
-    "az": ToolSpec(
-        name="az", binary="az", description="Azure CLI",
-        params={"command": "account show"}, timeout=30,
-        builder=lambda p: ["az"] + p["command"].split()),
+    # Cloud, container, and orchestration access is exposed as fixed read-only
+    # actions. A generic passthrough (["aws"] + command.split()) is an
+    # arbitrary-command API wearing a tool's name: it would let any caller,
+    # including a model, run "iam create-access-key" or "delete-bucket".
+    "docker_list_containers": ToolSpec(
+        name="docker_list_containers", binary="docker", description="List Docker containers (read-only)",
+        params={"all": ""}, timeout=30, risk_level="passive", category="container",
+        builder=lambda p: ["docker", "ps", "--format", "json"] + (["--all"] if p["all"] else [])),
+    "docker_inspect_container": ToolSpec(
+        name="docker_inspect_container", binary="docker", description="Inspect one Docker container (read-only)",
+        params={"container": None}, timeout=30, risk_level="passive", category="container",
+        builder=lambda p: ["docker", "inspect", p["container"]]),
+    "docker_list_images": ToolSpec(
+        name="docker_list_images", binary="docker", description="List local Docker images (read-only)",
+        params={}, timeout=30, risk_level="passive", category="container",
+        builder=lambda p: ["docker", "images", "--format", "json"]),
+    "kubectl_get_namespaces": ToolSpec(
+        name="kubectl_get_namespaces", binary="kubectl", description="List Kubernetes namespaces (read-only)",
+        params={}, timeout=30, risk_level="passive", category="container",
+        builder=lambda p: ["kubectl", "get", "namespaces", "-o", "json"]),
+    "kubectl_get_pods": ToolSpec(
+        name="kubectl_get_pods", binary="kubectl", description="List pods in a namespace (read-only)",
+        params={"namespace": "default"}, timeout=30, risk_level="passive", category="container",
+        builder=lambda p: ["kubectl", "get", "pods", "-n", p["namespace"], "-o", "json"]),
+    "kubectl_get_nodes": ToolSpec(
+        name="kubectl_get_nodes", binary="kubectl", description="List cluster nodes (read-only)",
+        params={}, timeout=30, risk_level="passive", category="container",
+        builder=lambda p: ["kubectl", "get", "nodes", "-o", "json"]),
+    "aws_get_caller_identity": ToolSpec(
+        name="aws_get_caller_identity", binary="aws", description="Show the current AWS identity (read-only)",
+        params={}, timeout=60, risk_level="passive", category="cloud",
+        builder=lambda p: ["aws", "sts", "get-caller-identity", "--output", "json"]),
+    "aws_list_s3_buckets": ToolSpec(
+        name="aws_list_s3_buckets", binary="aws", description="List S3 buckets (read-only)",
+        params={}, timeout=60, risk_level="passive", category="cloud",
+        builder=lambda p: ["aws", "s3api", "list-buckets", "--output", "json"]),
+    "aws_get_bucket_acl": ToolSpec(
+        name="aws_get_bucket_acl", binary="aws", description="Read one S3 bucket's ACL (read-only)",
+        params={"bucket": None}, timeout=60, risk_level="passive", category="cloud",
+        builder=lambda p: ["aws", "s3api", "get-bucket-acl", "--bucket", p["bucket"], "--output", "json"]),
+    "aws_list_iam_users": ToolSpec(
+        name="aws_list_iam_users", binary="aws", description="List IAM users (read-only)",
+        params={}, timeout=60, risk_level="passive", category="cloud",
+        builder=lambda p: ["aws", "iam", "list-users", "--output", "json"]),
+    "gcloud_list_projects": ToolSpec(
+        name="gcloud_list_projects", binary="gcloud", description="List GCP projects (read-only)",
+        params={}, timeout=60, risk_level="passive", category="cloud",
+        builder=lambda p: ["gcloud", "projects", "list", "--format", "json"]),
+    "gcloud_list_instances": ToolSpec(
+        name="gcloud_list_instances", binary="gcloud", description="List Compute Engine instances (read-only)",
+        params={}, timeout=60, risk_level="passive", category="cloud",
+        builder=lambda p: ["gcloud", "compute", "instances", "list", "--format", "json"]),
+    "az_account_show": ToolSpec(
+        name="az_account_show", binary="az", description="Show the current Azure account (read-only)",
+        params={}, timeout=30, risk_level="passive", category="cloud",
+        builder=lambda p: ["az", "account", "show", "--output", "json"]),
+    "az_list_resource_groups": ToolSpec(
+        name="az_list_resource_groups", binary="az", description="List Azure resource groups (read-only)",
+        params={}, timeout=60, risk_level="passive", category="cloud",
+        builder=lambda p: ["az", "group", "list", "--output", "json"]),
     "trivy": ToolSpec(
         name="trivy", binary="trivy", description="Container vulnerability scanner",
         params={"image": None}, timeout=300,
@@ -402,10 +526,14 @@ _tool_specs = {
         builder=lambda p: ["grype", p["image"]]),
 
     # ==================== MOBILE SECURITY ====================
-    "adb": ToolSpec(
-        name="adb", binary="adb", description="Android Debug Bridge",
-        params={"command": "devices"}, timeout=30,
-        builder=lambda p: ["adb"] + p["command"].split()),
+    "adb_list_devices": ToolSpec(
+        name="adb_list_devices", binary="adb", description="List connected Android devices (read-only)",
+        params={}, timeout=30, risk_level="passive", category="mobile",
+        builder=lambda p: ["adb", "devices", "-l"]),
+    "adb_list_packages": ToolSpec(
+        name="adb_list_packages", binary="adb", description="List packages on the connected device (read-only)",
+        params={}, timeout=30, risk_level="passive", category="mobile",
+        builder=lambda p: ["adb", "shell", "pm", "list", "packages"]),
     "apktool": ToolSpec(
         name="apktool", binary="apktool", description="APK analyzer",
         params={"apk": None}, timeout=60,
@@ -584,10 +712,10 @@ _tool_specs = {
         name="havoc", binary="havoc", description="C2 framework",
         params={"profile": None}, timeout=120,
         builder=lambda p: ["havoc", p["profile"]]),
-    "sliver": ToolSpec(
-        name="sliver", binary="sliver", description="C2 framework",
-        params={"command": "help"}, timeout=30,
-        builder=lambda p: ["sliver"] + p["command"].split()),
+    # "sliver" (C2 framework) was registered as a generic command passthrough.
+    # It is removed rather than rewritten as fixed actions: enumerating C2
+    # operations would be adding offensive capability, which this platform
+    # does not do. Operators who need a C2 run it directly, outside NexHunter.
 
     # ==================== DEPENDENCY SCANNING ====================
     "npm_audit": ToolSpec(
@@ -602,10 +730,10 @@ _tool_specs = {
         name="safety", binary="safety", description="Python security vulnerability scanner",
         params={"file": "requirements.txt"}, timeout=30,
         builder=lambda p: ["safety", "check", "-r", p["file"]]),
-    "snyk": ToolSpec(
-        name="snyk", binary="snyk", description="Developer security platform",
-        params={"command": "test"}, timeout=120,
-        builder=lambda p: ["snyk"] + p["command"].split()),
+    "snyk_test": ToolSpec(
+        name="snyk_test", binary="snyk", description="Scan a project's dependencies for known vulnerabilities",
+        params={"path": "."}, timeout=120, risk_level="passive", category="code",
+        builder=lambda p: ["snyk", "test", "--json", f"--file={p['path']}"]),
     "owasp_dependency_check": ToolSpec(
         name="owasp_dependency_check", binary="dependency-check", description="OWASP dependency analyzer",
         params={"path": "."}, timeout=300,
@@ -812,10 +940,10 @@ _tool_specs = {
         name="nuclei_templates", binary="nuclei", description="Nuclei template lister",
         params={}, timeout=30,
         builder=lambda p: ["nuclei", "-list-templates"]),
-    "shodan_cli": ToolSpec(
-        name="shodan_cli", binary="shodan", description="Shodan CLI interface",
-        params={"command": "help"}, timeout=30,
-        builder=lambda p: ["shodan"] + p["command"].split()),
+    "shodan_host_lookup": ToolSpec(
+        name="shodan_host_lookup", binary="shodan", description="Look up a host in Shodan (passive, no traffic to the target)",
+        params={"ip": None}, timeout=30, risk_level="passive", category="recon",
+        builder=lambda p: ["shodan", "host", p["ip"]]),
     "metasploit_payload": ToolSpec(
         name="metasploit_payload", binary="msfvenom", description="Generate MSF payloads",
         params={"lhost": "127.0.0.1", "lport": "4444"}, timeout=30,

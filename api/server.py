@@ -75,6 +75,7 @@ from nexhunter.api.visual import VulnerabilityCard, ProgressTracker, DashboardMe
 from nexhunter.security.authentication import TokenValidator, AuthenticationError
 from nexhunter.security.enforcement import SecurityGate, risk_level_from_str
 from nexhunter.execution.service import ExecutionService
+from nexhunter.api import mcp_profiles
 
 ENGINE = Engine()
 TOKEN_VALIDATOR = TokenValidator()
@@ -306,6 +307,44 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(200, PM.list())
             elif path == "/api/findings":
                 self._json(200, json.loads(ENGINE.report("json")))
+            elif path == "/api/tools":
+                query = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+                specs = list(T.TOOLS.values())
+                for field in ("category", "risk_level", "maturity"):
+                    wanted = (query.get(field) or [None])[0]
+                    if wanted:
+                        specs = [s for s in specs if getattr(s, field) == wanted]
+                if (query.get("available") or [None])[0] == "true":
+                    specs = [s for s in specs if s.available]
+                self._json(200, {
+                    "ok": True,
+                    "count": len(specs),
+                    "tools": [s.describe() for s in specs],
+                })
+            elif path == "/api/tools/status":
+                specs = list(T.TOOLS.values())
+                installed = [s for s in specs if s.available]
+                self._json(200, {
+                    "ok": True,
+                    "registered": len(specs),
+                    "installed": len(installed),
+                    "missing": len(specs) - len(installed),
+                    "by_category": mcp_profiles.categories(),
+                    "by_maturity": {
+                        level: sum(1 for s in specs if s.maturity == level)
+                        for level in ("stable", "beta", "experimental", "disabled")
+                    },
+                    "installed_tools": sorted(s.name for s in installed),
+                })
+            elif path == "/api/mcp/profiles":
+                self._json(200, {"ok": True, "profiles": mcp_profiles.summarize()})
+            elif path.startswith("/api/tools/"):
+                name = path[len("/api/tools/"):].strip("/")
+                spec = T.get_tool_spec(name)
+                if spec is None:
+                    self._json(404, {"ok": False, "error": f"unknown tool: {name}", "code": "UNKNOWN_TOOL"})
+                else:
+                    self._json(200, {"ok": True, "tool": spec.describe()})
             elif path == "/api/executions":
                 query = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
                 engagement = (query.get("engagement_id") or [None])[0]
