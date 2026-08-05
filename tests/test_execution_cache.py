@@ -90,8 +90,8 @@ def test_hit_returns_cached_without_new_record(tmp: Path):
     service = _service(tmp, cache)
     _register("echo_cache", "print('hello')")
     try:
-        first = service.execute("echo_cache", {"target": "example.com"})
-        second = service.execute("echo_cache", {"target": "example.com"})
+        first = service.execute("echo_cache", {"target": "example.com"}, direct=False)
+        second = service.execute("echo_cache", {"target": "example.com"}, direct=False)
 
         assert first["cached"] is False
         assert second["cached"] is True
@@ -110,8 +110,8 @@ def test_no_cache_bypasses(tmp: Path):
     service = _service(tmp, cache)
     _register("echo_nocache", "print('hi')")
     try:
-        service.execute("echo_nocache", {"target": "a"})
-        again = service.execute("echo_nocache", {"target": "a"}, no_cache=True)
+        service.execute("echo_nocache", {"target": "a"}, direct=False)
+        again = service.execute("echo_nocache", {"target": "a"}, no_cache=True, direct=False)
 
         assert again["cached"] is False
         assert len(service.registry) == 2, "bypass runs a second time"
@@ -127,8 +127,8 @@ def test_non_cacheable_tool_never_cached(tmp: Path):
     service = _service(tmp, cache)
     _register("live_capture", "print('live')", cacheable=False)
     try:
-        one = service.execute("live_capture", {"target": "a"})
-        two = service.execute("live_capture", {"target": "a"})
+        one = service.execute("live_capture", {"target": "a"}, direct=False)
+        two = service.execute("live_capture", {"target": "a"}, direct=False)
 
         assert one["cached"] is False and two["cached"] is False
         assert len(service.registry) == 2
@@ -145,8 +145,8 @@ def test_failed_run_is_cached(tmp: Path):
     service = _service(tmp, cache)
     _register("echo_fail", "import sys; sys.exit(3)")
     try:
-        first = service.execute("echo_fail", {"target": "a"})
-        second = service.execute("echo_fail", {"target": "a"})
+        first = service.execute("echo_fail", {"target": "a"}, direct=False)
+        second = service.execute("echo_fail", {"target": "a"}, direct=False)
 
         assert first["status"] == "failed"
         assert second["cached"] is True

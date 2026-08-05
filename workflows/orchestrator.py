@@ -279,6 +279,10 @@ class RunRecord:
     # selection over the full registry, capped by the objective's breadth.
     strategy: str = "methodology"
     objective: str = "standard"
+    # direct runs every step through the in-process path
+    # (no per-tool execution records or workspaces) while keeping cache,
+    # redaction, the risk ceiling and result absorption. Default on.
+    direct: bool = True
     current_phase: str = "starting"
     steps_taken: int = 0
     executions: List[dict] = field(default_factory=list)
@@ -303,6 +307,7 @@ class RunRecord:
             "risk_ceiling": self.risk_ceiling,
             "strategy": self.strategy,
             "objective": self.objective,
+            "direct": self.direct,
             "current_phase": self.current_phase,
             "progress": self.progress,
             "steps_taken": self.steps_taken,
@@ -405,6 +410,7 @@ class AutonomousOrchestrator:
         steps: Optional[Sequence[dict]] = None,
         strategy: str = "methodology",
         objective: str = "standard",
+        direct: bool = True,
     ) -> RunRecord:
         """Begin an autonomous run. Returns the record immediately when async.
 
@@ -418,6 +424,12 @@ class AutonomousOrchestrator:
                        capped by `objective` (quick|standard|comprehensive|
                        stealth); leans on ToolSelector so only high-value tools
                        for the observed profile actually run
+
+        `direct=True` (the default) runs every step through the
+        in-process path: no per-tool execution records or
+        workspaces are minted, while the cache, redaction, risk ceiling and
+        result absorption all stay on. Set direct=False (or per-step
+        "direct": false) for fully tracked step execution.
         """
         ceiling = _coerce_ceiling(risk_ceiling)
 
@@ -428,6 +440,7 @@ class AutonomousOrchestrator:
             max_steps=max(1, min(max_steps, 50)),
             strategy="select" if strategy == "select" else "methodology",
             objective=objective,
+            direct=bool(direct),
         )
         with self._lock:
             self._runs[record.id] = record
@@ -495,6 +508,7 @@ class AutonomousOrchestrator:
                         result = self.exec.execute(
                             tool_name=step.tool,
                             params=self._params_for(spec, record, profile),
+                            direct=record.direct,
                         )
                         self._absorb(record, profile, step, result)
 
@@ -563,7 +577,8 @@ class AutonomousOrchestrator:
             record.current_phase = f"running {tool}"
             record.steps_taken += 1
             self._emit_step(record, total, tool, "ai-plan")
-            result = self.exec.execute(tool_name=tool, params=params)
+            result = self.exec.execute(tool_name=tool, params=params,
+                                       direct=bool(step.get("direct", record.direct)))
             self._absorb(record, profile,
                          PlannedStep(tool=tool, reason="from the AI plan",
                                      risk_level=spec.risk_level),
@@ -601,7 +616,8 @@ class AutonomousOrchestrator:
 
                 self._emit_step(record, total, st.name, st.phase)
                 params = self._params_for(spec, record, profile)
-                exec_result = self.exec.execute(tool_name=st.name, params=params)
+                exec_result = self.exec.execute(tool_name=st.name, params=params,
+                                            direct=record.direct)
                 self._absorb(record, profile, PlannedStep(
                     tool=st.name,
                     reason=f"selected by scoring ({st.score:.2f})",

@@ -188,14 +188,17 @@ def optimize_parameters(tool: str) -> str:
 
 
 @mcp.tool()
-def run_tool(tool: str, params: str = "{}", async_run: bool = False) -> str:
+def run_tool(tool: str, params: str = "{}", async_run: bool = False, direct: bool = True) -> str:
     """Run a registered tool by name with JSON params (async_run=True returns pid immediately).
+
+    Direct by default (in-process, no execution record);
+    pass direct=False for tracked execution with history and workspaces.
 
     Raw shell command execution is not supported; only tools in the registry
     may run.
     """
     parsed = json.loads(params) if params else {}
-    return _render(api("/api/command", {"tool": tool, "params": parsed, "async": async_run}), indent=1)
+    return _render(api("/api/command", {"tool": tool, "params": parsed, "async": async_run, "direct": direct}), indent=1)
 
 
 @mcp.tool()
@@ -504,6 +507,7 @@ def autonomous_assess(
     steps: list = None,
     strategy: str = "methodology",
     objective: str = "standard",
+    direct: bool = True,
 ) -> str:
     """Run an autonomous assessment of a target.
 
@@ -524,10 +528,16 @@ def autonomous_assess(
     clamped regardless of what is asked. Intrusive and destructive tools are
     never auto-executed; they are returned under 'recommended_next' for a human
     to approve. Returns a run id to poll with autonomous_status.
+
+    `direct=True` (the default) runs each step through the
+    in-process path: no per-tool execution records or workspaces, while cache,
+    redaction, the risk ceiling and result absorption stay on. Pass
+    direct=False for fully tracked step execution.
     """
     payload = {
         "target": target, "risk_ceiling": risk_ceiling, "max_steps": max_steps,
         "async": True, "strategy": strategy, "objective": objective,
+        "direct": bool(direct),
     }
     if steps is not None:
         payload["steps"] = steps

@@ -206,7 +206,7 @@ tools `autonomous_assess` / `autonomous_status`. Walkthrough in
 Replaced the monolithic `agents/exploit_ai.py` (1,327 lines, one SyntaxError,
 duplicated helpers) with a modular package of eight independent agents,
 auto-registered through the same `agents/` discovery — no server or MCP changes
-were needed. Functionally equivalent to HexStrike's exploit agents but with
+were needed. Functionally equivalent to their exploit agents but with
 original names, structure, and payload data (ATM: Amati–Tiru–Modifikasi, not
 1:1 copy).
 

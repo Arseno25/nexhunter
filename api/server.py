@@ -210,6 +210,9 @@ class Handler(BaseHTTPRequestHandler):
             params=body.get("params", {}),
             run_async=bool(body.get("async")),
             no_cache=bool(body.get("no_cache")),
+            # Default is the direct in-process path; set "direct": false
+            # to opt into tracked executions (records/async/process mgmt).
+            direct=bool(body.get("direct", True)),
         )
 
     def _start_autonomous(self, body):
@@ -225,6 +228,7 @@ class Handler(BaseHTTPRequestHandler):
             steps=body.get("steps"),
             strategy=body.get("strategy", "methodology"),
             objective=body.get("objective", "standard"),
+            direct=bool(body.get("direct", True)),
         )
         return {"ok": True, "run": run.to_dict()}
 

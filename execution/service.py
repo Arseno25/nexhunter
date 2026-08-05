@@ -12,7 +12,9 @@ Order of operations:
 import logging
 import os
 import sys
+import tempfile
 import threading
+import time
 from collections import OrderedDict
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional
@@ -44,7 +46,7 @@ _STATUS_STYLE = {
 
 
 def _tool_line(status: str, tool: str, target: str = "", extra: str = "") -> str:
-    """One-line, hexstrike-style tool event for the logs."""
+    """One-line, direct-style tool event for the logs."""
     color, icon = _STATUS_STYLE.get(status, ("", "•"))
     token = f"{icon} {status:<10}"
     if _USE_COLOR and color:
@@ -82,14 +84,28 @@ class ExecutionService:
         params: Dict[str, Any],
         run_async: bool = False,
         no_cache: bool = False,
+        direct: bool = True,
     ) -> Dict[str, Any]:
         """Run one registered tool. Returns an API-shaped result dict.
 
-        A deterministic terminal result is served from the cache when the same
-        tool and normalized parameters were run before. A cache hit returns the
-        original execution's result (with ``cached: True``) and does not mint a
-        new record, so the state machine is never asked for an illegal jump.
+        The default is the direct in-process path: validate -> build
+        argv -> run in-process -> return, no record, no workspace, no process
+        entry -- a result, not a history entry. Pass ``direct=False`` to opt
+        into the tracked execution path (ExecutionRecord, workspace, async,
+        process management, artifacts).
+
+        On the tracked path a deterministic terminal result is served from the
+        cache when the same tool and normalized parameters were run before. A
+        cache hit returns the original execution's result (with ``cached: True``)
+        and does not mint a new record, so the state machine is never asked for
+        an illegal jump. The direct path shares the same ResultCache.
+
+        ``run_async`` implies the tracked path regardless of ``direct``, since
+        an async run must leave a record to poll and terminate.
         """
+        if direct and not run_async:
+            return self.run_direct(tool_name, params, no_cache=no_cache)
+
         spec = T.get_tool_spec(tool_name)
         if spec is None:
             return _error("UNKNOWN_TOOL", f"unknown tool: {tool_name}")
@@ -166,6 +182,92 @@ class ExecutionService:
         result = self._result(record, include_output=True)
         result["cached"] = False
         return result
+
+    def run_direct(self, tool_name: str, params: Dict[str, Any],
+                   no_cache: bool = False) -> Dict[str, Any]:
+        """Direct in-process tool execution.
+
+        The fast path for tool calls that want a result, not a history entry:
+        validate -> build argv -> run -> return, all inside the calling
+        process. No ExecutionRecord is minted, no workspace is created, no
+        process is tracked -- nothing observable happens beyond the child
+        process itself.
+
+        The main features are still live on this path: the shared ResultCache
+        is consulted and written (a repeat call is served from cache; pass
+        ``no_cache=True`` to bypass it entirely), output is redacted, and the
+        argv is validated and built by the registry spec.
+        """
+        spec = T.get_tool_spec(tool_name)
+        if spec is None:
+            return {"ok": False, "code": "UNKNOWN_TOOL", "error": f"unknown tool: {tool_name}"}
+
+        params = params or {}
+        merged, err = spec.normalize(params)
+        if err is not None:
+            return {"ok": False, "code": "INVALID_PARAMS", "error": err}
+
+        # Cache probe: same key as the state-machine path, so both modes share
+        # one cache. Only deterministic outcomes are ever stored.
+        cache_key: Optional[str] = None
+        if self.cache.enabled and spec.cacheable and not no_cache:
+            cache_key = ResultCache.key_for(tool_name, merged)
+            cached = self.cache.get(cache_key)
+            if cached is not None:
+                return {**cached.result, "cached": True, "tool": tool_name}
+
+        cmd = spec.build_cmd(merged)
+        if not cmd:
+            return {"ok": False, "code": "BUILD_FAILED",
+                    "error": f"failed to build command for {tool_name}"}
+
+        log.info(_tool_line("RUNNING", tool_name, spec.target_of(merged) or ""))
+        t0 = time.time()
+        # The runner needs a workdir for its stdout/stderr capture; a throwaway
+        # temporary directory gives the process somewhere to run while leaving
+        # nothing behind -- no persistent workspace, per the direct contract.
+        with tempfile.TemporaryDirectory(prefix="nexhunter-direct-") as scratch:
+            result = self.runner.run(cmd, timeout=spec.timeout, workdir=Path(scratch))
+        duration = time.time() - t0
+
+        payload: Dict[str, Any] = {
+            "ok": result.exit_code == 0 and not result.error,
+            "tool": tool_name,
+            "target": spec.target_of(merged),
+            "exit": result.exit_code,
+            "duration_s": round(duration, 3),
+            "truncated": result.truncated,
+            "cached": False,
+            # Kept under the same key the state-machine path uses, so callers
+            # (orchestrator, agents) can consume either mode interchangeably.
+            "output": self.redactor.redact_string(result.stdout),
+            "stdout": self.redactor.redact_string(result.stdout),
+            "stderr": self.redactor.redact_string(result.stderr),
+            "status": "completed" if (result.exit_code == 0 and not result.error) else "failed",
+            "execution_id": None,
+        }
+        if result.timed_out:
+            payload.update({"ok": False, "status": "timed_out", "code": "TIMEOUT",
+                            "error": "timed out"})
+        elif result.terminated:
+            payload.update({"ok": False, "status": "terminated",
+                            "code": result.error_code or "TERMINATED",
+                            "error": result.error})
+        elif result.error:
+            payload["code"] = result.error_code or "RUN_ERROR"
+            payload["error"] = result.error
+
+        # Only deterministic terminal outcomes enter the cache; a timeout or
+        # termination is a fact about this run, not a durable answer.
+        if cache_key and not result.timed_out and not result.terminated:
+            self.cache.put(cache_key, payload, None)
+        status = payload.get("status")
+        if status == "completed":
+            log.info(_tool_line("COMPLETED", tool_name, payload["target"] or "", f"{duration:.2f}s"))
+        else:
+            log.warning(_tool_line("FAILED", tool_name, payload["target"] or "",
+                                   f"{duration:.2f}s [{payload.get('code') or 'RUN_ERROR'}]"))
+        return payload
 
     def _run_and_record(
         self, record: ExecutionRecord, cmd, timeout: int, workspace: Workspace,
