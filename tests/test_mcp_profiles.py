@@ -1,6 +1,7 @@
 """MCP profile filtering and registry-generated tool exposure."""
 
 import asyncio
+import json
 import sys
 from pathlib import Path
 
@@ -193,6 +194,58 @@ def test_tool_limit_respects_client_cap():
     print(f"  [OK] limit 30 -> {len(picked)} tools, stable-first")
 
 
+def test_trim_json_keeps_large_outputs_out_of_context():
+    """Huge tool output is cut inside the JSON, and the JSON stays valid.
+
+    This is the token economy: an nmap dump of 100KB must not land whole in
+    an LLM context window, and a truncated payload must never need repairing.
+    """
+    print("[TEST] Large outputs trimmed, JSON stays valid...")
+    from nexhunter.api import mcp as bridge
+
+    big = {"ok": True, "stdout": "y" * 100_000, "stderr": "z" * 5_000, "returncode": 0}
+    data = json.loads(bridge._render(big))
+
+    assert len(data["stdout"]) < 5_000, "stdout should be cut hard"
+    assert "omitted" in data["stdout"], "the cut must be announced"
+    assert len(data["stderr"]) < 5_000
+    assert data["returncode"] == 0, "small fields are untouched"
+    print(f"  [OK] 100KB stdout -> {len(data['stdout'])} chars, valid JSON")
+
+
+def test_trim_json_caps_lists():
+    """Long result lists are capped so a crawl of 10k URLs stays bounded."""
+    print("[TEST] Lists capped...")
+    from nexhunter.api import mcp as bridge
+
+    data = json.loads(bridge._render({"urls": [f"u{i}" for i in range(10_000)]}))
+    assert len(data["urls"]) == bridge.MAX_ITEMS + 1, "capped at MAX_ITEMS plus a note"
+    assert data["urls"][-1].startswith("[... "), "the cap must be announced"
+    print(f"  [OK] 10k URLs -> {len(data['urls'])} entries incl. note")
+
+
+def test_trim_json_survives_multibyte_boundary():
+    """Trimming on a UTF-8 boundary must never produce an undecodable string."""
+    print("[TEST] Multibyte boundary safe...")
+    from nexhunter.api import mcp as bridge
+
+    blob = "\U0001F600" * 10_000
+    trimmed = bridge._trim_json(blob, max_field=1000)
+    assert json.dumps(trimmed, ensure_ascii=False), "must stay JSON-encodable"
+    assert "omitted" in trimmed
+    print(f"  [OK] 10k emoji -> {len(trimmed)} chars, decodable")
+
+
+def test_trim_json_respects_max_output_override():
+    """The operator can raise or lower the per-field budget."""
+    print("[TEST] Max output override honored...")
+    from nexhunter.api import mcp as bridge
+
+    assert bridge._trim_json("x" * 10_000, max_field=5000).startswith("x" * 5000)
+    assert len(bridge._trim_json("x" * 10_000, max_field=100)) < 300
+    print("  [OK] Override shrinks/grows the budget")
+
+
 if __name__ == "__main__":
     print("\n=== MCP Profile Tests ===\n")
     test_all_expected_profiles_exist()
@@ -205,4 +258,9 @@ if __name__ == "__main__":
     test_stable_tools_are_declared_not_guessed()
     test_mcp_registers_only_profile_tools()
     test_mcp_exposes_resources()
+    test_tool_limit_respects_client_cap()
+    test_trim_json_keeps_large_outputs_out_of_context()
+    test_trim_json_caps_lists()
+    test_trim_json_survives_multibyte_boundary()
+    test_trim_json_respects_max_output_override()
     print("\n=== All MCP Profile Tests Passed ===\n")

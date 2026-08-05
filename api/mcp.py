@@ -78,16 +78,63 @@ def api(path, payload=None, timeout=600):
         return {"ok": False, "error": f"server unreachable at {SERVER}: {e}"}
 
 
+# ---------------------------------------------------------------------------
+# Token economy: results are trimmed inside the JSON structure before they
+# reach the client, so large tool output (nmap dumps, crawls) cannot flood an
+# LLM context window. Trimming is structure-aware - the JSON stays valid, so
+# a client never has to repair a broken payload. This is the same outcome
+# FastMCP's ResponseLimitingMiddleware gives on newer versions, done at the
+# handler layer to work on fastmcp 2.x with per-field control.
+# ---------------------------------------------------------------------------
+
+MAX_OUTPUT = int(os.environ.get("NEXHUNTER_MCP_MAX_OUTPUT", "4000"))
+MAX_ITEMS = 200
+
+
+def _cut(text: str, limit: int) -> str:
+    """Cut a string at a UTF-8-safe boundary so the result is always decodable."""
+    raw = text.encode("utf-8", "replace")
+    head = raw[:limit]
+    while head and head[-1] & 0xC0 == 0x80:
+        head = head[:-1]
+    return head.decode("utf-8", "replace")
+
+
+def _trim_json(data, max_field=None, max_items=MAX_ITEMS):
+    """Trim large strings and lists inside arbitrary JSON, keeping it valid."""
+    if max_field is None:
+        max_field = MAX_OUTPUT
+    if isinstance(data, str):
+        if len(data) <= max_field:
+            return data
+        kept = _cut(data, max_field)
+        return f"{kept}\n[... {len(data) - len(kept)} chars omitted; raise with --max-output]"
+    if isinstance(data, list):
+        if len(data) <= max_items:
+            return [_trim_json(i, max_field, max_items) for i in data]
+        kept = [_trim_json(i, max_field, max_items) for i in data[:max_items]]
+        kept.append(f"[... {len(data) - max_items} items omitted]")
+        return kept
+    if isinstance(data, dict):
+        return {k: _trim_json(v, max_field, max_items) for k, v in data.items()}
+    return data
+
+
+def _render(data) -> str:
+    """Serialize an API response with token-economy trimming applied."""
+    return json.dumps(_trim_json(data), indent=1)
+
+
 @mcp.tool()
 def server_status() -> str:
     """Check nexhunter server health: mode, agents, installed tool binaries."""
-    return json.dumps(api("/health"), indent=1)
+    return _render(api("/health"), indent=1)
 
 
 @mcp.tool()
 def agents() -> str:
     """List all available AI agents (technology, decision, optimizer, rate_limit, cve, exploit, recovery, performance, degradation, correlator, bugbounty, ctf, browser)."""
-    return json.dumps(api("/api/agents/list"), indent=1)
+    return _render(api("/api/agents/list"), indent=1)
 
 
 @mcp.tool()
@@ -97,35 +144,35 @@ def run_agent(name: str, params: str = "{}") -> str:
         p = json.loads(params or "{}")
     except json.JSONDecodeError:
         return json.dumps({"ok": False, "error": "params must be valid JSON"})
-    return json.dumps(api(f"/api/agents/{name}", p), indent=1)
+    return _render(api(f"/api/agents/{name}", p), indent=1)
 
 
 @mcp.tool()
 def run_flow(flow: str, target: str, category: str = "", file: str = "") -> str:
     """Run a workflow agent: 'bugbounty' (phased recon->report) or 'ctf' (category: web/crypto/forensics/pwn/recon)."""
     if flow == "bugbounty":
-        return json.dumps(api("/api/flow/bugbounty", {"target": target}), indent=1)
+        return _render(api("/api/flow/bugbounty", {"target": target}), indent=1)
     if flow == "ctf":
-        return json.dumps(api("/api/flow/ctf", {"target": target, "category": category, "file": file}), indent=1)
+        return _render(api("/api/flow/ctf", {"target": target, "category": category, "file": file}), indent=1)
     return json.dumps({"ok": False, "error": "flow must be 'bugbounty' or 'ctf'"})
 
 
 @mcp.tool()
 def analyze_target(target: str) -> str:
     """AI analysis: tech fingerprint, recommended tools, CVE lookup, scan pace advice."""
-    return json.dumps(api("/api/intelligence/analyze-target", {"target": target}), indent=1)
+    return _render(api("/api/intelligence/analyze-target", {"target": target}), indent=1)
 
 
 @mcp.tool()
 def select_tools(target: str, intent: str = "auto") -> str:
     """Pick tools for intent (recon/web/network/auto) given installed binaries + detected tech."""
-    return json.dumps(api("/api/intelligence/select-tools", {"target": target, "intent": intent}), indent=1)
+    return _render(api("/api/intelligence/select-tools", {"target": target, "intent": intent}), indent=1)
 
 
 @mcp.tool()
 def optimize_parameters(tool: str) -> str:
     """Recommended parameters and timeout for a tool."""
-    return json.dumps(api("/api/intelligence/optimize-parameters", {"tool": tool}), indent=1)
+    return _render(api("/api/intelligence/optimize-parameters", {"tool": tool}), indent=1)
 
 
 @mcp.tool()
@@ -136,86 +183,86 @@ def run_tool(tool: str, params: str = "{}", async_run: bool = False) -> str:
     may run.
     """
     parsed = json.loads(params) if params else {}
-    return json.dumps(api("/api/command", {"tool": tool, "params": parsed, "async": async_run}), indent=1)
+    return _render(api("/api/command", {"tool": tool, "params": parsed, "async": async_run}), indent=1)
 
 
 @mcp.tool()
 def processes() -> str:
     """List tracked server processes."""
-    return json.dumps(api("/api/processes/list"), indent=1)
+    return _render(api("/api/processes/list"), indent=1)
 
 
 @mcp.tool()
 def process_status(pid: int) -> str:
     """Process status and recent output."""
-    return json.dumps(api(f"/api/processes/status/{pid}"), indent=1)
+    return _render(api(f"/api/processes/status/{pid}"), indent=1)
 
 
 @mcp.tool()
 def process_terminate(pid: int) -> str:
     """Kill a tracked process."""
-    return json.dumps(api(f"/api/processes/terminate/{pid}", {}), indent=1)
+    return _render(api(f"/api/processes/terminate/{pid}", {}), indent=1)
 
 
 @mcp.tool()
 def telemetry() -> str:
     """Server metrics: uptime, request count, avg response, cache, findings."""
-    return json.dumps(api("/api/telemetry"), indent=1)
+    return _render(api("/api/telemetry"), indent=1)
 
 
 @mcp.tool()
 def cache_stats() -> str:
     """Cache entries, hits, evictions."""
-    return json.dumps(api("/api/cache/stats"), indent=1)
+    return _render(api("/api/cache/stats"), indent=1)
 
 
 @mcp.tool()
 def probe(target: str) -> str:
     """Quick HTTP probe: status, title, tech fingerprint (JSON)."""
-    return json.dumps(api("/api/probe", {"target": target}), indent=1)
+    return _render(api("/api/probe", {"target": target}), indent=1)
 
 
 @mcp.tool()
 def portscan(target: str, ports: str = "") -> str:
     """Port/service scan, nmap -sV -T4 (JSON). ports='80,443' to limit."""
-    return json.dumps(api("/api/portscan", {"target": target, "ports": ports}), indent=1)
+    return _render(api("/api/portscan", {"target": target, "ports": ports}), indent=1)
 
 
 @mcp.tool()
 def webscan(target: str) -> str:
     """Web vuln scan tuned to detected tech."""
-    return json.dumps(api("/api/webscan", {"target": target}), indent=1)
+    return _render(api("/api/webscan", {"target": target}), indent=1)
 
 
 @mcp.tool()
 def recon(domain: str) -> str:
     """Parallel passive recon: whois, dns, subdomain enumeration."""
-    return json.dumps(api("/api/recon", {"domain": domain}), indent=1)
+    return _render(api("/api/recon", {"domain": domain}), indent=1)
 
 
 @mcp.tool()
 def assess(target: str) -> str:
     """Full pipeline: probe -> portscan -> conditional webscan, correlated findings."""
-    return json.dumps(api("/api/assess", {"target": target}), indent=1)
+    return _render(api("/api/assess", {"target": target}), indent=1)
 
 
 @mcp.tool()
 def findings() -> str:
     """All recorded findings as JSON."""
-    return json.dumps(api("/api/findings"), indent=1)
+    return _render(api("/api/findings"), indent=1)
 
 
 @mcp.tool()
 def report(fmt: str = "markdown") -> str:
     """Generate assessment report: 'markdown' or 'json'."""
-    return json.dumps(api("/api/report", {"fmt": fmt}), indent=1)
+    return _render(api("/api/report", {"fmt": fmt}), indent=1)
 
 
 def _register(name, spec):
     """Dynamically register tool as MCP tool."""
     def fn(**kwargs):
         params = {k: kwargs.get(k, spec.params.get(k)) for k in spec.params}
-        return json.dumps(api("/api/command", {"tool": name, "params": params}), indent=1)
+        return _render(api("/api/command", {"tool": name, "params": params}), indent=1)
 
     fn.__name__ = name
     fn.__annotations__ = {k: str for k in spec.params}
@@ -282,60 +329,56 @@ def register_profile_tools(profile_name: str = None, tool_limit: int = None) -> 
 @mcp.resource("nexhunter://tools")
 def resource_tools() -> str:
     """Every tool in the registry with category, risk, maturity, availability."""
-    return json.dumps([spec.describe() for spec in T.TOOLS.values()], indent=1)
+    return _render([spec.describe() for spec in T.TOOLS.values()])
 
 
 @mcp.resource("nexhunter://tools/stable")
 def resource_stable_tools() -> str:
     """Only tools marked stable: parsed, documented, and covered by tests."""
-    return json.dumps(
-        [spec.describe() for spec in T.TOOLS.values() if spec.maturity == "stable"],
-        indent=1,
+    return _render(
+        [spec.describe() for spec in T.TOOLS.values() if spec.maturity == "stable"]
     )
 
 
 @mcp.resource("nexhunter://tools/available")
 def resource_available_tools() -> str:
     """Tools whose binary is actually installed on this host."""
-    return json.dumps(
-        [spec.describe() for spec in T.TOOLS.values() if spec.available],
-        indent=1,
+    return _render(
+        [spec.describe() for spec in T.TOOLS.values() if spec.available]
     )
 
 
 @mcp.resource("nexhunter://profiles")
 def resource_profiles() -> str:
     """Available MCP profiles and how many tools each exposes."""
-    return json.dumps(
-        {"active": PROFILE_NAME, "profiles": mcp_profiles.summarize()},
-        indent=1,
+    return _render(
+        {"active": PROFILE_NAME, "profiles": mcp_profiles.summarize()}
     )
 
 
 @mcp.resource("nexhunter://executions")
 def resource_executions() -> str:
     """Recent executions with status and duration."""
-    return json.dumps(api("/api/executions"), indent=1)
+    return _render(api("/api/executions"))
 
 
 @mcp.resource("nexhunter://findings")
 def resource_findings() -> str:
     """Findings recorded so far."""
-    return json.dumps(api("/api/findings"), indent=1)
+    return _render(api("/api/findings"))
 
 
 @mcp.resource("nexhunter://system/status")
 def resource_status() -> str:
     """Server health and tool availability."""
-    return json.dumps(api("/health"), indent=1)
+    return _render(api("/health"))
 
 
 @mcp.tool()
 def list_profiles() -> str:
     """List MCP profiles, the tools each exposes, and which one is active."""
-    return json.dumps(
-        {"active": PROFILE_NAME, "profiles": mcp_profiles.summarize()},
-        indent=1,
+    return _render(
+        {"active": PROFILE_NAME, "profiles": mcp_profiles.summarize()}
     )
 
 
@@ -345,25 +388,25 @@ def tool_info(name: str) -> str:
     spec = T.get_tool_spec(name)
     if spec is None:
         return json.dumps({"ok": False, "error": f"unknown tool: {name}"})
-    return json.dumps(spec.describe(), indent=1)
+    return _render(spec.describe())
 
 
 @mcp.tool()
 def executions() -> str:
     """List recorded executions, newest first."""
-    return json.dumps(api("/api/executions"), indent=1)
+    return _render(api("/api/executions"), indent=1)
 
 
 @mcp.tool()
 def execution_output(execution_id: str) -> str:
     """Captured stdout and stderr for one execution, with secrets redacted."""
-    return json.dumps(api(f"/api/executions/{urllib.parse.quote(execution_id)}/output"), indent=1)
+    return _render(api(f"/api/executions/{urllib.parse.quote(execution_id)}/output"), indent=1)
 
 
 @mcp.tool()
 def execution_terminate(execution_id: str) -> str:
     """Terminate a running execution and everything it spawned."""
-    return json.dumps(api(f"/api/executions/{urllib.parse.quote(execution_id)}/terminate", {}), indent=1)
+    return _render(api(f"/api/executions/{urllib.parse.quote(execution_id)}/terminate", {}), indent=1)
 
 
 @mcp.tool()
@@ -378,7 +421,7 @@ def propose_plan(target: str, steps: list, risk_ceiling: str = "active") -> str:
     runs. Send the approved steps back to autonomous_assess to execute.
     """
     payload = {"target": target, "steps": steps, "risk_ceiling": risk_ceiling}
-    return json.dumps(api("/api/plan", payload), indent=1)
+    return _render(api("/api/plan", payload), indent=1)
 
 
 @mcp.tool()
@@ -394,7 +437,7 @@ def recommend_plan(target: str, risk_ceiling: str = "active") -> str:
     autonomous_assess.
     """
     payload = {"target": target, "risk_ceiling": risk_ceiling}
-    return json.dumps(api("/api/plan/recommend", payload), indent=1)
+    return _render(api("/api/plan/recommend", payload), indent=1)
 
 
 @mcp.tool()
@@ -425,14 +468,14 @@ def autonomous_assess(
     }
     if steps is not None:
         payload["steps"] = steps
-    return json.dumps(api("/api/autonomous", payload), indent=1)
+    return _render(api("/api/autonomous", payload), indent=1)
 
 
 @mcp.tool()
 def autonomous_status(run_id: str) -> str:
     """Poll an autonomous run: phase, progress, executions, findings, and the
     tools it withheld pending human approval."""
-    return json.dumps(api(f"/api/autonomous/{urllib.parse.quote(run_id)}"), indent=1)
+    return _render(api(f"/api/autonomous/{urllib.parse.quote(run_id)}"), indent=1)
 
 
 _REGISTERED_TOOL_COUNT = register_profile_tools()
@@ -455,6 +498,14 @@ def main():
         help="cap registered registry tools at N (stable and installed first). "
              "Respects a client's tool-count limit instead of bypassing it",
     )
+    parser.add_argument(
+        "--max-output",
+        type=int,
+        default=None,
+        help="max chars kept per string field in tool results (default 4000, "
+             "or NEXHUNTER_MCP_MAX_OUTPUT). Keeps large tool output from "
+             "flooding the LLM context window",
+    )
     parser.add_argument("--list-profiles", action="store_true", help="print profiles and exit")
     parser.add_argument("--debug", action="store_true")
     args = parser.parse_args()
@@ -468,6 +519,9 @@ def main():
     SERVER = args.server.rstrip("/")
     if args.tool_limit is not None:
         TOOL_LIMIT = str(args.tool_limit)
+    if args.max_output is not None:
+        global MAX_OUTPUT
+        MAX_OUTPUT = args.max_output
 
     # Re-register when a profile is requested that differs from the default
     # applied at import time, or when a tool limit changes the payload.

@@ -52,8 +52,9 @@ def _coerce_ceiling(risk_ceiling: str) -> RiskLevel:
 
 # Planner gates: evidence predicates over a target profile. Each decides
 # whether a methodology phase is warranted at all.
-def _is_domain(profile: TargetProfile) -> bool:
-    return profile.target_type in ("domain", "network")
+def _has_domain(profile: TargetProfile) -> bool:
+    """A hostname or network block exists to look up; a bare IP has none."""
+    return profile.target_type != "host"
 
 
 def _has_web_surface(profile: TargetProfile) -> bool:
@@ -176,14 +177,14 @@ class AdaptivePlanner:
     METHODOLOGY: tuple = (
         # ---- Phase 1: passive recon ----------------------------------
         ("recon", "dns_lookup", "resolve the target's records", None),
-        ("recon", "whois_lookup", "registration, ownership, and infrastructure", _is_domain),
-        ("recon", "subfinder_enum", "passive subdomain discovery", _is_domain),
+        ("recon", "whois_lookup", "registration, ownership, and infrastructure", _has_domain),
+        ("recon", "subfinder_enum", "passive subdomain discovery", _has_domain),
         ("recon", "httpx_probe", "identify HTTP status, title, and technology", None),
         ("recon", "whatweb_scan", "corroborate the technology fingerprint", _has_web_surface),
         # ---- Phase 2: active enumeration ------------------------------
         ("enumeration", "nmap_scan", "service and version discovery on the host", None),
         ("enumeration", "naabu", "fast port corroboration of the nmap sweep", _has_open_ports),
-        ("enumeration", "dig_axfr", "zone transfer attempt (misconfiguration check)", _is_domain),
+        ("enumeration", "dig_axfr", "zone transfer attempt (misconfiguration check)", _has_domain),
         # ---- Phase 3: web surface enumeration --------------------------
         ("web_enum", "katana_crawl", "crawl the web surface for endpoints and JS", _has_web_surface),
         ("web_enum", "waybackurls", "historical URLs for hidden endpoints", _has_web_surface),

@@ -154,6 +154,74 @@ def test_planner_does_not_repeat_completed_tools():
 
 
 # --------------------------------------------------------------------------
+# Methodology planner (recommend_plan)
+# --------------------------------------------------------------------------
+
+def test_recommend_plan_phases_in_order():
+    """A recommended plan walks the methodology in order, recon first."""
+    print("[TEST] Recommend plan follows the methodology...")
+    rec = AdaptivePlanner().recommend("https://example.com")
+
+    assert list(rec["phases"]) == [
+        "recon", "enumeration", "web_enum", "assessment"
+    ], rec["phases"]
+    assert rec["withheld"], "intrusive follow-ups are planned but withheld"
+
+    all_tools = [s["tool"] for steps in rec["phases"].values() for s in steps]
+    assert all_tools[0] == "dns_lookup", "the very first step is DNS"
+    assert all_tools[1] == "whois_lookup", "WHOIS follows DNS"
+    assert "nmap_scan" in all_tools, "enumeration scans services"
+
+    print("  [OK] 4 phases, recon-first, exploitation withheld")
+
+
+def test_recommend_plan_withholds_intrusive():
+    """Exploitation steps are surfaced for a human, never planned to run."""
+    print("[TEST] Intrusive steps withheld...")
+    rec = AdaptivePlanner().recommend("https://example.com")
+
+    planned = {s["tool"] for steps in rec["phases"].values() for s in steps}
+    withheld = {w["tool"] for w in rec["withheld"]}
+    for tool in ("sqlmap_scan", "ffuf_scan", "dalfox_xss"):
+        assert tool in withheld, f"{tool} should be withheld"
+        assert tool not in planned, f"{tool} must not be auto-planned"
+    for w in rec["withheld"]:
+        assert w["risk_level"] == "intrusive", "only intrusive tools are withheld"
+        assert w["requires"] == "human approval"
+
+    print("  [OK] Intrusive tools planned, not scheduled")
+
+
+def test_recommend_plan_gates_tls_on_scheme():
+    """TLS assessment only when the target speaks HTTPS."""
+    print("[TEST] TLS phase gated on scheme...")
+    planner = AdaptivePlanner()
+
+    https = planner.recommend("https://example.com")
+    https_tools = {s["tool"] for steps in https["phases"].values() for s in steps}
+    assert {"testssl", "sslyze"} <= https_tools, "HTTPS target gets TLS review"
+
+    http = planner.recommend("http://example.com")
+    http_tools = {s["tool"] for steps in http["phases"].values() for s in steps}
+    assert not ({"testssl", "sslyze"} & http_tools), "plain HTTP skips TLS review"
+
+    print("  [OK] TLS assessment follows the scheme")
+
+
+def test_recommend_plan_host_skips_web_phases():
+    """A bare host with no web evidence gets no web enumeration or TLS."""
+    print("[TEST] Bare host plan stays host-shaped...")
+    rec = AdaptivePlanner().recommend("192.168.1.10")
+
+    names = list(rec["phases"])
+    assert names == ["recon", "enumeration"], names
+    tools = {s["tool"] for steps in rec["phases"].values() for s in steps}
+    assert "katana_crawl" not in tools and "testssl" not in tools
+
+    print("  [OK] Host plan: recon + enumeration only")
+
+
+# --------------------------------------------------------------------------
 # Autonomous loop
 # --------------------------------------------------------------------------
 
@@ -361,6 +429,10 @@ if __name__ == "__main__":
     test_planner_seeds_by_target_type()
     test_planner_adapts_to_wordpress()
     test_planner_does_not_repeat_completed_tools()
+    test_recommend_plan_phases_in_order()
+    test_recommend_plan_withholds_intrusive()
+    test_recommend_plan_gates_tls_on_scheme()
+    test_recommend_plan_host_skips_web_phases()
     test_autonomous_run_completes_and_adapts()
     test_autonomous_never_exceeds_risk_ceiling()
     test_ceiling_is_clamped_even_if_intrusive_requested()
