@@ -35,7 +35,7 @@ flowchart LR
     B[MCP / AI client] --> E
     C[CLI] --> E
     D[Autonomous loop] --> E
-    E --> R[Registry - 204 tools]
+    E --> R[Registry - 252 tools]
     E --> G[validate + build argv]
     E --> S[run isolated + record]
     style E fill:#0e7490,stroke:#06b6d4,stroke-width:3px,color:#f8fafc
@@ -43,7 +43,7 @@ flowchart LR
 
 1. **One execution path** — every caller (REST, MCP, CLI, autonomous loop) walks
    the same code: lookup → typed validation → build argv → isolated run → record.
-2. **The registry** — 204 `ToolSpec`s with typed params, risk, category,
+2. **The registry** — 252 `ToolSpec`s with typed params, risk, category,
    maturity; profiles slice it per client.
 3. **The loop** — autonomous assessment: profiler evidence → planner → bounded
    by a clamped risk ceiling and a step budget.
@@ -94,28 +94,28 @@ Roo Code, OpenCode — see [docs/mcp/](docs/mcp/)):
 
 ### Profiles
 
-Listing ~204 tools to every client makes for a large payload, a large token
+Listing ~252 tools to every client makes for a large payload, a large token
 cost, and a model choosing blindly between near-identical tools. A profile
 narrows that to one job.
 
 | Profile | Tools | Purpose |
 |---|---:|---|
 | `nexhunter-core` | 12 | Status, findings, executions, passive stable checks only |
-| `nexhunter-recon` | 16 | Host discovery, DNS, subdomains, service identification |
-| `nexhunter-web` | 21 | Content discovery, injection testing, template scanning, TLS (incl. sqlmap/ffuf/nikto) |
-| `nexhunter-api` | 5 | Schema and parameter discovery (arjun), GraphQL |
-| `nexhunter-code` | 15 | Static analysis, secret scanning, dependency review |
+| `nexhunter-recon` | 24 | Host discovery, DNS, subdomains, service identification |
+| `nexhunter-web` | 37 | Content discovery, injection testing, template scanning, TLS, browser crawl (incl. sqlmap/ffuf/nikto) |
+| `nexhunter-api` | 7 | Schema and parameter discovery (arjun), JWT, GraphQL |
+| `nexhunter-code` | 16 | Static analysis, secret scanning, dependency review |
 | `nexhunter-cloud` | 8 | Read-only cloud posture |
-| `nexhunter-container` | 11 | Container and Kubernetes review |
-| `nexhunter-forensics` | 26 | Offline artifact, steganography, and binary analysis |
+| `nexhunter-container` | 14 | Container and Kubernetes review |
+| `nexhunter-forensics` | 28 | Offline artifact, steganography, and binary analysis |
 | `nexhunter-osint` | 10 | OSINT: usernames, emails, footprinting, CVE lookup |
 | `nexhunter-wireless` | 7 | Wireless recon and assessment (destructive withheld) |
-| `nexhunter-privesc` | 6 | Local privilege escalation discovery |
+| `nexhunter-privesc` | 7 | Local privilege escalation discovery |
 | `nexhunter-payloads` | 10 | Payload generation, C2 integration (never auto-executed) |
 | `nexhunter-vulnscan` | 10 | Vulnerability scanners and IDS tooling |
-| `nexhunter-mobile` | 5 | APK inspection, decompilation, runtime exploration |
-| `nexhunter-ctf` | 69 | All CTF domains: web, crypto, RE/pwn, forensics, OSINT |
-| `nexhunter-full` | 202 | **Default (no `--profile`).** Everything non-destructive. Large payload |
+| `nexhunter-mobile` | 6 | APK inspection, decompilation, runtime exploration |
+| `nexhunter-ctf` | 91 | All CTF domains: web, crypto, RE/pwn, forensics, OSINT |
+| `nexhunter-full` | 250 | **Default (no `--profile`).** Everything non-destructive. Large payload |
 
 ```bash
 nexhunter profiles                          # list them
@@ -123,7 +123,7 @@ nexhunter profiles --name nexhunter-web     # see what one exposes
 ```
 
 No profile lists a destructive tool. Without `--profile`, the bridge exposes
-`nexhunter-full` (202 tools); pass a profile to narrow the payload. Profiles
+`nexhunter-full` (250 tools); pass a profile to narrow the payload. Profiles
 are a usability control, not a security control — every execution goes through
 the same typed validation regardless of which profile surfaced the tool.
 
@@ -218,8 +218,8 @@ Stable tools (8/24 installed)
   [OK] curl_headers (curl 8.12.1)
   [MISSING] 16 other stable tools not installed
 
-Registry availability (23/204 tools on PATH)
-  [OK] web: 5/21 available
+Registry availability (23/252 tools on PATH)
+  [OK] web: 5/37 available
   [MISSING] wireless: 0/9 available
 ```
 

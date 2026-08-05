@@ -30,7 +30,7 @@ flowchart LR
     C[CLI] --> E
     D[Autonomous loop] --> E
 
-    E -->|1. lookup| R[(Registry - 204 ToolSpecs)]
+    E -->|1. lookup| R[(Registry - 252 ToolSpecs)]
     R -->|2. typed validation| V{valid params?}
     V -->|no| X[refused - nothing runs]
     V -->|yes| G[3. build argv - no shell]
@@ -63,7 +63,7 @@ exact same code. Follow one call, and you have followed them all.
 The parameters the caller sent and the argv that ran are different things, and
 only the builder — project code, never model output — can produce the second.
 
-## The registry: 204 tools, one shape
+## The registry: 252 tools, one shape
 
 Every tool is a `ToolSpec` with the same anatomy:
 

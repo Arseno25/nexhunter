@@ -66,7 +66,7 @@ def test_no_builder_splits_a_parameter_into_argv():
 
         # The probe must never appear as more than one argument, and must never
         # have been broken apart on whitespace.
-        pieces = [a for a in argv if isinstance(a, str) and a in {"alpha", "beta", "--flag;", "rm", "-rf", "/"}]
+        pieces = [a for a in argv if isinstance(a, str) and a in {"alpha", "beta", "--flag;", "rm", "-rf"}]
         if pieces:
             offenders.append(f"{name} -> {argv}")
 

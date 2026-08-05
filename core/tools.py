@@ -4,8 +4,9 @@ import json
 import shutil
 import subprocess
 from defusedxml import ElementTree as ET
-from dataclasses import dataclass, field
-from typing import Callable, Optional, Dict, Any
+from dataclasses import dataclass
+from typing import Any
+from collections.abc import Callable
 
 from nexhunter.core.config import TOOL_TIMEOUTS, DEFAULT_TOOL_TIMEOUT
 from nexhunter.core import params as P
@@ -21,7 +22,8 @@ _RISK_KEYWORDS = [
         "sqlmap", "hydra", "john", "hashcat", "medusa", "ncrack", "brute",
         "gobuster", "ffuf", "dirb", "wfuzz", "nikto", "wpscan", "metasploit",
         "msf", "exploit", "dalfox", "commix", "xsstrike", "crackmap", "responder",
-        "slowhttp", "hping", "dos",
+        "slowhttp", "hping", "dos", "netexec", "psexec", "winrm", "tplmap",
+        "nosqlmap",
     )),
     ("passive", (
         "whois", "dig", "nslookup", "host_lookup", "subfinder", "amass",
@@ -40,7 +42,7 @@ def _infer_risk(name: str, binary: str) -> str:
     return "active"
 
 
-def _infer_target_param(params: Dict[str, Any]) -> Optional[str]:
+def _infer_target_param(params: dict[str, Any]) -> str | None:
     """Guess which parameter carries the scope target."""
     for candidate in ("target", "url", "domain", "host", "query", "ip"):
         if candidate in params:
@@ -55,7 +57,8 @@ def _infer_target_param(params: Dict[str, Any]) -> Optional[str]:
 _CATEGORY_KEYWORDS = (
     ("code", ("semgrep", "bandit", "pylint", "sonar", "checkmarx", "gitleaks",
               "trufflehog", "snyk", "dependency", "retire", "safety", "npm_audit",
-              "pip_audit", "checkov", "tfsec", "gitrob", "detect_secrets", "secret")),
+              "pip_audit", "checkov", "tfsec", "gitrob", "detect_secrets", "secret",
+              "audit", "osv")),
     ("container", ("docker", "kubectl", "kube", "trivy", "clair", "grype",
                    "helm", "podman", "container", "falco")),
     ("cloud", ("aws", "gcloud", "azure", "prowler", "scoutsuite", "cloudsplaining",
@@ -71,14 +74,16 @@ _CATEGORY_KEYWORDS = (
                 "sslyze", "cipher")),
     ("ctf", ("xortool", "rsactf", "pwninit", "ctf")),
     ("api", ("graphql", "swagger", "openapi", "postman", "arjun", "kiterunner",
-             "insomnia")),
+             "insomnia", "jwt")),
     ("web", ("nuclei", "ffuf", "gobuster", "nikto", "sqlmap", "dalfox", "wpscan",
              "joomscan", "drupscan", "zap", "burp", "httpx", "katana", "whatweb",
              "wafw00f", "xsstrike", "commix", "feroxbuster", "dirsearch", "curl",
-             "hakrawler", "gau", "waybackurls", "http")),
+             "hakrawler", "gau", "waybackurls", "http", "paramspider", "linkfinder",
+             "corsy", "subjack", "tplmap", "nosqlmap", "wfuzz", "webanalyze")),
     ("recon", ("nmap", "masscan", "rustscan", "subfinder", "amass", "assetfinder",
                "dns", "whois", "shodan", "censys", "theharvester", "recon",
-               "fierce", "dnsx", "naabu", "host", "nslookup", "sublist3r")),
+               "fierce", "dnsx", "naabu", "host", "nslookup", "sublist3r",
+               "dig", "axfr", "crt", "dnsrecon", "fping")),
     ("osint", ("maltego", "spiderfoot", "zoomeye", "cve_search", "nist_tool",
                "searchsploit", "theharwest", "sherlock", "holehe", "osint",
                "maigret", "phoneinfoga")),
@@ -87,9 +92,9 @@ _CATEGORY_KEYWORDS = (
     ("network", ("tcpdump", "tshark", "wireshark", "enum4linux",
                  "smbmap", "smbclient", "rpcclient", "ldapsearch", "snmp",
                  "responder", "netexec", "crackmap", "impacket", "arp", "netcat",
-                 "socat", "tun2socks", "netdiscover")),
+                 "socat", "tun2socks", "netdiscover", "winrm", "snmpcheck")),
     ("privesc", ("linpeas", "winpeas", "pspy", "peas", "dirty_cow", "privesc",
-                 "exploit_suggester", "linux_exploit", "traitor")),
+                 "exploit_suggester", "linux_exploit", "traitor", "suid")),
     ("payloads", ("veil", "unicorn", "chimera", "evasion", "phishing",
                   "social_engineer", "payload", "mimikatz", "beef",
                   "hoaxshell")),
@@ -133,21 +138,21 @@ class ToolSpec:
     name: str
     binary: str
     description: str
-    params: Dict[str, Any]
+    params: dict[str, Any]
     timeout: int = DEFAULT_TOOL_TIMEOUT
-    parser: Optional[str] = None
-    builder: Optional[Callable] = None
+    parser: str | None = None
+    builder: Callable | None = None
     # Risk classification used by the autonomy ceiling. None => inferred from name/binary.
-    risk_level: Optional[str] = None
+    risk_level: str | None = None
     # Which param carries the target (for profiling). None => inferred.
-    target_param: Optional[str] = None
+    target_param: str | None = None
     # Grouping used by MCP profiles. None => inferred from name/binary.
-    category: Optional[str] = None
+    category: str | None = None
     # stable | beta | experimental | disabled. None => derived from STABLE_TOOLS.
-    maturity: Optional[str] = None
+    maturity: str | None = None
     # Typed parameter schemas. None => inferred from the `params` dict, so the
     # several hundred legacy entries gain validation without being rewritten.
-    param_specs: Optional[tuple] = None
+    param_specs: tuple | None = None
 
     def __post_init__(self):
         if self.timeout == DEFAULT_TOOL_TIMEOUT and self.name in TOOL_TIMEOUTS:
@@ -204,12 +209,12 @@ class ToolSpec:
             return str(params[self.target_param] or "")
         return ""
 
-    def validate(self, user_params: dict) -> tuple[bool, Optional[str]]:
+    def validate(self, user_params: dict) -> tuple[bool, str | None]:
         """Validate user params against the typed schema. Return (ok, error)."""
         _, error = P.validate_params(self.param_specs or (), user_params or {})
         return (error is None), error
 
-    def normalize(self, user_params: dict) -> tuple[Optional[dict], Optional[str]]:
+    def normalize(self, user_params: dict) -> tuple[dict | None, str | None]:
         """Validate and return normalized values, or an error.
 
         Command builders receive the normalized values, so a builder never sees
@@ -217,7 +222,7 @@ class ToolSpec:
         """
         return P.validate_params(self.param_specs or (), user_params or {})
 
-    def build_cmd(self, user_params: dict) -> Optional[list]:
+    def build_cmd(self, user_params: dict) -> list | None:
         """Build the argument list from validated parameters."""
         normalized, error = self.normalize(user_params)
         if error is not None or not self.builder:
@@ -603,10 +608,6 @@ _tool_specs = {
         name="sonarqube", binary="sonar-scanner", description="Code quality and security scanner",
         params={"project": None}, timeout=600,
         builder=lambda p: ["sonar-scanner", "-Dsonar.projectKey=" + p["project"]]),
-    "bandit": ToolSpec(
-        name="bandit", binary="bandit", description="Python security linter",
-        params={"file": None}, timeout=60,
-        builder=lambda p: ["bandit", "-r", p["file"]]),
     "pylint": ToolSpec(
         name="pylint", binary="pylint", description="Python code analyzer",
         params={"file": None}, timeout=60,
@@ -631,10 +632,6 @@ _tool_specs = {
         builder=lambda p: ["sed", p["expression"], p["file"]]),
 
     # ==================== DATA EXTRACTION ====================
-    "pdf2txt": ToolSpec(
-        name="pdf2txt", binary="pdftotext", description="Extract text from PDF",
-        params={"file": None}, timeout=30,
-        builder=lambda p: ["pdftotext", p["file"], "-"]),
     "metadata_anonymizer": ToolSpec(
         name="metadata_anonymizer", binary="exiftool", description="Remove metadata",
         params={"file": None}, timeout=30,
@@ -765,10 +762,6 @@ _tool_specs = {
         name="npm_audit", binary="npm", description="NPM dependency vulnerability audit",
         params={"path": "."}, timeout=60,
         builder=lambda p: ["npm", "audit", "--json"]),
-    "pip_audit": ToolSpec(
-        name="pip_audit", binary="pip-audit", description="Python dependency checker",
-        params={"path": "."}, timeout=60,
-        builder=lambda p: ["pip-audit", "-r", p["path"] + "/requirements.txt"]),
     "safety": ToolSpec(
         name="safety", binary="safety", description="Python security vulnerability scanner",
         params={"file": "requirements.txt"}, timeout=30,
@@ -787,10 +780,6 @@ _tool_specs = {
         name="trufflehog", binary="truffleHog", description="Detect secrets in git history",
         params={"repo": None}, timeout=300,
         builder=lambda p: ["truffleHog", "git", p["repo"]]),
-    "detect_secrets": ToolSpec(
-        name="detect_secrets", binary="detect-secrets", description="Secrets detector",
-        params={"path": "."}, timeout=60,
-        builder=lambda p: ["detect-secrets", "scan", p["path"]]),
     "gitrob": ToolSpec(
         name="gitrob", binary="gitrob", description="GitHub reconnaissance tool",
         params={"user": None}, timeout=120,
@@ -1151,6 +1140,243 @@ _tool_specs = {
         name="arjun", binary="arjun", description="HTTP parameter discovery for web and API targets",
         params={"url": None, "method": "GET"}, timeout=600, category="api",
         builder=lambda p: ["arjun", "-u", p["url"], "-m", p["method"]]),
+
+    # ==================== WEB: CRAWLING & CONTENT DISCOVERY ====================
+    "katana_crawl": ToolSpec(
+        name="katana_crawl", binary="katana", description="Web crawler with JS rendering",
+        params={"url": None}, timeout=300,
+        builder=lambda p: ["katana", "-u", p["url"], "-silent", "-jc"]),
+    "waybackurls": ToolSpec(
+        name="waybackurls", binary="waybackurls", description="Historical URLs from the Wayback Machine",
+        params={"domain": None}, timeout=60,
+        builder=lambda p: ["waybackurls", p["domain"]]),
+    "gau": ToolSpec(
+        name="gau", binary="gau", description="Get all URLs from many archives",
+        params={"domain": None}, timeout=120,
+        builder=lambda p: ["gau", p["domain"]]),
+    "paramspider": ToolSpec(
+        name="paramspider", binary="paramspider", description="Parameter mining from web archives",
+        params={"domain": None}, timeout=120,
+        builder=lambda p: ["paramspider", "-d", p["domain"]]),
+    "whatweb_scan": ToolSpec(
+        name="whatweb_scan", binary="whatweb", description="Web technology identification",
+        params={"url": None}, timeout=60,
+        builder=lambda p: ["whatweb", p["url"]]),
+    "feroxbuster": ToolSpec(
+        name="feroxbuster", binary="feroxbuster", description="Recursive content discovery",
+        params={"url": None, "wordlist": None}, timeout=600,
+        builder=lambda p: ["feroxbuster", "-u", p["url"], "-w", p["wordlist"], "-q"]),
+    "dirsearch": ToolSpec(
+        name="dirsearch", binary="dirsearch", description="Directory/file discovery",
+        params={"url": None, "extensions": "php,asp,aspx,jsp,html,js"}, timeout=300,
+        builder=lambda p: ["dirsearch", "-u", p["url"], "-e", p["extensions"], "--format", "plain"]),
+    "linkfinder": ToolSpec(
+        name="linkfinder", binary="linkfinder.py", description="Extract endpoints from JavaScript files",
+        params={"url": None}, timeout=60,
+        builder=lambda p: ["linkfinder.py", "-d", p["url"], "-o", "linkfinder.html"]),
+    "corsy": ToolSpec(
+        name="corsy", binary="corsy", description="CORS misconfiguration scanner",
+        params={"url": None}, timeout=120,
+        builder=lambda p: ["corsy", "-u", p["url"]]),
+    "subjack": ToolSpec(
+        name="subjack", binary="subjack", description="Subdomain takeover checker",
+        params={"wordlist": None, "threads": 10}, timeout=600,
+        builder=lambda p: ["subjack", "-w", p["wordlist"], "-t", str(p["threads"]), "-a"]),
+
+    # ==================== WEB: TLS / INJECTION ====================
+    "sslscan": ToolSpec(
+        name="sslscan", binary="sslscan", description="SSL/TLS cipher suite enumeration",
+        params={"host": None, "port": "443"}, timeout=120,
+        builder=lambda p: ["sslscan", f"{p['host']}:{p['port']}"]),
+    "sslyze": ToolSpec(
+        name="sslyze", binary="sslyze", description="SSL/TLS configuration analyzer",
+        params={"host": None}, timeout=300,
+        builder=lambda p: ["sslyze", "--regular", p["host"]]),
+    "tplmap": ToolSpec(
+        name="tplmap", binary="tplmap", description="Server-side template injection tester",
+        params={"url": None}, timeout=600,
+        builder=lambda p: ["tplmap", "-u", p["url"]]),
+    "nosqlmap": ToolSpec(
+        name="nosqlmap", binary="nosqlmap", description="NoSQL injection tester",
+        params={"url": None}, timeout=600,
+        builder=lambda p: ["nosqlmap", "-u", p["url"], "--batch"]),
+    "wfuzz": ToolSpec(
+        name="wfuzz", binary="wfuzz", description="Web fuzzer",
+        params={"url": None, "wordlist": None}, timeout=600,
+        builder=lambda p: ["wfuzz", "-u", p["url"].rstrip("/") + "/FUZZ", "-w", p["wordlist"], "--hc", "404"]),
+
+    # ==================== NETWORK: CAPTURE & ENUMERATION ====================
+    "tcpdump_capture": ToolSpec(
+        name="tcpdump_capture", binary="tcpdump", description="Live packet capture",
+        params={"interface": "any", "count": 100, "port": ""}, timeout=120,
+        builder=lambda p: ["tcpdump", "-i", p["interface"], "-c", str(p["count"])]
+        + (["port", str(p["port"])] if p["port"] else []) + ["-w", "capture.pcap"]),
+    "tshark_capture": ToolSpec(
+        name="tshark_capture", binary="tshark", description="Live packet analysis",
+        params={"interface": "any", "count": 100}, timeout=120,
+        builder=lambda p: ["tshark", "-i", p["interface"], "-c", str(p["count"])],
+    ),
+    "enum4linux_ng": ToolSpec(
+        name="enum4linux_ng", binary="enum4linux-ng", description="SMB enumeration with user/group/share discovery",
+        params={"host": None}, timeout=300,
+        builder=lambda p: ["enum4linux-ng", "-A", p["host"]]),
+    "netexec_smb": ToolSpec(
+        name="netexec_smb", binary="netexec", description="SMB enumeration and validation",
+        params={"host": None}, timeout=300,
+        builder=lambda p: ["netexec", "smb", p["host"]]),
+    "snmp_check": ToolSpec(
+        name="snmp_check", binary="snmp-check", description="SNMP enumeration",
+        params={"host": None}, timeout=120,
+        builder=lambda p: ["snmp-check", p["host"]]),
+    "dnsx": ToolSpec(
+        name="dnsx", binary="dnsx", description="DNS resolver and probe",
+        params={"domain": None}, timeout=60,
+        builder=lambda p: ["dnsx", "-d", p["domain"], "-a", "-resp", "-silent"]),
+    "naabu": ToolSpec(
+        name="naabu", binary="naabu", description="Fast port scanner",
+        params={"host": None}, timeout=300,
+        builder=lambda p: ["naabu", "-host", p["host"], "-silent"]),
+    "dig_axfr": ToolSpec(
+        name="dig_axfr", binary="dig", description="DNS zone transfer attempt",
+        params={"domain": None}, timeout=30,
+        builder=lambda p: ["dig", "AXFR", p["domain"], "+short"]),
+    "impacket_psexec": ToolSpec(
+        name="impacket_psexec", binary="psexec.py", description="Remote execution via SMB (impacket)",
+        params={"host": None, "user": None, "password": "", "domain": ""}, timeout=600,
+        builder=lambda p: ["psexec.py", f"{p['domain']}/{p['user']}:{p['password']}@{p['host']}"]),
+    "evil_winrm": ToolSpec(
+        name="evil_winrm", binary="evil-winrm", description="Windows Remote Management shell",
+        params={"host": None, "user": None, "password": ""}, timeout=600,
+        builder=lambda p: ["evil-winrm", "-i", p["host"], "-u", p["user"], "-p", p["password"]]),
+
+    # ==================== OSINT ====================
+    "theharvester": ToolSpec(
+        name="theharvester", binary="theharvester", description="Email and subdomain harvesting",
+        params={"domain": None}, timeout=300,
+        builder=lambda p: ["theharvester", "-d", p["domain"], "-b", "all"]),
+    "shodan_search": ToolSpec(
+        name="shodan_search", binary="shodan", description="Shodan device search",
+        params={"query": None}, timeout=60,
+        builder=lambda p: ["shodan", "search", p["query"]]),
+    "censys_search": ToolSpec(
+        name="censys_search", binary="censys", description="Censys asset search",
+        params={"query": None}, timeout=60,
+        builder=lambda p: ["censys", "search", p["query"]]),
+    "crt_sh": ToolSpec(
+        name="crt_sh", binary="curl", description="Certificate transparency log search (crt.sh)",
+        params={"domain": None}, timeout=60,
+        builder=lambda p: ["curl", "-s", "--max-time", "25", f"https://crt.sh/?q=%25.{p['domain']}&output=json"]),
+
+    # ==================== CLOUD & CONTAINER ====================
+    "prowler": ToolSpec(
+        name="prowler", binary="prowler", description="AWS security assessment with compliance checks",
+        params={"profile": ""}, timeout=1200,
+        builder=lambda p: ["prowler", "aws"] + (["-p", p["profile"]] if p["profile"] else []) + ["--quiet"]),
+    "scoutsuite": ToolSpec(
+        name="scoutsuite", binary="scout", description="Multi-cloud security auditing",
+        params={"provider": "aws"}, timeout=1200,
+        builder=lambda p: ["scout", p["provider"]]),
+    "aws_list_ec2": ToolSpec(
+        name="aws_list_ec2", binary="aws", description="List EC2 instances",
+        params={}, timeout=60,
+        builder=lambda p: ["aws", "ec2", "describe-instances", "--output", "json"]),
+    "gcloud_projects_list": ToolSpec(
+        name="gcloud_projects_list", binary="gcloud", description="List GCP projects",
+        params={}, timeout=60,
+        builder=lambda p: ["gcloud", "projects", "list"]),
+    "azure_account_list": ToolSpec(
+        name="azure_account_list", binary="az", description="List Azure subscriptions",
+        params={}, timeout=60,
+        builder=lambda p: ["az", "account", "list", "--output", "json"]),
+    "kubectl_get_services": ToolSpec(
+        name="kubectl_get_services", binary="kubectl", description="List Kubernetes services",
+        params={}, timeout=60,
+        builder=lambda p: ["kubectl", "get", "services", "-o", "wide"]),
+    "kubectl_get_deployments": ToolSpec(
+        name="kubectl_get_deployments", binary="kubectl", description="List Kubernetes deployments",
+        params={}, timeout=60,
+        builder=lambda p: ["kubectl", "get", "deployments", "-o", "wide"]),
+    "docker_network_ls": ToolSpec(
+        name="docker_network_ls", binary="docker", description="List Docker networks",
+        params={}, timeout=60,
+        builder=lambda p: ["docker", "network", "ls"]),
+
+    # ==================== CODE & SUPPLY CHAIN ====================
+    "bandit": ToolSpec(
+        name="bandit", binary="bandit", description="Python security linter",
+        params={"path": None}, timeout=300,
+        builder=lambda p: ["bandit", "-r", p["path"], "-f", "json"]),
+    "detect_secrets": ToolSpec(
+        name="detect_secrets", binary="detect-secrets", description="Secret scanning for git repos",
+        params={"path": None}, timeout=120,
+        builder=lambda p: ["detect-secrets", "scan", p["path"]]),
+    "pip_audit": ToolSpec(
+        name="pip_audit", binary="pip-audit", description="Python dependency vulnerability audit",
+        params={"path": "requirements.txt"}, timeout=300,
+        builder=lambda p: ["pip-audit", "-r", p["path"], "-f", "json"]),
+
+    # ==================== API SECURITY ====================
+    "jwt_tool": ToolSpec(
+        name="jwt_tool", binary="jwt_tool", description="JWT testing toolkit",
+        params={"token": None, "url": ""}, timeout=300,
+        builder=lambda p: ["jwt_tool", p["token"]] + (["-t", p["url"]] if p["url"] else [])),
+    "kiterunner": ToolSpec(
+        name="kiterunner", binary="kr", description="API endpoint discovery",
+        params={"url": None, "wordlist": None}, timeout=600,
+        builder=lambda p: ["kr", "scan", p["url"], "-w", p["wordlist"]]),
+
+    # ==================== MOBILE ====================
+    "androguard": ToolSpec(
+        name="androguard", binary="androguard", description="Android APK analysis",
+        params={"file": None}, timeout=120,
+        builder=lambda p: ["androguard", "axml", p["file"]]),
+
+    # ==================== PRIVESC ====================
+    "suid_find": ToolSpec(
+        name="suid_find", binary="find", description="Find SUID binaries on the host",
+        params={}, timeout=120,
+        builder=lambda p: ["find", "/", "-perm", "-4000", "-type", "f", "-exec", "ls", "-l", "{}", "+"]),
+
+    # ==================== FORENSICS ====================
+    "bulk_extractor": ToolSpec(
+        name="bulk_extractor", binary="bulk_extractor", description="Digital forensics feature extraction",
+        params={"image": None}, timeout=600,
+        builder=lambda p: ["bulk_extractor", "-o", "bulk_extractor_out", p["image"]]),
+    "strings_extract": ToolSpec(
+        name="strings_extract", binary="strings", description="Extract printable strings from a binary",
+        params={"file": None}, timeout=60,
+        builder=lambda p: ["strings", "-n", "6", p["file"]]),
+    "pdf2txt": ToolSpec(
+        name="pdf2txt", binary="pdf2txt.py", description="Extract text from PDF files",
+        params={"file": None}, timeout=120,
+        builder=lambda p: ["pdf2txt.py", p["file"]]),
+
+    # ==================== BROWSER AGENT ====================
+    "browser_crawl": ToolSpec(
+        name="browser_crawl", binary="python", description="Headless browser crawl: DOM, JS runtime, screenshots",
+        params={"url": None, "wait": 3, "screenshot": False, "dom_depth": 0}, timeout=120,
+        category="web", parser="browser_json",
+        builder=lambda p: ["python", "-m", "nexhunter.agents.browser_cli", "-u", p["url"], "--wait", str(p["wait"])]
+        + (["--screenshot"] if p["screenshot"] else [])
+        + (["--dom-depth", str(p["dom_depth"])] if p["dom_depth"] else [])),
+
+    # ==================== WEB: TECH & HOST DISCOVERY ====================
+    "webanalyze": ToolSpec(
+        name="webanalyze", binary="webanalyze", description="Website technology fingerprinting",
+        params={"host": None, "update": False}, timeout=120,
+        builder=lambda p: (["webanalyze", "-update"] if p["update"] else ["webanalyze", "-host", p["host"]])),
+    "dnsrecon": ToolSpec(
+        name="dnsrecon", binary="dnsrecon", description="DNS reconnaissance and zone enumeration",
+        params={"domain": None}, timeout=300,
+        builder=lambda p: ["dnsrecon", "-d", p["domain"], "-t", "std", "-j", "dnsrecon.json"]),
+    "fping": ToolSpec(
+        name="fping", binary="fping", description="Fast ICMP host discovery across a subnet",
+        params={"subnet": None}, timeout=120,
+        builder=lambda p: ["fping", "-a", "-g", p["subnet"]]),
+    "osv_scanner": ToolSpec(
+        name="osv_scanner", binary="osv-scanner", description="OSV vulnerability scanner for dependency manifests",
+        params={"path": None}, timeout=300,
+        builder=lambda p: ["osv-scanner", "-r", p["path"]]),
 }
 
 def _parse_nmap_xml(text):
@@ -1215,16 +1441,25 @@ def _parse_nuclei(text):
     ]
 
 
+def _parse_browser_json(text):
+    """Parse the browser agent's single-JSON-document output."""
+    try:
+        return [json.loads(text)]
+    except json.JSONDecodeError:
+        return []
+
+
 PARSERS = {
     "nmap_xml": _parse_nmap_xml,
     "httpx": _parse_httpx,
     "nuclei": _parse_nuclei,
+    "browser_json": _parse_browser_json,
 }
 
 TOOLS = _tool_specs
 
 
-def get_tool_spec(name: str) -> Optional[ToolSpec]:
+def get_tool_spec(name: str) -> ToolSpec | None:
     """Get tool specification by name."""
     return TOOLS.get(name)
 
@@ -1257,6 +1492,6 @@ def run(cmd: list, timeout: int) -> dict:
         return {"ok": False, "exit": -1, "stdout": "", "stderr": "", "error": f"timed out after {timeout}s"}
 
 
-def which(bin_name: str) -> Optional[str]:
+def which(bin_name: str) -> str | None:
     """Check if binary exists in PATH."""
     return shutil.which(bin_name)

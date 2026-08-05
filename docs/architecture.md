@@ -195,17 +195,17 @@ The bridge decides what a client is *shown*. The service decides what is
 
 ```mermaid
 flowchart LR
-    REG[(Tool registry<br/>~204 tools)] --> F{Profile filter<br/>category · risk · maturity}
+    REG[(Tool registry<br/>~252 tools)] --> F{Profile filter<br/>category · risk · maturity}
     F --> C[core · 12]
-    F --> RC[recon · 16]
-    F --> W[web · 21]
-    F --> AP[api · 5]
-    F --> CD[code · 15]
+    F --> RC[recon · 24]
+    F --> W[web · 37]
+    F --> AP[api · 7]
+    F --> CD[code · 16]
     F --> CL[cloud · 8]
-    F --> CT[container · 11]
-    F --> FR[forensics · 26]
-    F --> CTF[ctf · 69]
-    F --> FU[full · 202]
+    F --> CT[container · 14]
+    F --> FR[forensics · 28]
+    F --> CTF[ctf · 91]
+    F --> FU[full · 250]
 
     C --> CLIENT[AI client]
     CLIENT -.->|every call still| SVC[ExecutionService]
@@ -215,7 +215,7 @@ Six more specialty profiles (osint, wireless, privesc, payloads, vulnscan,
 mobile) slice the same registry the same way; the full list with counts is in
 the README.
 
-Without a `--profile` flag the bridge defaults to `nexhunter-full` (202 tools,
+Without a `--profile` flag the bridge defaults to `nexhunter-full` (250 tools,
 everything non-destructive). A focused profile cuts initialization payload and
 token cost and stops a model choosing blindly between near-identical tools —
 `nexhunter-core`, for example, exposes 12 passive stable checks.

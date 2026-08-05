@@ -30,7 +30,7 @@ exposing it anywhere else.
 
 ## 2. Pick a profile
 
-Listing all ~204 registered tools to every client makes for a large
+Listing all ~252 registered tools to every client makes for a large
 initialization payload, a large token cost on every session, and a model
 choosing between near-identical tools with no basis to pick. A profile narrows
 that to one job.
