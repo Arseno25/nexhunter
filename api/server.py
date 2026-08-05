@@ -951,6 +951,11 @@ def _server_mode() -> str:
 
 
 def main():
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:  # noqa: S110 - encoding already usable
+            pass
     parser = argparse.ArgumentParser(description="NexHunter API server")
     parser.add_argument("--port", type=int, default=None, help="override NEXHUNTER_BIND_PORT")
     parser.add_argument("--host", default=None, help="override NEXHUNTER_BIND_HOST")
