@@ -58,6 +58,7 @@ packages = [
     "nexhunter.api",
     "nexhunter.cli",
     "nexhunter.core",
+    "nexhunter.engagements",
     "nexhunter.execution",
     "nexhunter.security",
     "nexhunter.workflows",
