@@ -60,6 +60,7 @@ packages = [
     "nexhunter.core",
     "nexhunter.engagements",
     "nexhunter.execution",
+    "nexhunter.findings",
     "nexhunter.security",
     "nexhunter.workflows",
 ]

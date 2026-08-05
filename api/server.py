@@ -81,10 +81,13 @@ from nexhunter.engagements.store import (
     EngagementStore,
     engagement_to_dict,
 )
+from nexhunter.findings import export as findings_export
+from nexhunter.findings.store import FindingStore
 
 ENGINE = Engine()
 TOKEN_VALIDATOR = TokenValidator()
 STORE = EngagementStore()
+FINDINGS = FindingStore()
 GATE = SecurityGate(token_validator=TOKEN_VALIDATOR, engagement_store=STORE)
 # Single execution path shared with the MCP server: validate, authorize, run,
 # record. Nothing else in this module spawns a process.
@@ -225,6 +228,14 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _text(self, code, body_text, content_type):
+        body = body_text.encode()
+        self.send_response(code)
+        self.send_header("Content-Type", f"{content_type}; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
     def _html(self, code, text):
         body = text.encode()
         self.send_response(code)
@@ -358,6 +369,27 @@ class Handler(BaseHTTPRequestHandler):
                     },
                     "installed_tools": sorted(s.name for s in installed),
                 })
+            elif path == "/api/findings/summary":
+                self._json(200, {"ok": True, "summary": FINDINGS.summary()})
+            elif path == "/api/findings/export":
+                query = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+                fmt = (query.get("format") or ["json"])[0]
+                engagement = (query.get("engagement_id") or [None])[0]
+                try:
+                    rendered = findings_export.export(
+                        FINDINGS.list(engagement_id=engagement), fmt
+                    )
+                except ValueError as exc:
+                    self._json(400, {"ok": False, "error": str(exc), "code": "UNKNOWN_FORMAT"})
+                else:
+                    if fmt in ("markdown", "md"):
+                        self._text(200, rendered, "text/markdown")
+                    elif fmt == "html":
+                        self._html(200, rendered)
+                    elif fmt == "jsonl":
+                        self._text(200, rendered, "application/x-ndjson")
+                    else:
+                        self._text(200, rendered, "application/json")
             elif path == "/api/engagements":
                 query = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
                 active_only = (query.get("active") or [None])[0] == "true"
