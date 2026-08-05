@@ -92,99 +92,47 @@ python -m nexhunter.api.mcp --server http://127.0.0.1:8888
 }
 ```
 
-**Grok/Other AI Models** - Use stdin/stdout protocol
-```bash
-# Start MCP server
-python -m nexhunter.api.mcp --server http://127.0.0.1:8888
-
-# MCP responds with available tools
-# AI model parses and uses tools via JSON-RPC
-```
-
-**Generic MCP Client**
-```python
-import subprocess
-import json
-
-# Start MCP bridge
-proc = subprocess.Popen(
-    ["python", "-m", "nexhunter.api.mcp", "--server", "http://127.0.0.1:8888"],
-    stdin=subprocess.PIPE,
-    stdout=subprocess.PIPE,
-    text=True
-)
-
-# Send tool request
-request = {
-    "jsonrpc": "2.0",
-    "method": "tools/call",
-    "params": {"name": "assess", "arguments": {"target": "example.com"}},
-    "id": 1
-}
-
-proc.stdin.write(json.dumps(request) + "\n")
-response = proc.stdout.readline()
-print(json.loads(response))
-```
+**Any Other Model** - See `docs/MCP_UNIVERSAL.md` for Grok, Gemini, GPT-4, Llama, Mistral, and generic clients.
 
 ---
 
-## 🛠️ Available Tools (164)
+## 🛠️ Security Tools (164)
 
-| Category | Count | Tools |
-|----------|-------|-------|
-| **Reconnaissance** | 11 | nmap, masscan, rustscan, subfinder, amass, shodan, dns, whois |
-| **Web Scanning** | 13 | nuclei, ffuf, gobuster, sqlmap, nikto, dalfox, burp, zap |
-| **Network** | 15 | aircrack, tcpdump, tshark, enum4linux, smbmap, ldapsearch |
-| **Cryptography** | 5 | hashid, john, hashcat, openssl, testssl |
-| **Forensics** | 8 | volatility, sleuthkit, autopsy, binwalk, exiftool |
-| **Binary Analysis** | 10 | ghidra, radare2, objdump, readelf, checksec |
-| **Cloud/DevOps** | 11 | kube-bench, trivy, docker, kubectl, aws-cli, gcloud |
-| **Code Analysis** | 5 | semgrep, bandit, pylint, sonarqube, checkmarx |
-| **Exploitation** | 6 | metasploit, empire, cobalt-strike, havoc, sliver |
-| **Other** | 80+ | mobile, IDS/IPS, secrets, compliance, evasion, etc |
+**Reconnaissance** (11): nmap, masscan, rustscan, subfinder, amass, shodan, dns, whois, host, assetfinder, censys
 
----
+**Web Scanning** (13): nuclei, ffuf, gobuster, nikto, sqlmap, dalfox, xsstrike, commix, burpsuite, zap, w3af, wpscan, joomscan
 
-## 🔄 Workflows (9 Types)
+**Network** (15): aircrack, aireplay, airodump, tcpdump, tshark, arp-scan, nping, netstat, ss, enum4linux, smbmap, cme, rpcclient, smbclient, ldapsearch
 
-```
-Bug Bounty (10)      → Reconnaissance → Subdomain → Port Scan → Service Detect → Web Scan
-Pentest (8)          → Scoping → Reconnaissance → Scanning → Exploitation → Reporting
-API Security (10)    → Discovery → Auth → Input Validation → Rate Limiting → Headers
-Cloud Security (8)   → Inventory → IAM → Network → Encryption → Compliance
-Red Team (6) • Security Audit (7) • Mobile (8) • Supply Chain (7) • DevSecOps (8)
-```
+**Cryptography** (5): hashid, john, hashcat, openssl, testssl
+
+**Forensics** (8): strings, exiftool, binwalk, foremost, volatility, sleuthkit, autopsy, regripper
+
+**Binary Analysis** (10): ghidra, ida, radare2, cutter, angr, objdump, readelf, nm, ldd, strace
+
+**Cloud/DevOps** (11): kube-bench, kube-hunter, trivy, grype, docker, kubectl, aws-cli, gcloud, az, tfsec, checkov
+
+**Code Analysis** (5): semgrep, bandit, pylint, sonarqube, checkmarx
+
+**Exploitation** (6): metasploit, empire, cobalt-strike, havoc, sliver, msfvenom
+
+**Other** (80+): mobile security, IDS/IPS, secrets detection, password testing, evasion, social engineering
 
 ---
 
-## 🔌 API Endpoints
+## 🔄 Workflows (9)
 
-**Assessment:** `/api/assess`, `/api/probe`, `/api/portscan`, `/api/webscan`, `/api/recon`
-
-**Workflows:** `/api/flow/bugbounty-pro`, `/api/flow/ctf`, `/api/intelligence/osint`, `/api/intelligence/vulnerability-analysis`
-
-**Results:** `/api/findings`, `/api/report`, `/api/visual/dashboard`, `/api/visual/vulnerabilities`
-
-**System:** `/api/health`, `/api/telemetry`, `/api/cache/stats`, `/api/processes/list`
-
----
-
-## ⚙️ Configuration
-
-**File:** `core/config.py`
-
-```python
-CACHE_MAX = 128                     # LRU cache size
-MAX_PARALLEL_WORKERS = 4            # Concurrent tools
-RATE_LIMIT_ENABLED = True           # Request throttling
-FINDING_DEDUP_ENABLED = True        # Duplicate prevention
-
-TOOL_TIMEOUTS = {
-    "nmap_scan": 300,
-    "nuclei_scan": 600,
-}
-```
+| Workflow | Phases | Focus |
+|----------|--------|-------|
+| **Bug Bounty** | 10 | Web applications |
+| **Penetration Testing** | 8 | Corporate networks |
+| **API Security** | 10 | REST/GraphQL APIs |
+| **Cloud Security** | 8 | AWS/Azure/GCP |
+| **Red Team** | 6 | Adversarial simulation |
+| **Security Audit** | 7 | Compliance |
+| **Mobile Security** | 8 | iOS/Android |
+| **Supply Chain** | 7 | Dependencies |
+| **DevSecOps** | 8 | CI/CD pipelines |
 
 ---
 
@@ -206,9 +154,10 @@ TOOL_TIMEOUTS = {
 | AI Agents | 18 |
 | Security Tools | 164 |
 | Workflows | 9 |
-| Phases | 73 |
-| API Endpoints | 30+ |
+| Assessment Phases | 73 |
 | MCP Tools | 184 |
+| API Endpoints | 30+ |
+| CLI Commands | 15+ |
 | Test Coverage | 100% |
 
 ---
