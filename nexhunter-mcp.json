@@ -1,6 +1,7 @@
 {
   "mcpServers": {
     "nexhunter": {
+      "type": "local",
       "command": "python3",
       "args": [
         "-m",
