@@ -279,6 +279,74 @@ def proxy_logs(port: int = 8080) -> str:
 
 
 @mcp.tool()
+def browser_analyze(url: str) -> str:
+    """Full browser analysis of a URL: DOM artifacts, security headers,
+    cookie flags, technology fingerprint, JS errors. Selenium when installed,
+    stdlib fallback otherwise."""
+    return _render(api("/api/browser/analyze", {"url": url}), indent=1)
+
+
+@mcp.tool()
+def browser_screenshot(url: str) -> str:
+    """Take a screenshot of a URL with a headless browser and save it into
+    the execution workspace. Selenium must be installed."""
+    return _render(api("/api/browser/screenshot", {"url": url}), indent=1)
+
+
+@mcp.tool()
+def browser_network(url: str) -> str:
+    """Capture the requests a page makes while loading (XHR, fetch, scripts,
+    resources) with types and sizes. Selenium when installed."""
+    return _render(api("/api/browser/network", {"url": url}), indent=1)
+
+
+@mcp.tool()
+def browser_discover(url: str) -> str:
+    """JS-aware link discovery on a target (same-origin links rendered by
+    JavaScript). Selenium when installed, static fallback otherwise."""
+    return _render(api("/api/browser/crawl", {"url": url}), indent=1)
+
+
+@mcp.tool()
+def browser_forms(url: str) -> str:
+    """Enumerate forms on a page: actions, methods, and input fields.
+    Selenium when installed."""
+    return _render(api("/api/browser/forms", {"url": url}), indent=1)
+
+
+@mcp.tool()
+def vulnerability_card(
+    title: str,
+    severity: str = "info",
+    endpoint: str = "",
+    impact: str = "",
+    remediation: str = "",
+    vuln_type: str = "Unknown",
+    cvss_score: float = None,
+    poc: str = "",
+) -> str:
+    """Format a vulnerability card (title, severity, endpoint, impact, fix,
+    CVSS, PoC) into a structured record for reporting."""
+    return _render(api("/api/visual/vulnerability-card", {
+        "title": title, "severity": severity, "endpoint": endpoint,
+        "impact": impact, "remediation": remediation, "type": vuln_type,
+        "cvss_score": cvss_score, "poc": poc,
+    }), indent=1)
+
+
+@mcp.tool()
+def dashboard() -> str:
+    """Server dashboard metrics: requests, findings, processes, cache."""
+    return _render(api("/api/visual/dashboard"), indent=1)
+
+
+@mcp.tool()
+def visual_vulnerabilities() -> str:
+    """All recorded findings with severity statistics."""
+    return _render(api("/api/visual/vulnerabilities"), indent=1)
+
+
+@mcp.tool()
 def attack_chain(chain: str, target: str, domain: str = "", host: str = "",
                  username: str = "", wordlist: str = "") -> str:
     """Build a named attack chain (each step: tool, params, gate, availability)

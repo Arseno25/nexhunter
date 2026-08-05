@@ -10,16 +10,16 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 import pytest
-from http.server import ThreadingHTTPServer
+from werkzeug.serving import make_server
 
 from nexhunter.api import server
 
 
 @pytest.fixture(scope="module")
 def base_url():
-    """Start the real API server on an ephemeral port for the test module."""
-    httpd = ThreadingHTTPServer(("127.0.0.1", 0), server.Handler)
-    port = httpd.server_address[1]
+    """Start the real API server (Flask app) on an ephemeral port for the module."""
+    httpd = make_server("127.0.0.1", 0, server.app, threaded=True)
+    port = httpd.server_port
     thread = threading.Thread(target=httpd.serve_forever, daemon=True)
     thread.start()
     yield f"http://127.0.0.1:{port}"
@@ -87,7 +87,7 @@ def test_oversized_body_rejected(base_url):
             body = json.loads(resp.read())
     except urllib.error.HTTPError as e:
         status, body = e.code, json.loads(e.read())
-    assert status == 500, f"expected a 500 for oversized body, got {status}"
+    assert status in (413, 500), f"expected a 4xx/5xx for oversized body, got {status}"
     assert body.get("error") and "too large" in body["error"]
     print("  [OK] Oversized body refused with a JSON error")
 
@@ -108,8 +108,8 @@ def test_unknown_tool_endpoint_returns_json_error(base_url):
 
 
 if __name__ == "__main__":
-    httpd = ThreadingHTTPServer(("127.0.0.1", 0), server.Handler)
-    port = httpd.server_address[1]
+    httpd = make_server("127.0.0.1", 0, server.app, threaded=True)
+    port = httpd.server_port
     threading.Thread(target=httpd.serve_forever, daemon=True).start()
     url = f"http://127.0.0.1:{port}"
     test_raw_command_rejected(url)

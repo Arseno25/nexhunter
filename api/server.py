@@ -1,17 +1,16 @@
-"""nexhunter HTTP API Server - REST API only (CLI access recommended).
+"""nexhunter HTTP API Server - REST API on Flask.
 
 Architecture:
   Tool Registry → ToolSpec class with validation
   Engine Layer → Orchestration with caching, parallel execution
   Agent Layer → auto-discovered agents (core + enhanced; offensive ones gated)
-  API Layer → HTTP REST endpoints
+  API Layer → HTTP REST endpoints (Flask, threaded)
 
-Features:
-  ✓ Real-time telemetry & process monitoring
-  ✓ Full security assessment workflows (9 types, 73 phases)
-  ✓ CVE intelligence via NVD API
-  ✓ Finding deduplication & correlation
-  ✓ Multi-tool orchestration with caching
+The API layer is a transport only: every tool execution routes through
+ExecutionService (the single execution path), so REST, MCP, CLI and the
+autonomous loop cannot diverge. Flask replaced the stdlib HTTP server to get
+a real web framework (routing, JSON handling, limits) with zero change to
+that architecture.
 
 Key Endpoints:
   Health:
@@ -57,6 +56,12 @@ Key Endpoints:
     POST /api/web/spider                 Same-origin crawl from a seed URL
     POST /api/web/proxy/start|stop       Localhost logging proxy (+/rules)
     GET  /api/web/proxy/logs             Requests the proxy saw
+  Browser (Selenium when installed, stdlib fallback):
+    POST /api/browser/analyze            DOM + headers + cookies + tech
+    POST /api/browser/screenshot         Screenshot into the execution workspace
+    POST /api/browser/network            Requests the page made
+    POST /api/browser/crawl              JS-aware link discovery
+    POST /api/browser/forms              Form enumeration
   Planning & Intelligence:
     POST /api/attack-chain               Named attack chain, scored for this box
     POST /api/agents/cve_watch           Recent NVD CVEs ranked by exploitability
@@ -64,6 +69,10 @@ Key Endpoints:
   Lab Utilities:
     POST /api/file/list|read|write       Files (writes confined to allow root)
     POST /api/python/run                 Run a snippet in an isolated cwd
+  Visual:
+    GET  /api/visual/dashboard           Dashboard metrics
+    GET  /api/visual/vulnerabilities     Vulnerability list
+    POST /api/visual/vulnerability-card  Format a vulnerability card
 
 Run:
     python -m nexhunter.api.server [--port 8888]
@@ -80,10 +89,10 @@ import logging
 import os
 import sys
 import time
-import urllib.parse
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from flask import Flask, jsonify, request
 
 from nexhunter.core import tools as T
 from nexhunter.agents import AGENTS, run_agent
@@ -115,6 +124,10 @@ EXEC = ExecutionService()
 # exactly the same terms as a manual call.
 ORCHESTRATOR = AutonomousOrchestrator(execution_service=EXEC, finding_store=FINDINGS)
 
+app = Flask(__name__)
+# Same ceiling the stdlib server enforced by hand, now declarative.
+app.config["MAX_CONTENT_LENGTH"] = 5 * 1024 * 1024
+
 
 class Telemetry:
     def __init__(self):
@@ -143,6 +156,19 @@ class Telemetry:
 TEL = Telemetry()
 
 
+@app.before_request
+def _record_start():
+    request.environ["nexhunter_t0"] = time.time()
+
+
+@app.after_request
+def _record_duration(response):
+    t0 = request.environ.get("nexhunter_t0")
+    if t0 is not None:
+        TEL.record(time.time() - t0)
+    return response
+
+
 def _intrusive_enabled() -> bool:
     """True when intrusive tooling (incl. offensive agents) is explicitly on."""
     return os.environ.get("NEXHUNTER_INTRUSIVE_TOOLS_ENABLED", "").strip().lower() in {"1", "true", "yes", "on"}
@@ -158,6 +184,29 @@ def offensive_agent_blocked(name: str) -> bool:
     """
     cls = AGENTS.get(name)
     return bool(cls is not None and getattr(cls, "offensive", False) and not _intrusive_enabled())
+
+
+def _body() -> dict:
+    """Request JSON body, empty dict when absent or malformed (same as before).
+
+    MAX_CONTENT_LENGTH is checked explicitly because get_json(silent=True)
+    swallows the RequestEntityTooLarge exception instead of surfacing it.
+    """
+    if request.content_length and request.content_length > app.config["MAX_CONTENT_LENGTH"]:
+        from flask import abort
+
+        abort(413)
+    if not request.is_json:
+        return {}
+    try:
+        data = request.get_json(silent=True) or {}
+    except Exception:  # noqa: BLE001 - the old handler also swallowed bad JSON
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _query(field, default=None):
+    return request.args.get(field, default)
 
 
 def _analyze_target(target):
@@ -275,407 +324,557 @@ def _proxy_route(path, body=None):
     return None
 
 
-class Handler(BaseHTTPRequestHandler):
-    def _json(self, code, data):
-        body = json.dumps(data).encode()
-        self.send_response(code)
-        self.send_header("Content-Type", "application/json")
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
+def _browser_route(body):
+    """Browser agent routes: Selenium when installed, stdlib fallback otherwise."""
+    from nexhunter.agents.browser import BrowserAgent
 
-    def _text(self, code, body_text, content_type):
-        body = body_text.encode()
-        self.send_response(code)
-        self.send_header("Content-Type", f"{content_type}; charset=utf-8")
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
+    agent = BrowserAgent(ENGINE)
+    return agent.run(
+        url=body.get("url", ""),
+        mode=body.get("mode", "analyze"),
+    )
 
-    def _html(self, code, text):
-        body = text.encode()
-        self.send_response(code)
-        self.send_header("Content-Type", "text/html")
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
 
-    def _body(self):
-        n = int(self.headers.get("Content-Length", 0) or 0)
-        if n > 5 * 1024 * 1024:
-            # Drain what the client is still sending before responding, or the
-            # unread socket data triggers a reset when the response lands.
-            remaining = n
-            while remaining > 0:
-                chunk = self.rfile.read(min(65536, remaining))
-                if not chunk:
-                    break
-                remaining -= len(chunk)
-            raise ValueError("request body too large (max 5 MiB)")
-        try:
-            return json.loads(self.rfile.read(n) or b"{}")
-        except json.JSONDecodeError:
-            return {}
+# ---------------------------------------------------------------------------
+# GET routes
+# ---------------------------------------------------------------------------
 
-    def _execution_get(self, path):
-        """Route /api/executions/<id>[/output|/artifacts]. Returns (code, body)."""
-        rest = path[len("/api/executions/"):].strip("/")
-        if not rest:
-            return 404, {"ok": False, "error": "not found", "code": "NOT_FOUND"}
+@app.get("/health")
+def health():
+    deg = run_agent(ENGINE, "degradation", {})
+    mode = "degraded"
+    if deg.get("ok"):
+        mode = deg.get("data", {}).get("mode", "degraded")
+    return jsonify({
+        "ok": True,
+        "version": "1.0.0",
+        "mode": mode,
+        "agents": sorted(AGENTS),
+        "tools_installed": {n: bool(T.which(s.binary)) for n, s in T.TOOLS.items()},
+    })
 
-        parts = rest.split("/")
-        execution_id, sub = parts[0], (parts[1] if len(parts) > 1 else "")
 
-        if sub == "output":
-            result = EXEC.output(execution_id)
-        elif sub == "artifacts":
-            result = EXEC.artifacts(execution_id)
-        elif not sub:
-            record = EXEC.registry.get(execution_id)
-            if record is None:
-                return 404, {"ok": False, "error": f"no such execution: {execution_id}", "code": "NOT_FOUND"}
-            result = {"ok": True, "execution": record.to_dict()}
-        else:
-            return 404, {"ok": False, "error": "not found", "code": "NOT_FOUND"}
+@app.get("/version")
+def version():
+    return jsonify({"ok": True, "version": "1.0.0", "name": "NexHunter"})
 
-        return (200 if result.get("ok") else 404), result
 
-    def _command(self, body):
-        # Only registered tools may run. Raw OS command passthrough was removed:
-        # arbitrary "cmd" strings are no longer accepted under any condition.
-        tool_name = body.get("tool")
-        if not tool_name:
-            return {"ok": False, "error": "missing 'tool'; raw command execution is not permitted", "code": "TOOL_REQUIRED"}
+@app.get("/ready")
+def ready():
+    return jsonify({"ok": True, "ready": True})
 
-        return EXEC.execute(
-            tool_name=tool_name,
-            params=body.get("params", {}),
-            run_async=bool(body.get("async")),
-            no_cache=bool(body.get("no_cache")),
-            # Default is the direct in-process path; set "direct": false
-            # to opt into tracked executions (records/async/process mgmt).
-            direct=bool(body.get("direct", True)),
-        )
 
-    def _recover(self, body):
-        """Run a tool with automatic failure recovery.
+@app.get("/api/telemetry")
+def telemetry():
+    return jsonify(TEL.stats())
 
-        Classifies the failure and retries along the cheapest viable path:
-        reduced scope, backoff, equivalent alternative tool, or stops for a
-        human. Execution still goes through EXEC (one execution path).
-        """
-        tool_name = body.get("tool")
-        if not tool_name:
-            return {"ok": False, "error": "missing 'tool'", "code": "TOOL_REQUIRED"}
-        return _run_with_recovery(
-            tool_name,
-            body.get("params", {}),
-            max_attempts=int(body.get("max_attempts", 3)),
-            direct=bool(body.get("direct", True)),
-        )
 
-    def _start_autonomous(self, body):
-        """Kick off an adaptive autonomous run, or an AI-proposed plan."""
-        target = body.get("target")
-        if not target:
-            return {"ok": False, "error": "target is required", "code": "TARGET_REQUIRED"}
-        run = ORCHESTRATOR.start(
-            target=target,
-            risk_ceiling=body.get("risk_ceiling", "active"),
-            max_steps=int(body.get("max_steps", 20)),
-            run_async=bool(body.get("async", True)),
-            steps=body.get("steps"),
-            strategy=body.get("strategy", "methodology"),
-            objective=body.get("objective", "standard"),
-            direct=bool(body.get("direct", True)),
-        )
-        return {"ok": True, "run": run.to_dict()}
+@app.get("/api/cache/stats")
+def cache_stats():
+    # Primary: the result cache on the single execution path. The legacy
+    # Engine LRU (used by /api/probe, /api/portscan, ...) is reported
+    # alongside it rather than in place of it.
+    stats = dict(EXEC.cache.stats())
+    stats["legacy_engine_cache"] = {
+        "entries": len(ENGINE._cache),
+        "hits": ENGINE.cache_hits,
+        "evictions": ENGINE.cache_evictions,
+    }
+    return jsonify(stats)
 
-    def _propose_plan(self, body):
-        """Validate an AI-proposed plan without executing anything."""
-        target = body.get("target")
-        steps = body.get("steps")
-        if not target:
-            return {"ok": False, "error": "target is required", "code": "TARGET_REQUIRED"}
-        if not isinstance(steps, list):
-            return {"ok": False, "error": "steps must be a list of {tool, params}", "code": "PLAN_REQUIRED"}
-        review = ORCHESTRATOR.review_plan(target, steps, body.get("risk_ceiling", "active"))
-        return {"ok": True, "plan": review}
 
-    def do_GET(self):
-        t0 = time.time()
-        try:
-            try:
-                self._handle_get()
-            except Exception as e:
-                self._json(500, {"ok": False, "error": str(e)})
-        finally:
-            TEL.record(time.time() - t0)
+@app.get("/api/agents/list")
+def agents_list():
+    return jsonify([{"name": a.name, "desc": a.desc} for a in AGENTS.values()])
 
-    def _handle_get(self):
-        path = urllib.parse.urlparse(self.path).path
-        if path == "/health":
-            deg = run_agent(ENGINE, "degradation", {})
-            mode = "degraded"
-            if deg.get("ok"):
-                mode = deg.get("data", {}).get("mode", "degraded")
-            self._json(200, {
-                "ok": True,
-                "version": "1.0.0",
-                "mode": mode,
-                "agents": sorted(AGENTS),
-                "tools_installed": {n: bool(T.which(s.binary)) for n, s in T.TOOLS.items()},
-            })
-        elif path == "/version":
-            self._json(200, {"ok": True, "version": "1.0.0", "name": "NexHunter"})
-        elif path == "/ready":
-            self._json(200, {"ok": True, "ready": True})
-        elif path == "/api/telemetry":
-            self._json(200, TEL.stats())
-        elif path == "/api/cache/stats":
-            # Primary: the result cache on the single execution path. The legacy
-            # Engine LRU (used by /api/probe, /api/portscan, ...) is reported
-            # alongside it rather than in place of it.
-            stats = dict(EXEC.cache.stats())
-            stats["legacy_engine_cache"] = {
-                "entries": len(ENGINE._cache),
-                "hits": ENGINE.cache_hits,
-                "evictions": ENGINE.cache_evictions,
-            }
-            self._json(200, stats)
-        elif path == "/api/agents/list":
-            self._json(200, [{"name": a.name, "desc": a.desc} for a in AGENTS.values()])
-        elif path == "/api/processes/list":
-            self._json(200, {"ok": True, "processes": EXEC.list_processes()})
-        elif path.startswith("/api/web/proxy/logs"):
-            self._json(200, _proxy_route("/api/web/proxy/logs", {}))
-        elif path == "/api/findings":
-            self._json(200, json.loads(ENGINE.report("json")))
-        elif path == "/api/tools":
-            query = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
-            specs = list(T.TOOLS.values())
-            for field in ("category", "risk_level", "maturity"):
-                wanted = (query.get(field) or [None])[0]
-                if wanted:
-                    specs = [s for s in specs if getattr(s, field) == wanted]
-            if (query.get("available") or [None])[0] == "true":
-                specs = [s for s in specs if s.available]
-            self._json(200, {
-                "ok": True,
-                "count": len(specs),
-                "tools": [s.describe() for s in specs],
-            })
-        elif path == "/api/tools/status":
-            specs = list(T.TOOLS.values())
-            installed = [s for s in specs if s.available]
-            self._json(200, {
-                "ok": True,
-                "registered": len(specs),
-                "installed": len(installed),
-                "missing": len(specs) - len(installed),
-                "by_category": mcp_profiles.categories(),
-                "by_maturity": {
-                    level: sum(1 for s in specs if s.maturity == level)
-                    for level in ("stable", "beta", "experimental", "disabled")
-                },
-                "installed_tools": sorted(s.name for s in installed),
-            })
-        elif path == "/api/autonomous":
-            runs = ORCHESTRATOR.list_runs()
-            self._json(200, {"ok": True, "runs": [r.to_dict() for r in runs]})
-        elif path.startswith("/api/autonomous/"):
-            run = ORCHESTRATOR.get_run(path.rsplit("/", 1)[1])
-            if run is None:
-                self._json(404, {"ok": False, "error": "no such run", "code": "NOT_FOUND"})
-            else:
-                self._json(200, {"ok": True, "run": run.to_dict()})
-        elif path == "/api/findings/summary":
-            self._json(200, {"ok": True, "summary": FINDINGS.summary()})
-        elif path == "/api/findings/export":
-            query = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
-            fmt = (query.get("format") or ["json"])[0]
-            try:
-                rendered = findings_export.export(
-                    FINDINGS.list(), fmt
-                )
-            except ValueError as exc:
-                self._json(400, {"ok": False, "error": str(exc), "code": "UNKNOWN_FORMAT"})
-            else:
-                if fmt in ("markdown", "md"):
-                    self._text(200, rendered, "text/markdown")
-                elif fmt == "html":
-                    self._html(200, rendered)
-                elif fmt == "jsonl":
-                    self._text(200, rendered, "application/x-ndjson")
-                else:
-                    self._text(200, rendered, "application/json")
-        elif path == "/api/mcp/profiles":
-            self._json(200, {"ok": True, "profiles": mcp_profiles.summarize()})
-        elif path.startswith("/api/tools/"):
-            name = path[len("/api/tools/"):].strip("/")
-            spec = T.get_tool_spec(name)
-            if spec is None:
-                self._json(404, {"ok": False, "error": f"unknown tool: {name}", "code": "UNKNOWN_TOOL"})
-            else:
-                self._json(200, {"ok": True, "tool": spec.describe()})
-        elif path == "/api/executions":
-            records = EXEC.registry.list()
-            self._json(200, {
-                "ok": True,
-                "executions": [r.to_dict() for r in records],
-                "stats": EXEC.registry.stats(),
-            })
-        elif path.startswith("/api/executions/"):
-            self._json(*self._execution_get(path))
-        elif path.startswith("/api/processes/status/"):
-            result = EXEC.process_status(path.rsplit("/", 1)[1])
-            self._json(200 if result.get("ok") else 404, result)
-        elif path == "/api/visual/dashboard":
-            metrics = DashboardMetrics()
-            metrics.requests = getattr(TEL, "total_requests", 0)
-            metrics.findings = len(ENGINE.findings) if hasattr(ENGINE, "findings") else 0
-            metrics.processes = len(EXEC.list_processes())
-            self._json(200, metrics.to_dict())
-        elif path == "/api/visual/vulnerabilities":
-            findings = ENGINE.findings if hasattr(ENGINE, "findings") else []
-            vuln_list = [f.to_dict() if hasattr(f, "to_dict") else f for f in findings]
-            self._json(200, {"vulnerabilities": vuln_list, "count": len(vuln_list)})
-        else:
-            self._json(404, {"error": "not found"})
 
-    def do_POST(self):
-        t0 = time.time()
-        try:
-            try:
-                body = self._body()
-                path = urllib.parse.urlparse(self.path).path
-                self._dispatch_post(path, body)
-            except Exception as e:
-                self._json(500, {"ok": False, "error": str(e)})
-        finally:
-            TEL.record(time.time() - t0)
+@app.get("/api/processes/list")
+def processes_list():
+    return jsonify({"ok": True, "processes": EXEC.list_processes()})
 
-    def _dispatch_post(self, path, body):
-        fn = None
-        if path == "/api/command":
-            fn = lambda: self._command(body)
-        elif path == "/api/recover":
-            fn = lambda: self._recover(body)
-        elif path.startswith("/api/web/"):
-            fn = lambda: _proxy_route(path, body)
-        elif path == "/api/attack-chain":
-            fn = lambda: _build_attack_chain(body)
-        elif path == "/api/file/list":
-            fn = lambda: _sandbox_list(body)
-        elif path == "/api/file/read":
-            fn = lambda: _sandbox_read(body)
-        elif path == "/api/file/write":
-            fn = lambda: _sandbox_write(body)
-        elif path == "/api/python/run":
-            fn = lambda: _sandbox_python(body)
-        elif path == "/api/cache/clear":
-            fn = lambda: {"ok": True, "cleared": EXEC.cache.clear()}
-        elif path == "/api/autonomous":
-            fn = lambda: self._start_autonomous(body)
-        elif path == "/api/plan":
-            fn = lambda: self._propose_plan(body)
-        elif path == "/api/plan/recommend":
-            fn = lambda: {"ok": True, "plan": ORCHESTRATOR.recommend_plan(
-                body.get("target", ""), body.get("risk_ceiling", "active"))}
-        elif path == "/api/plan/select":
-            fn = lambda: {"ok": True, "selection": ORCHESTRATOR.select_plan(
-                body.get("target", ""),
-                body.get("objective", "standard"),
-                body.get("risk_ceiling", "active"))}
-        elif path == "/api/tools/optimize":
-            fn = lambda: optimize_preview(
-                body.get("target", ""),
-                body.get("tool", ""),
-                body.get("objective", "standard"))
-        elif path.startswith("/api/executions/") and path.endswith("/terminate"):
-            execution_id = path[len("/api/executions/"):-len("/terminate")].strip("/")
-            fn = lambda: EXEC.terminate(execution_id)
-        elif path == "/api/intelligence/analyze-target":
-            fn = lambda: _analyze_target(body.get("target", ""))
-        elif path == "/api/intelligence/select-tools":
-            fn = lambda: run_agent(ENGINE, "decision", {"target": body.get("target", ""), "intent": body.get("intent", "auto")})
-        elif path == "/api/intelligence/optimize-parameters":
-            fn = lambda: run_agent(ENGINE, "optimizer", {"tool": body.get("tool", "")})
-        elif path.startswith("/api/agents/"):
-            name = path.rsplit("/", 1)[1]
-            if name in ENHANCED_AGENTS:
-                fn = lambda: ENHANCED_AGENTS[name].execute(ENGINE, body)
-            elif offensive_agent_blocked(name):
-                fn = lambda: {
-                    "ok": False, "code": "OFFENSIVE_AGENT_DISABLED",
-                    "error": (f"agent '{name}' takes attack-side actions outside the "
-                              "execution gate; set NEXHUNTER_INTRUSIVE_TOOLS_ENABLED=true to allow"),
-                }
-            else:
-                fn = lambda: run_agent(ENGINE, name, body)
-        elif path == "/api/flow/bugbounty":
-            fn = lambda: run_agent(ENGINE, "bugbounty", {"target": body.get("target", ""), "phases": body.get("phases", "all")})
-        elif path == "/api/flow/bugbounty-pro":
-            fn = lambda: ENHANCED_AGENTS["bugbounty_pro"].execute(ENGINE, body)
-        elif path == "/api/flow/ctf":
-            fn = lambda: run_agent(ENGINE, "ctf", {"target": body.get("target", ""), "category": body.get("category", "web"), "file": body.get("file", "")})
-        elif path == "/api/intelligence/osint":
-            fn = lambda: ENHANCED_AGENTS["osint"].execute(ENGINE, body)
-        elif path == "/api/intelligence/vulnerability-analysis":
-            fn = lambda: ENHANCED_AGENTS["vuln_analyzer"].execute(ENGINE, body)
-        elif path == "/api/intelligence/threat-assessment":
-            fn = lambda: ENHANCED_AGENTS["threat_intel"].execute(ENGINE, body)
-        elif path == "/api/tools/ctf-solver":
-            fn = lambda: ENHANCED_AGENTS["ctf_solver"].execute(ENGINE, body)
-        elif path.startswith("/api/processes/terminate/"):
-            fn = lambda: EXEC.terminate_process(path.rsplit("/", 1)[1])
-        elif path == "/api/processes/terminate":
-            fn = lambda: EXEC.terminate_process(body.get("pid") or body.get("execution_id", ""))
-        elif path.startswith("/api/processes/pause/"):
-            fn = lambda: EXEC.pause_process(path.rsplit("/", 1)[1])
-        elif path == "/api/processes/pause":
-            fn = lambda: EXEC.pause_process(body.get("pid") or body.get("execution_id", ""))
-        elif path.startswith("/api/processes/resume/"):
-            fn = lambda: EXEC.resume_process(path.rsplit("/", 1)[1])
-        elif path == "/api/processes/resume":
-            fn = lambda: EXEC.resume_process(body.get("pid") or body.get("execution_id", ""))
-        elif path in ("/api/probe", "/api/portscan", "/api/webscan", "/api/recon", "/api/assess"):
-            engine_flow = {"target": body.get("target", ""), "ports": body.get("ports", ""), "domain": body.get("domain", "")}
-            fn = {
-                "/api/probe": lambda: ENGINE.probe(engine_flow["target"]),
-                "/api/portscan": lambda: ENGINE.portscan(engine_flow["target"], engine_flow["ports"]),
-                "/api/webscan": lambda: ENGINE.webscan(engine_flow["target"]),
-                "/api/recon": lambda: ENGINE.recon(engine_flow["domain"]),
-                "/api/assess": lambda: ENGINE.assess(engine_flow["target"]),
-            }[path]
-        elif path == "/api/report":
-            fn = lambda: {"report": ENGINE.report(body.get("fmt", "markdown"))}
-        elif path == "/api/clear":
-            fn = lambda: (ENGINE.findings.clear(), {"ok": True})[1]
-        elif path == "/api/visual/vulnerability-card":
-            fn = lambda: VulnerabilityCard(
-                title=body.get("title", "Unknown"),
-                severity=body.get("severity", "info"),
-                endpoint=body.get("endpoint", ""),
-                impact=body.get("impact", ""),
-                remediation=body.get("remediation", ""),
-                vuln_type=body.get("type", "Unknown"),
-                cvss_score=body.get("cvss_score"),
-                poc=body.get("poc", ""),
-            ).to_dict()
-        elif path == "/api/visual/vulnerabilities":
-            fn = lambda: {
-                "vulnerabilities": [f.to_dict() if hasattr(f, "to_dict") else f for f in ENGINE.findings],
-                "stats": {"total": len(ENGINE.findings), "critical": sum(1 for f in ENGINE.findings if getattr(f, "severity", "") == "critical")},
-            }
-        if fn:
-            self._json(200, fn())
-        else:
-            self._json(404, {"error": "not found"})
 
-    def log_message(self, fmt, *args):
-        # Access logs are quiet by default; enable with --verbose (DEBUG level).
-        log.debug("%s - %s", self.address_string(), fmt % args)
+@app.get("/api/web/proxy/logs")
+def proxy_logs_get():
+    return jsonify(_proxy_route("/api/web/proxy/logs", {"port": int(_query("port", 8080))}))
+
+
+@app.get("/api/findings")
+def findings_get():
+    return jsonify(json.loads(ENGINE.report("json")))
+
+
+@app.get("/api/tools")
+def tools_list():
+    specs = list(T.TOOLS.values())
+    for field in ("category", "risk_level", "maturity"):
+        wanted = _query(field)
+        if wanted:
+            specs = [s for s in specs if getattr(s, field) == wanted]
+    if _query("available") == "true":
+        specs = [s for s in specs if s.available]
+    return jsonify({
+        "ok": True,
+        "count": len(specs),
+        "tools": [s.describe() for s in specs],
+    })
+
+
+@app.get("/api/tools/status")
+def tools_status():
+    specs = list(T.TOOLS.values())
+    installed = [s for s in specs if s.available]
+    return jsonify({
+        "ok": True,
+        "registered": len(specs),
+        "installed": len(installed),
+        "missing": len(specs) - len(installed),
+        "by_category": mcp_profiles.categories(),
+        "by_maturity": {
+            level: sum(1 for s in specs if s.maturity == level)
+            for level in ("stable", "beta", "experimental", "disabled")
+        },
+        "installed_tools": sorted(s.name for s in installed),
+    })
+
+
+@app.get("/api/autonomous")
+def autonomous_list():
+    runs = ORCHESTRATOR.list_runs()
+    return jsonify({"ok": True, "runs": [r.to_dict() for r in runs]})
+
+
+@app.get("/api/autonomous/<run_id>")
+def autonomous_get(run_id):
+    run = ORCHESTRATOR.get_run(run_id)
+    if run is None:
+        return jsonify({"ok": False, "error": "no such run", "code": "NOT_FOUND"}), 404
+    return jsonify({"ok": True, "run": run.to_dict()})
+
+
+@app.get("/api/findings/summary")
+def findings_summary():
+    return jsonify({"ok": True, "summary": FINDINGS.summary()})
+
+
+@app.get("/api/findings/export")
+def findings_export_get():
+    fmt = _query("format", "json")
+    try:
+        rendered = findings_export.export(FINDINGS.list(), fmt)
+    except ValueError as exc:
+        return jsonify({"ok": False, "error": str(exc), "code": "UNKNOWN_FORMAT"}), 400
+    if fmt in ("markdown", "md"):
+        return _text_response(rendered, "text/markdown")
+    if fmt == "html":
+        return _html_response(rendered)
+    if fmt == "jsonl":
+        return _text_response(rendered, "application/x-ndjson")
+    return _text_response(rendered, "application/json")
+
+
+def _text_response(text, content_type, status=200):
+    resp = app.response_class(text, status=status, mimetype=content_type)
+    resp.headers["Content-Type"] = f"{content_type}; charset=utf-8"
+    return resp
+
+
+def _html_response(html, status=200):
+    return app.response_class(html, status=status, mimetype="text/html")
+
+
+@app.get("/api/mcp/profiles")
+def mcp_profiles_get():
+    return jsonify({"ok": True, "profiles": mcp_profiles.summarize()})
+
+
+@app.get("/api/tools/<name>")
+def tool_get(name):
+    spec = T.get_tool_spec(name)
+    if spec is None:
+        return jsonify({"ok": False, "error": f"unknown tool: {name}", "code": "UNKNOWN_TOOL"}), 404
+    return jsonify({"ok": True, "tool": spec.describe()})
+
+
+@app.get("/api/executions")
+def executions_list():
+    records = EXEC.registry.list()
+    return jsonify({
+        "ok": True,
+        "executions": [r.to_dict() for r in records],
+        "stats": EXEC.registry.stats(),
+    })
+
+
+@app.get("/api/executions/<execution_id>")
+def execution_get(execution_id):
+    record = EXEC.registry.get(execution_id)
+    if record is None:
+        return jsonify({"ok": False, "error": f"no such execution: {execution_id}", "code": "NOT_FOUND"}), 404
+    return jsonify({"ok": True, "execution": record.to_dict()})
+
+
+@app.get("/api/executions/<execution_id>/output")
+def execution_output(execution_id):
+    result = EXEC.output(execution_id)
+    return jsonify(result), (200 if result.get("ok") else 404)
+
+
+@app.get("/api/executions/<execution_id>/artifacts")
+def execution_artifacts(execution_id):
+    result = EXEC.artifacts(execution_id)
+    return jsonify(result), (200 if result.get("ok") else 404)
+
+
+@app.get("/api/processes/status/<pid>")
+def process_status(pid):
+    result = EXEC.process_status(pid)
+    return jsonify(result), (200 if result.get("ok") else 404)
+
+
+@app.get("/api/visual/dashboard")
+def visual_dashboard():
+    metrics = DashboardMetrics()
+    metrics.requests = getattr(TEL, "total_requests", 0)
+    metrics.findings = len(ENGINE.findings) if hasattr(ENGINE, "findings") else 0
+    metrics.processes = len(EXEC.list_processes())
+    return jsonify(metrics.to_dict())
+
+
+@app.get("/api/visual/vulnerabilities")
+def visual_vulnerabilities():
+    findings = ENGINE.findings if hasattr(ENGINE, "findings") else []
+    vuln_list = [f.to_dict() if hasattr(f, "to_dict") else f for f in findings]
+    return jsonify({"vulnerabilities": vuln_list, "count": len(vuln_list)})
+
+
+# ---------------------------------------------------------------------------
+# POST routes
+# ---------------------------------------------------------------------------
+
+@app.post("/api/command")
+def command():
+    body = _body()
+    # Only registered tools may run. Raw OS command passthrough was removed:
+    # arbitrary "cmd" strings are no longer accepted under any condition.
+    tool_name = body.get("tool")
+    if not tool_name:
+        return jsonify({"ok": False, "error": "missing 'tool'; raw command execution is not permitted", "code": "TOOL_REQUIRED"})
+    return jsonify(EXEC.execute(
+        tool_name=tool_name,
+        params=body.get("params", {}),
+        run_async=bool(body.get("async")),
+        no_cache=bool(body.get("no_cache")),
+        # Default is the direct in-process path; set "direct": false
+        # to opt into tracked executions (records/async/process mgmt).
+        direct=bool(body.get("direct", True)),
+    ))
+
+
+@app.post("/api/recover")
+def recover():
+    """Run a tool with automatic failure recovery.
+
+    Classifies the failure and retries along the cheapest viable path:
+    reduced scope, backoff, equivalent alternative tool, or stops for a
+    human. Execution still goes through EXEC (one execution path).
+    """
+    body = _body()
+    tool_name = body.get("tool")
+    if not tool_name:
+        return jsonify({"ok": False, "error": "missing 'tool'", "code": "TOOL_REQUIRED"})
+    return jsonify(_run_with_recovery(
+        tool_name,
+        body.get("params", {}),
+        max_attempts=int(body.get("max_attempts", 3)),
+        direct=bool(body.get("direct", True)),
+    ))
+
+
+@app.post("/api/web/<path>")
+def web_lab(path):
+    body = _body()
+    result = _proxy_route(f"/api/web/{path}", body)
+    if result is None:
+        return jsonify({"ok": False, "error": "not found"}), 404
+    return jsonify(result)
+
+
+@app.post("/api/browser/<mode>")
+def browser(mode):
+    body = _body()
+    body["mode"] = mode
+    return jsonify(_browser_route(body))
+
+
+@app.post("/api/attack-chain")
+def attack_chain():
+    return jsonify(_build_attack_chain(_body()))
+
+
+@app.post("/api/file/list")
+def file_list():
+    return jsonify(_sandbox_list(_body()))
+
+
+@app.post("/api/file/read")
+def file_read():
+    return jsonify(_sandbox_read(_body()))
+
+
+@app.post("/api/file/write")
+def file_write():
+    return jsonify(_sandbox_write(_body()))
+
+
+@app.post("/api/python/run")
+def python_run():
+    return jsonify(_sandbox_python(_body()))
+
+
+@app.post("/api/cache/clear")
+def cache_clear():
+    return jsonify({"ok": True, "cleared": EXEC.cache.clear()})
+
+
+@app.post("/api/autonomous")
+def autonomous_start():
+    """Kick off an adaptive autonomous run, or an AI-proposed plan."""
+    body = _body()
+    target = body.get("target")
+    if not target:
+        return jsonify({"ok": False, "error": "target is required", "code": "TARGET_REQUIRED"})
+    run = ORCHESTRATOR.start(
+        target=target,
+        risk_ceiling=body.get("risk_ceiling", "active"),
+        max_steps=int(body.get("max_steps", 20)),
+        run_async=bool(body.get("async", True)),
+        steps=body.get("steps"),
+        strategy=body.get("strategy", "methodology"),
+        objective=body.get("objective", "standard"),
+        direct=bool(body.get("direct", True)),
+    )
+    return jsonify({"ok": True, "run": run.to_dict()})
+
+
+@app.post("/api/plan")
+def plan_propose():
+    """Validate an AI-proposed plan without executing anything."""
+    body = _body()
+    target = body.get("target")
+    if not target:
+        return jsonify({"ok": False, "error": "target is required", "code": "TARGET_REQUIRED"})
+    steps = body.get("steps")
+    if not isinstance(steps, list):
+        return jsonify({"ok": False, "error": "steps must be a list of {tool, params}", "code": "PLAN_REQUIRED"})
+    review = ORCHESTRATOR.review_plan(target, steps, body.get("risk_ceiling", "active"))
+    return jsonify({"ok": True, "plan": review})
+
+
+@app.post("/api/plan/recommend")
+def plan_recommend():
+    body = _body()
+    return jsonify({"ok": True, "plan": ORCHESTRATOR.recommend_plan(
+        body.get("target", ""), body.get("risk_ceiling", "active"))})
+
+
+@app.post("/api/plan/select")
+def plan_select():
+    body = _body()
+    return jsonify({"ok": True, "selection": ORCHESTRATOR.select_plan(
+        body.get("target", ""),
+        body.get("objective", "standard"),
+        body.get("risk_ceiling", "active"))})
+
+
+@app.post("/api/tools/optimize")
+def tools_optimize():
+    body = _body()
+    return jsonify(optimize_preview(
+        body.get("target", ""),
+        body.get("tool", ""),
+        body.get("objective", "standard")))
+
+
+@app.post("/api/executions/<execution_id>/terminate")
+def execution_terminate(execution_id):
+    return jsonify(EXEC.terminate(execution_id))
+
+
+@app.post("/api/intelligence/analyze-target")
+def intelligence_analyze():
+    return jsonify(_analyze_target(_body().get("target", "")))
+
+
+@app.post("/api/intelligence/select-tools")
+def intelligence_select():
+    body = _body()
+    return jsonify(run_agent(ENGINE, "decision", {"target": body.get("target", ""), "intent": body.get("intent", "auto")}))
+
+
+@app.post("/api/intelligence/optimize-parameters")
+def intelligence_optimize():
+    body = _body()
+    return jsonify(run_agent(ENGINE, "optimizer", {"tool": body.get("tool", "")}))
+
+
+@app.post("/api/agents/<name>")
+def agent_run(name):
+    body = _body()
+    if name in ENHANCED_AGENTS:
+        return jsonify(ENHANCED_AGENTS[name].execute(ENGINE, body))
+    if offensive_agent_blocked(name):
+        return jsonify({
+            "ok": False, "code": "OFFENSIVE_AGENT_DISABLED",
+            "error": (f"agent '{name}' takes attack-side actions outside the "
+                      "execution gate; set NEXHUNTER_INTRUSIVE_TOOLS_ENABLED=true to allow"),
+        })
+    return jsonify(run_agent(ENGINE, name, body))
+
+
+@app.post("/api/flow/bugbounty")
+def flow_bugbounty():
+    body = _body()
+    return jsonify(run_agent(ENGINE, "bugbounty", {"target": body.get("target", ""), "phases": body.get("phases", "all")}))
+
+
+@app.post("/api/flow/bugbounty-pro")
+def flow_bugbounty_pro():
+    return jsonify(ENHANCED_AGENTS["bugbounty_pro"].execute(ENGINE, _body()))
+
+
+@app.post("/api/flow/ctf")
+def flow_ctf():
+    body = _body()
+    return jsonify(run_agent(ENGINE, "ctf", {"target": body.get("target", ""), "category": body.get("category", "web"), "file": body.get("file", "")}))
+
+
+@app.post("/api/intelligence/osint")
+def intelligence_osint():
+    return jsonify(ENHANCED_AGENTS["osint"].execute(ENGINE, _body()))
+
+
+@app.post("/api/intelligence/vulnerability-analysis")
+def intelligence_vuln_analysis():
+    return jsonify(ENHANCED_AGENTS["vuln_analyzer"].execute(ENGINE, _body()))
+
+
+@app.post("/api/intelligence/threat-assessment")
+def intelligence_threat():
+    return jsonify(ENHANCED_AGENTS["threat_intel"].execute(ENGINE, _body()))
+
+
+@app.post("/api/tools/ctf-solver")
+def tools_ctf_solver():
+    return jsonify(ENHANCED_AGENTS["ctf_solver"].execute(ENGINE, _body()))
+
+
+@app.post("/api/processes/terminate/<pid>")
+def process_terminate_id(pid):
+    return jsonify(EXEC.terminate_process(pid))
+
+
+@app.post("/api/processes/terminate")
+def process_terminate():
+    body = _body()
+    return jsonify(EXEC.terminate_process(body.get("pid") or body.get("execution_id", "")))
+
+
+@app.post("/api/processes/pause/<pid>")
+def process_pause_id(pid):
+    return jsonify(EXEC.pause_process(pid))
+
+
+@app.post("/api/processes/pause")
+def process_pause():
+    body = _body()
+    return jsonify(EXEC.pause_process(body.get("pid") or body.get("execution_id", "")))
+
+
+@app.post("/api/processes/resume/<pid>")
+def process_resume_id(pid):
+    return jsonify(EXEC.resume_process(pid))
+
+
+@app.post("/api/processes/resume")
+def process_resume():
+    body = _body()
+    return jsonify(EXEC.resume_process(body.get("pid") or body.get("execution_id", "")))
+
+
+@app.post("/api/probe")
+def api_probe():
+    return jsonify(ENGINE.probe(_body().get("target", "")))
+
+
+@app.post("/api/portscan")
+def api_portscan():
+    body = _body()
+    return jsonify(ENGINE.portscan(body.get("target", ""), body.get("ports", "")))
+
+
+@app.post("/api/webscan")
+def api_webscan():
+    return jsonify(ENGINE.webscan(_body().get("target", "")))
+
+
+@app.post("/api/recon")
+def api_recon():
+    return jsonify(ENGINE.recon(_body().get("domain", "")))
+
+
+@app.post("/api/assess")
+def api_assess():
+    return jsonify(ENGINE.assess(_body().get("target", "")))
+
+
+@app.post("/api/report")
+def report():
+    return jsonify({"report": ENGINE.report(_body().get("fmt", "markdown"))})
+
+
+@app.post("/api/clear")
+def clear():
+    ENGINE.findings.clear()
+    return jsonify({"ok": True})
+
+
+@app.post("/api/visual/vulnerability-card")
+def visual_vulnerability_card():
+    body = _body()
+    return jsonify(VulnerabilityCard(
+        title=body.get("title", "Unknown"),
+        severity=body.get("severity", "info"),
+        endpoint=body.get("endpoint", ""),
+        impact=body.get("impact", ""),
+        remediation=body.get("remediation", ""),
+        vuln_type=body.get("type", "Unknown"),
+        cvss_score=body.get("cvss_score"),
+        poc=body.get("poc", ""),
+    ).to_dict())
+
+
+@app.post("/api/visual/vulnerabilities")
+def visual_vulnerabilities_post():
+    return jsonify({
+        "vulnerabilities": [f.to_dict() if hasattr(f, "to_dict") else f for f in ENGINE.findings],
+        "stats": {"total": len(ENGINE.findings), "critical": sum(1 for f in ENGINE.findings if getattr(f, "severity", "") == "critical")},
+    })
+
+
+@app.errorhandler(413)
+def _too_large(_exc):
+    return jsonify({"ok": False, "error": "request body too large (max 5 MiB)"}), 413
+
+
+@app.errorhandler(404)
+def _not_found(_exc):
+    return jsonify({"error": "not found"}), 404
+
+
+@app.errorhandler(500)
+def _server_error(exc):
+    log.exception("unhandled error on %s", request.path)
+    return jsonify({"ok": False, "error": str(exc)}), 500
 
 
 def selftest():
@@ -799,8 +998,10 @@ def main():
         ))
 
     log.info("NexHunter server ready on http://%s:%s (Ctrl+C to stop)", host, port)
+    # threaded=True keeps the concurrency model of the previous
+    # ThreadingHTTPServer; the reloader stays off so the process is ours.
     try:
-        ThreadingHTTPServer((host, port), Handler).serve_forever()
+        app.run(host=host, port=port, threaded=True, use_reloader=False)
     except KeyboardInterrupt:
         log.info("Shutting down.")
     return 0
