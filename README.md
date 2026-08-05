@@ -10,7 +10,9 @@
 
 ```bash
 # Install
-git clone <repo-url> && cd nexhunter && pip install -r requirements.txt
+git clone https://github.com/Arseno25/nexhunter.git
+cd nexhunter
+pip install -r requirements.txt
 
 # Run server
 python -m nexhunter.api.server --port 8888
@@ -29,14 +31,14 @@ python nexhunter.py assess https://example.com
 | **Security Tools** | 164 integrated tools |
 | **Workflows** | 9 assessment types (73 phases) |
 | **API** | 30+ REST endpoints |
-| **MCP** | 184 tools for Claude |
+| **MCP** | 184 tools for any AI model |
 | **Testing** | 12/12 tests (100% coverage) |
 
 ---
 
-## 📋 Setup & Usage
+## 📋 Usage
 
-### Option 1: CLI
+### CLI
 
 ```bash
 python nexhunter.py assess https://example.com           # Full assessment
@@ -47,21 +49,37 @@ python nexhunter.py bugbounty-pro example.com            # Bug bounty workflow
 python nexhunter.py dashboard                            # View results
 ```
 
-### Option 2: REST API
+### REST API
 
 ```bash
-# Start server (terminal 1)
+# Start server
 python -m nexhunter.api.server --port 8888
 
-# Use API (terminal 2)
+# Full assessment
 curl -X POST http://localhost:8888/api/assess \
   -H "Content-Type: application/json" \
   -d '{"target": "https://example.com"}'
+
+# Get results
+curl http://localhost:8888/api/findings
+curl http://localhost:8888/api/visual/dashboard
 ```
 
-### Option 3: MCP (Claude Integration)
+### MCP - Universal (Claude, Grok, Gemini, etc)
 
-**Step 1:** Configure MCP in `~/.claude/config.json`
+**Step 1:** Start Server
+```bash
+python -m nexhunter.api.server --port 8888
+```
+
+**Step 2:** Start MCP Bridge
+```bash
+python -m nexhunter.api.mcp --server http://127.0.0.1:8888
+```
+
+**Step 3:** Integrate with AI Model
+
+**Claude Desktop** - Edit `~/.claude/config.json`
 ```json
 {
   "mcpServers": {
@@ -74,103 +92,81 @@ curl -X POST http://localhost:8888/api/assess \
 }
 ```
 
-**Step 2:** Restart Claude Desktop
+**Grok/Other AI Models** - Use stdin/stdout protocol
+```bash
+# Start MCP server
+python -m nexhunter.api.mcp --server http://127.0.0.1:8888
 
-**Step 3:** Use in Claude
+# MCP responds with available tools
+# AI model parses and uses tools via JSON-RPC
 ```
-"Scan example.com with nexhunter"
-→ Claude automatically uses MCP tools
-→ assess(), probe(), osint(), or any of 164 tools
+
+**Generic MCP Client**
+```python
+import subprocess
+import json
+
+# Start MCP bridge
+proc = subprocess.Popen(
+    ["python", "-m", "nexhunter.api.mcp", "--server", "http://127.0.0.1:8888"],
+    stdin=subprocess.PIPE,
+    stdout=subprocess.PIPE,
+    text=True
+)
+
+# Send tool request
+request = {
+    "jsonrpc": "2.0",
+    "method": "tools/call",
+    "params": {"name": "assess", "arguments": {"target": "example.com"}},
+    "id": 1
+}
+
+proc.stdin.write(json.dumps(request) + "\n")
+response = proc.stdout.readline()
+print(json.loads(response))
 ```
 
 ---
 
-## 🛠️ Available Tools
+## 🛠️ Available Tools (164)
 
-| Category | Tools |
-|----------|-------|
-| **Reconnaissance** | nmap, masscan, rustscan, subfinder, amass, shodan, dns, whois (11) |
-| **Web Scanning** | nuclei, ffuf, gobuster, sqlmap, nikto, dalfox, burp, zap (13) |
-| **Network** | aircrack, tcpdump, tshark, enum4linux, smbmap, ldapsearch (15) |
-| **Cryptography** | hashid, john, hashcat, openssl, testssl (5) |
-| **Forensics** | volatility, sleuthkit, autopsy, binwalk, exiftool (8) |
-| **Binary Analysis** | ghidra, radare2, objdump, readelf, checksec (10) |
-| **Cloud/DevOps** | kube-bench, trivy, docker, kubectl, aws-cli, gcloud, semgrep (11) |
-| **Code Analysis** | semgrep, bandit, pylint, sonarqube, checkmarx (5) |
-| **Exploitation** | metasploit, empire, cobalt-strike, havoc, sliver (6) |
-| **Other** | 80+ tools (mobile, IDS/IPS, secrets, compliance, etc) |
-
-**Total: 164 Tools**
+| Category | Count | Tools |
+|----------|-------|-------|
+| **Reconnaissance** | 11 | nmap, masscan, rustscan, subfinder, amass, shodan, dns, whois |
+| **Web Scanning** | 13 | nuclei, ffuf, gobuster, sqlmap, nikto, dalfox, burp, zap |
+| **Network** | 15 | aircrack, tcpdump, tshark, enum4linux, smbmap, ldapsearch |
+| **Cryptography** | 5 | hashid, john, hashcat, openssl, testssl |
+| **Forensics** | 8 | volatility, sleuthkit, autopsy, binwalk, exiftool |
+| **Binary Analysis** | 10 | ghidra, radare2, objdump, readelf, checksec |
+| **Cloud/DevOps** | 11 | kube-bench, trivy, docker, kubectl, aws-cli, gcloud |
+| **Code Analysis** | 5 | semgrep, bandit, pylint, sonarqube, checkmarx |
+| **Exploitation** | 6 | metasploit, empire, cobalt-strike, havoc, sliver |
+| **Other** | 80+ | mobile, IDS/IPS, secrets, compliance, evasion, etc |
 
 ---
 
-## 🔄 Assessment Workflows
+## 🔄 Workflows (9 Types)
 
-### Bug Bounty (10 phases)
 ```
-Reconnaissance → Subdomain Enum → Port Scan → Service Detect 
-→ Web Scan → Auth Test → API Test → Business Logic 
-→ Privilege Escalation → Data Exposure
-```
-
-### Penetration Testing (8 phases)
-```
-Scoping → Reconnaissance → Scanning → Enumeration 
-→ Vulnerability Assessment → Exploitation → Post-Exploitation → Reporting
-```
-
-### API Security (10 phases)
-```
-API Discovery → Documentation → Authentication → Authorization 
-→ Input Validation → Rate Limiting → Data Exposure 
-→ Error Handling → Versioning → Security Headers
-```
-
-### Cloud Security (8 phases)
-```
-Inventory → IAM Review → Network Segmentation → Encryption 
-→ Logging → Backup & Recovery → Compliance → Misconfiguration Detection
-```
-
-### Additional Workflows
+Bug Bounty (10)      → Reconnaissance → Subdomain → Port Scan → Service Detect → Web Scan
+Pentest (8)          → Scoping → Reconnaissance → Scanning → Exploitation → Reporting
+API Security (10)    → Discovery → Auth → Input Validation → Rate Limiting → Headers
+Cloud Security (8)   → Inventory → IAM → Network → Encryption → Compliance
 Red Team (6) • Security Audit (7) • Mobile (8) • Supply Chain (7) • DevSecOps (8)
+```
 
 ---
 
-## 🔌 API Reference
+## 🔌 API Endpoints
 
-### Assessment Endpoints
-```
-POST /api/assess                    Full assessment
-POST /api/probe                     Quick HTTP probe
-POST /api/portscan                  Port scan
-POST /api/webscan                   Web vulnerabilities
-POST /api/recon                     Domain reconnaissance
-```
+**Assessment:** `/api/assess`, `/api/probe`, `/api/portscan`, `/api/webscan`, `/api/recon`
 
-### Workflow Endpoints
-```
-POST /api/flow/bugbounty-pro        Bug bounty workflow
-POST /api/flow/ctf                  CTF assessment
-POST /api/intelligence/osint        OSINT intelligence
-POST /api/intelligence/...          Threat intel, vulnerability analysis
-```
+**Workflows:** `/api/flow/bugbounty-pro`, `/api/flow/ctf`, `/api/intelligence/osint`, `/api/intelligence/vulnerability-analysis`
 
-### Results Endpoints
-```
-GET  /api/findings                  All findings
-POST /api/report                    Generate report
-GET  /api/visual/dashboard          Dashboard metrics
-GET  /api/visual/vulnerabilities    Vulnerability list
-```
+**Results:** `/api/findings`, `/api/report`, `/api/visual/dashboard`, `/api/visual/vulnerabilities`
 
-### System Endpoints
-```
-GET  /api/health                    Server status
-GET  /api/telemetry                 Performance metrics
-GET  /api/cache/stats               Cache statistics
-GET  /api/processes/list            Active processes
-```
+**System:** `/api/health`, `/api/telemetry`, `/api/cache/stats`, `/api/processes/list`
 
 ---
 
@@ -179,71 +175,23 @@ GET  /api/processes/list            Active processes
 **File:** `core/config.py`
 
 ```python
-# Caching
 CACHE_MAX = 128                     # LRU cache size
-FINDING_DEDUP_ENABLED = True        # Duplicate prevention
-
-# Execution
 MAX_PARALLEL_WORKERS = 4            # Concurrent tools
 RATE_LIMIT_ENABLED = True           # Request throttling
+FINDING_DEDUP_ENABLED = True        # Duplicate prevention
 
-# Tool Timeouts
 TOOL_TIMEOUTS = {
     "nmap_scan": 300,
     "nuclei_scan": 600,
-    # ... per-tool configuration
 }
 ```
-
----
-
-## 📁 Project Structure
-
-```
-nexhunter/
-├── agents/              18 AI agents
-├── api/                 Server + endpoints
-├── cli/                 Command-line interface
-├── core/                Engine + tools + config
-├── workflows/           9 assessment workflows
-├── tests/               Test suite (100%)
-├── docs/                Documentation
-└── config/              MCP configuration
-```
-
-**[Full Structure](docs/INDEX.md)**
-
----
-
-## 📚 Documentation
-
-| Document | Purpose |
-|----------|---------|
-| [README](docs/README.md) | Complete reference |
-| [TOOLS](docs/TOOLS.md) | All 164 tools reference |
-| [WORKFLOWS](WORKFLOWS.md) | Workflow specifications |
-| [MCP Setup](docs/MCP_SETUP.md) | Claude integration guide |
-| [Production Ready](docs/PRODUCTION_READINESS.md) | Deployment guide |
-
----
-
-## ✅ Testing & Quality
-
-```bash
-python nexhunter/tests/test_features.py
-```
-
-**Results:** 12/12 tests passing (100%)
-- OSINT, Vulnerability Analysis, Bug Bounty
-- CTF, Threat Intelligence, Workflows
-- All Agents, Integration Scenarios
 
 ---
 
 ## 🔐 Security
 
 ✓ Authorization-first  
-✓ XXE protection (defusedxml)  
+✓ XXE protection  
 ✓ Safe command execution  
 ✓ Input validation  
 ✓ Rate limiting  
@@ -253,14 +201,13 @@ python nexhunter/tests/test_features.py
 
 ## 📊 Stats
 
-| Metric | Count |
+| Metric | Value |
 |--------|-------|
 | AI Agents | 18 |
 | Security Tools | 164 |
 | Workflows | 9 |
 | Phases | 73 |
 | API Endpoints | 30+ |
-| CLI Commands | 15+ |
 | MCP Tools | 184 |
 | Test Coverage | 100% |
 
@@ -268,33 +215,14 @@ python nexhunter/tests/test_features.py
 
 ## 📦 Requirements
 
-```
-Python 3.8+
-requests >= 2.28.0
-urllib3 >= 1.26.0
-```
-
-Optional: nmap, nuclei, ffuf, gobuster, sqlmap, nikto
-
----
-
-## 🚀 Deployment Ready
-
-- ✓ Production-approved (9.7/10 score)
-- ✓ Clean architecture
-- ✓ Full test coverage
-- ✓ Comprehensive documentation
-- ✓ MCP integration ready
-- ✓ Cross-platform support
+Python 3.8+, requests >= 2.28.0, urllib3 >= 1.26.0
 
 ---
 
 <div align="center">
 
-**NexHunter v3.1.0**
+**NexHunter v3.1.0** — Security Assessment Platform
 
-Security Assessment Platform for Professionals
-
-[Docs](docs/README.md) • [Tools](docs/TOOLS.md) • [MCP](docs/MCP_SETUP.md) • [Deploy](docs/PRODUCTION_READINESS.md)
+GitHub: https://github.com/Arseno25/nexhunter
 
 </div>
