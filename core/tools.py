@@ -5,6 +5,7 @@ import json
 import re
 import shutil
 import subprocess
+import sys
 from defusedxml import ElementTree as ET
 from dataclasses import dataclass
 from typing import Any
@@ -207,6 +208,10 @@ class ToolSpec:
     # when the binary alone does not prove the tool can run -- e.g. a wrapper
     # that shells out to Chrome or imports an optional library at runtime.
     availability_check: Callable | None = None
+    # Execute through the OS shell instead of as an argv list. The sole
+    # sanctioned site is shell_command, whose single string IS the command.
+    # The runner honors this flag; every other tool stays argv-only.
+    shell: bool = False
 
     def __post_init__(self):
         if self.timeout == DEFAULT_TOOL_TIMEOUT and self.name in TOOL_TIMEOUTS:
@@ -265,6 +270,7 @@ class ToolSpec:
             "risk_level": self.risk_level,
             "maturity": self.maturity,
             "cacheable": self.cacheable,
+            "shell": self.shell,
             "timeout_s": self.timeout,
             "parameters": {
                 spec.name: spec.describe() for spec in (self.param_specs or ())
@@ -1560,6 +1566,44 @@ _tool_specs = {
         name="osv_scanner", binary="osv-scanner", description="OSV vulnerability scanner for dependency manifests",
         params={"path": None}, timeout=300,
         builder=lambda p: ["osv-scanner", "-r", p["path"]]),
+
+    # ==================== FREE-FORM EXECUTION (HexStrike-style) ====================
+    # Two deliberately free-form tools. Every other tool validates values and
+    # builds a fixed argv; these take an entire payload string and execute it.
+    # That is the exact capability a HexStrike-style operator wants, kept inside
+    # the registry: intrusive risk (never auto-executed, recorded, redacted,
+    # timeout-capped), absent from every default profile, and absent from
+    # autonomous runs. shell_command additionally passes the string through the
+    # OS shell, so metacharacters are live.
+    "shell_command": ToolSpec(  # noqa: S604 - sanctioned: the registry-gated freeform flag, withheld from autonomy
+        name="shell_command", binary="sh",
+        description="Run a free-form command string through the system shell "
+                    "(HexStrike-style arbitrary command execution). Pipes, "
+                    "redirects, and chaining are live. Recorded, redacted, "
+                    "timeout-capped, intrusive, and withheld from autonomous "
+                    "runs. Authorized targets only.",
+        params={"command": None}, timeout=120, cacheable=False,
+        category="utility", risk_level="intrusive", shell=True,
+        availability_check=lambda: True,
+        param_specs=(
+            P.ParamSpec(name="command", type=P.ParamType.TEXT, required=True,
+                        description="The shell command string to execute"),
+        ),
+        builder=lambda p: [p["command"]]),
+    "python_script": ToolSpec(
+        name="python_script", binary="python",
+        description="Run a free-form Python snippet with the server's "
+                    "interpreter (HexStrike-style custom scripting). Recorded, "
+                    "redacted, timeout-capped, intrusive, and withheld from "
+                    "autonomous runs. Authorized targets only.",
+        params={"code": None}, timeout=120, cacheable=False,
+        category="utility", risk_level="intrusive",
+        availability_check=lambda: True,
+        param_specs=(
+            P.ParamSpec(name="code", type=P.ParamType.TEXT, required=True,
+                        description="Python source code to execute"),
+        ),
+        builder=lambda p: [sys.executable, "-c", p["code"]]),
 }
 
 def _parse_nmap_xml(text):

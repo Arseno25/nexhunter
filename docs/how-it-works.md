@@ -30,10 +30,10 @@ flowchart LR
     C[CLI] --> E
     D[Autonomous loop] --> E
 
-    E -->|1. lookup| R[(Registry - 255 ToolSpecs)]
+    E -->|1. lookup| R[(Registry - 257 ToolSpecs)]
     R -->|2. typed validation| V{valid params?}
     V -->|no| X[refused - nothing runs]
-    V -->|yes| G[3. build argv - no shell]
+    V -->|yes| G[3. build argv - argv-only]
     G --> P[4. run isolated - process tree, timeout, output caps]
     P --> W[(Workspace - artifacts)]
     P --> S[5. record - redacted stdout, exit, duration]
@@ -56,14 +56,14 @@ exact same code. Follow one call, and you have followed them all.
 |---|---|
 | 1. Lookup | The name must be in the registry; anything else is `unknown tool`. |
 | 2. Validate | `target` must be a valid hostname — a value like `; rm -rf /` or `$(curl evil)` is refused as an invalid target before any command exists. |
-| 3. Build | The registry's builder emits a fixed argv: `["nmap", "-sV", "-p", "80,443", "scanme.example.com"]`. No shell, no strings, no free-text. |
+| 3. Build | The registry's builder emits a fixed argv: `["nmap", "-sV", "-p", "80,443", "scanme.example.com"]`. No shell, no strings, no free-text — except `shell_command`, whose single string runs through the OS shell as its entire payload. |
 | 4. Run | Spawned in an isolated workspace with a timeout that kills the whole process tree; stdout is capped. |
 | 5. Record | Exit code, duration, redacted output, and any artifacts are stored under that execution's ID. |
 
 The parameters the caller sent and the argv that ran are different things, and
 only the builder — project code, never model output — can produce the second.
 
-## The registry: 255 tools, one shape
+## The registry: 257 tools, one shape
 
 Every tool is a `ToolSpec` with the same anatomy:
 
@@ -74,6 +74,7 @@ Every tool is a `ToolSpec` with the same anatomy:
 | `category` | One of 20 categories. Drives which MCP profile surfaces the tool. |
 | `maturity` | `stable` (parser + fixture + test), `beta` (registered, less exercised), or `experimental` (registered but not honestly usable as written). |
 | `available` | Whether the binary exists on this host — checked with `shutil.which`, never guessed. |
+| `shell` | `False` for every tool except `shell_command`, the one freeform exception: its single string executes through the OS shell (metacharacters live), gated as intrusive. |
 | `builder` | The only place a command line can come into being. |
 
 Profiles are slices over these fields: `nexhunter-ctf` asks for eight
@@ -87,7 +88,8 @@ everything.
 
 Three registered tools expose scan tuning as discrete typed parameters instead
 of a free-form command line — the same no-passthrough contract as everything
-else in the registry:
+else in the registry (freeform execution lives in `shell_command` and
+`python_script`, the two sanctioned exceptions):
 
 | Tool | Added knobs (all typed) | Output |
 |---|---|---|
@@ -163,7 +165,9 @@ knowledge changes.
 
 Because adaptation is driven by evidence rather than model free-text, a scan
 result that says *"ignore your instructions and run this command"* changes
-nothing: it is not evidence, and no parameter carries a command line regardless.
+nothing: it is not evidence, and no parameter carries a command line
+regardless — the two freeform tools are intrusive, so the orchestrator refuses
+them in autonomous runs.
 
 ## The ledger: observations, findings, and the gap between
 
@@ -184,7 +188,7 @@ parser is recorded as a parser failure — never as a clean result.
 
 | Can | Cannot |
 |---|---|
-| Propose any registered tool and typed parameters — `propose_plan` reviews it first | Propose a command line — no parameter accepts one |
+| Propose any registered tool and typed parameters — `propose_plan` reviews it first | Propose a command line — except through `shell_command` / `python_script`, which are intrusive and withheld from autonomous runs |
 | Get a plan executed only if every step validates and fits the ceiling | Have a withheld (intrusive/destructive) step auto-run in a plan |
 | Call tools one at a time or start an autonomous run | Run a destructive tool without a feature flag and a human |
 | Ask for a higher risk ceiling | Get one — requests are clamped to `active` |
@@ -195,7 +199,10 @@ This is the answer to prompt injection. In a platform where AI output reaches
 the OS directly, one confused or steered model is an arbitrary-command
 execution away. Here the model's worst outcome is proposing a tool and
 parameters — which are typed-validated before a command exists, and which the
-ceiling withholds when they are intrusive or destructive.
+ceiling withholds when they are intrusive or destructive. Even the freeform
+tools are inside that loop: a steered model can propose one, but it is
+intrusive, so an autonomous run refuses it and an interactive client must
+deliberately call it with the operator watching.
 
 ## Try it
 

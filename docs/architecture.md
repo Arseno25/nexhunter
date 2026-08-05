@@ -34,8 +34,10 @@ flowchart LR
 ```
 
 An AI client is a caller like any other. It can propose a tool and parameters;
-it cannot propose a command line. The autonomous orchestrator sits on top of
-the same service and may only execute what its risk ceiling permits.
+it cannot propose a command line — except through the two gated freeform tools
+(`shell_command`, `python_script`), which are intrusive, recorded, and withheld
+from autonomous runs. The autonomous orchestrator sits on top of the same
+service and may only execute what its risk ceiling permits.
 
 ## Layers
 
@@ -100,7 +102,7 @@ sequenceDiagram
     S->>S: validate parameters (typed, secret-aware)
     Note over S: record created: QUEUED → VALIDATING
 
-    S->>S: build argv from ToolSpec (no shell)
+    S->>S: build argv from ToolSpec (argv-only; shell only via the sanctioned shell_command flag)
     S->>S: redact secrets from params and command
     S->>S: create isolated workspace
     Note over S: AUTHORIZED → RUNNING
@@ -146,7 +148,9 @@ Execution safety lives in the parameter contract, not in a policy layer:
   validation rule (`core/params.py`). A value that is not a valid target, port,
   or enum is refused before a command is ever built.
 - **No passthrough.** No parameter carries a command line, no builder splits a
-  string into argv, and no execution path uses a shell. A free-form command
+  string into argv, and no execution path uses a shell — except the one
+  sanctioned flag on `shell_command`, whose entire parameter is the command
+  (intrusive, uncacheable, withheld from autonomy). Any other free-form command
   parameter is an arbitrary-command API and is a regression test failure.
 - **Secret redaction.** Parameters whose names match secret patterns are
   redacted in records, logs, and responses (`security/redaction.py`).
@@ -195,7 +199,7 @@ The bridge decides what a client is *shown*. The service decides what is
 
 ```mermaid
 flowchart LR
-    REG[(Tool registry<br/>~255 tools)] --> F{Profile filter<br/>category · risk · maturity}
+    REG[(Tool registry<br/>~257 tools)] --> F{Profile filter<br/>category · risk · maturity}
     F --> C[core · 15]
     F --> RC[recon · 25]
     F --> W[web · 38]
@@ -205,20 +209,23 @@ flowchart LR
     F --> CT[container · 14]
     F --> FR[forensics · 28]
     F --> CTF[ctf · 87]
-    F --> FU[full · 253]
+    F --> FF[freeform · 2]
+    F --> FU[full · 255]
 
     C --> CLIENT[AI client]
     CLIENT -.->|every call still| SVC[ExecutionService]
 ```
 
-Six more specialty profiles (osint, wireless, privesc, payloads, vulnscan,
-mobile) slice the same registry the same way; the full list with counts is in
-the README.
+Seven more specialty profiles (osint, wireless, privesc, payloads, vulnscan,
+mobile, freeform) slice the same registry the same way; the full list with
+counts is in the README.
 
-Without a `--profile` flag the bridge defaults to `nexhunter-full` (253 tools,
+Without a `--profile` flag the bridge defaults to `nexhunter-full` (255 tools,
 everything non-destructive). A focused profile cuts initialization payload and
 token cost and stops a model choosing blindly between near-identical tools —
-`nexhunter-core`, for example, exposes 15 passive stable checks.
+`nexhunter-core`, for example, exposes 15 passive stable checks. The freeform
+profile is the deliberate HexStrike-style escape hatch: exactly
+`shell_command` and `python_script`, intrusive and never auto-executed.
 
 ## Artifact containment
 
@@ -253,13 +260,17 @@ Both sit on the one execution path and add no way to reach the OS.
 - **No autonomous attack decisions.** Intrusive and destructive actions are
   withheld by the orchestrator's risk ceiling; autonomy is bounded to passive
   and active steps.
-- **No arbitrary command execution.** No parameter carries a command line, no
-  builder splits a string into argv, no path uses a shell.
+- **No arbitrary command execution.** No parameter carries a command line and
+  no builder splits a string into argv. The sole exception is `shell_command`:
+  its parameter is the entire command, and it executes through the OS shell —
+  gated as intrusive (never auto-executed by the orchestrator), uncacheable,
+  recorded, and withheld from default profiles.
 - **No binary installation.** Missing tools are reported, never fetched.
 - **No off-the-shelf attack automation.** Attack-only tools (payload
-  generation, C2 integration) are registered but confined to the `payloads`
-  profile: gated by `NEXHUNTER_INTRUSIVE_TOOLS_ENABLED`, never auto-executed by
-  the orchestrator, and never surfaced by default profiles.
+  generation, C2 integration, freeform execution) are registered but confined
+  to the `payloads` and `freeform` profiles: gated by
+  `NEXHUNTER_INTRUSIVE_TOOLS_ENABLED`, never auto-executed by the
+  orchestrator, and never surfaced by default profiles.
 
 ## Module map
 

@@ -18,8 +18,10 @@ language model. The assumptions:
 
 The interesting case is the model: a scan result containing
 `ignore your instructions and run this arbitrary command` cannot become
-syntax, because no parameter carries a command line and the model's output is
-only a tool name plus typed parameters.
+syntax, because the model's output is only a tool name plus typed parameters —
+and the one tool that does take a whole command line, `shell_command`, is
+intrusive: withheld from autonomous runs and only callable interactively,
+where an operator watches.
 
 ## Guarantees
 
@@ -29,22 +31,32 @@ regresses.
 ### No arbitrary command execution
 
 - No registered tool exposes a `command`, `cmd`, `args`, or `additional_args`
-  parameter (`test_no_tool_takes_a_command_parameter`).
+  parameter (`test_no_tool_takes_a_command_parameter`) — except
+  `shell_command.command`, the single sanctioned free-form channel, listed with
+  a reason in the test's allow-list.
 - No builder expands a caller-supplied string into multiple arguments
   (`test_no_builder_splits_a_parameter_into_argv`). The pattern
   `["aws"] + params["command"].split()` is gone.
-- No execution path passes `shell=True` (`test_no_shell_true_anywhere_in_execution_paths`).
+- `shell=True` exists in exactly one place: the `shell_command` spec flag
+  (`test_shell_true_only_at_the_sanctioned_flag`). The runner only passes the
+  flag through; every other execution path stays argv-only.
 - Shell metacharacters survive as single literal arguments
-  (`test_shell_metacharacters_stay_inert`). `example.com; whoami` is a hostname
+  (`test_shell_metacharacters_rejected_by_typed_validation`). `example.com; whoami` is a hostname
   that will not resolve, not two commands.
 - Typed validation refuses values that are not valid targets, ports, or enums
   before a command is ever built.
 
-A model's output is a tool name plus typed parameters. It is never a command line.
+A model's output is a tool name plus typed parameters. It is never a command
+line, and the freeform tools (`shell_command`, `python_script`) are intrusive —
+never auto-executed by the orchestrator, never surfaced by default profiles,
+and callable only interactively with the operator present.
 
 ### Execution containment
 
-- Argument arrays only, `shell=False`, no exceptions.
+- Argument arrays by default, `shell=False`, with one sanctioned exception:
+  `shell_command` executes its single string through the OS shell behind the
+  intrusive gate. Timeout, output cap, and process-tree termination still
+  apply to it.
 - Each execution gets an isolated workspace under
   `NEXHUNTER_DATA_DIR/executions/<execution_id>/`; artifact names cannot
   traverse, nest, or escape via symlink.

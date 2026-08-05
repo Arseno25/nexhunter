@@ -30,7 +30,7 @@ Binds to `127.0.0.1` by default. See the production configuration section of
 
 ## 2. Pick a profile
 
-Listing all ~255 registered tools to every client makes for a large
+Listing all ~257 registered tools to every client makes for a large
 initialization payload, a large token cost on every session, and a model
 choosing between near-identical tools with no basis to pick. A profile narrows
 that to one job.
@@ -56,6 +56,7 @@ python -m nexhunter.api.mcp --list-profiles
 | `nexhunter-vulnscan` | Vulnerability scanners and network IDS tooling |
 | `nexhunter-mobile` | APK inspection, decompilation, runtime exploration |
 | `nexhunter-ctf` | One-stop CTF profile: Web Exploitation, Cryptography, Reverse Engineering & Pwn, Forensics, OSINT |
+| `nexhunter-freeform` | Raw shell commands and Python snippets (HexStrike-style). Intrusive; never auto-executed in autonomous runs |
 | `nexhunter-full` | **Default (no `--profile`).** Every non-destructive tool. Large payload; prefer a focused profile when you know the job |
 
 No profile lists a destructive tool. Reaching one takes explicit, separately
@@ -110,7 +111,8 @@ without spending a tool call:
 ## What the model cannot do
 
 - **Run an arbitrary command.** There is no command parameter anywhere in the
-  registry, and no execution path uses a shell. Model output is a tool name
+  registry except the sanctioned `shell_command` — intrusive, withheld from
+  autonomous runs, and off every default profile. Model output is a tool name
   plus typed parameters; it is never a command line.
 - **Send invalid parameters.** Values are type-checked server-side; a value
   that is not a valid target, port, or enum is refused before a command is

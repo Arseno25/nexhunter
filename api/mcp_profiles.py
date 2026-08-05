@@ -139,6 +139,14 @@ PROFILES: dict[str, Profile] = {
         categories=("ctf", "crypto", "binary", "forensics", "osint", "web", "api"),
         risk_levels=("passive", "active", "intrusive"),
     ),
+    "nexhunter-freeform": Profile(
+        name="nexhunter-freeform",
+        description="Free-form execution (HexStrike-style): raw shell commands and "
+                    "Python snippets, exactly as typed. Intrusive tools; recorded "
+                    "and never auto-executed in autonomous runs.",
+        categories=("utility",),
+        risk_levels=("intrusive",),
+    ),
     "nexhunter-full": Profile(
         name="nexhunter-full",
         description="Every non-destructive registered tool. Large payload; prefer a "

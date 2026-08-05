@@ -7,7 +7,7 @@
 
   <p>Safe orchestration of security tools for <em>authorized</em> assessments.</p>
 
-![Version](https://img.shields.io/badge/version-1.0.0-blue) ![Python](https://img.shields.io/badge/python-3.10%2B-green) ![Tests](https://img.shields.io/badge/tests-317%20passing-green)
+![Version](https://img.shields.io/badge/version-1.0.0-blue) ![Python](https://img.shields.io/badge/python-3.10%2B-green) ![Tests](https://img.shields.io/badge/tests-327%20passing-green)
 </div>
 
 ---
@@ -24,18 +24,21 @@ does not implement scanners — it validates a request, runs it safely in an
 isolated workspace, and records what happened.
 
 The distinguishing property: **an AI client is a caller like any other.** It can
-propose a tool and its parameters. It cannot propose a command line, and the
-autonomous loop cannot escalate its own risk ceiling.
+propose a tool and its parameters. It cannot propose a command line — except
+through `shell_command` and `python_script`, the two explicitly gated freeform
+tools (intrusive risk, withheld from autonomous runs), and the autonomous loop
+cannot escalate its own risk ceiling.
 
 ## Highlights
 
 - **One execution path.** REST, MCP, CLI, and the autonomous loop all walk the
   same code: lookup → typed validation → build argv → isolated run → record.
-- **No arbitrary commands.** No tool takes a command parameter; argv is built
-  from the registry; no path uses a shell. A regression suite enforces it.
+- **No arbitrary commands.** No tool takes a command parameter — except
+  `shell_command`, the one sanctioned free-form channel (intrusive, recorded,
+  withheld from autonomy). A regression suite enforces the rest.
 - **Bounded autonomy.** The orchestrator's risk ceiling is clamped to `active`;
   intrusive and destructive tools are withheld for human approval.
-- **Honest registry.** 255 tools, each tagged with a maturity level that is
+- **Honest registry.** 257 tools, each tagged with a maturity level that is
   asserted, never guessed — stub tools are labelled `experimental`, not sold as
   working capability.
 - **Browser engine.** Selenium-backed page analysis (tech fingerprint, security
@@ -55,7 +58,7 @@ flowchart LR
     B[MCP / AI client] --> E
     C[CLI] --> E
     D[Autonomous loop] --> E
-    E --> R[Registry - 255 tools]
+    E --> R[Registry - 257 tools]
     E --> G[validate + build argv]
     E --> S[run isolated + record]
     style E fill:#0e7490,stroke:#06b6d4,stroke-width:3px,color:#f8fafc
@@ -63,14 +66,15 @@ flowchart LR
 
 1. **One execution path** — every caller walks the same code: lookup → typed
    validation → build argv → isolated run → record.
-2. **The registry** — 255 `ToolSpec`s with typed params, risk, category, and
+2. **The registry** — 257 `ToolSpec`s with typed params, risk, category, and
    maturity; MCP profiles slice it per client.
 3. **The loop** — autonomous assessment: profiler evidence → planner → bounded
    by a clamped risk ceiling and a step budget.
 4. **The ledger** — observations, inferences, and findings kept separate,
    deduplicated, exported as JSON / MD / HTML / SARIF.
 5. **The boundary** — the AI can propose tools and parameters, never a command
-   line; no path to the OS except `ExecutionService`.
+   line (except the gated freeform tools); no path to the OS except
+   `ExecutionService`.
 
 Full walkthrough with a call trace, sequence diagram, and the can/cannot table:
 [docs/how-it-works.md](docs/how-it-works.md).
@@ -136,7 +140,7 @@ Roo Code, OpenCode — see [docs/mcp/](docs/mcp/)):
 
 ### Profiles
 
-Listing all 255 tools to every client makes for a large payload, a large token
+Listing all 257 tools to every client makes for a large payload, a large token
 cost, and a model choosing blindly between near-identical tools. A profile
 narrows the registry to one job.
 
@@ -157,7 +161,8 @@ narrows the registry to one job.
 | `nexhunter-vulnscan` | 8 | Vulnerability scanners and IDS tooling |
 | `nexhunter-mobile` | 6 | APK inspection, decompilation, runtime exploration |
 | `nexhunter-ctf` | 87 | All CTF domains: web, crypto, RE/pwn, forensics, OSINT |
-| `nexhunter-full` | 253 | **Default (no `--profile`).** Everything non-destructive, incl. experimental |
+| `nexhunter-freeform` | 2 | Raw shell commands and Python snippets (HexStrike-style); intrusive, never auto-executed |
+| `nexhunter-full` | 255 | **Default (no `--profile`).** Everything non-destructive, incl. experimental |
 
 ```bash
 nexhunter profiles                          # list them
@@ -284,9 +289,10 @@ progress bars and the MCP `vulnerability_card` / `dashboard` tools.
 
 Enforced and covered by tests:
 
-- **No arbitrary command execution.** No tool takes a command parameter, no
-  builder splits a string into argv, no path uses a shell. Shell metacharacters
-  stay inert as single literal arguments.
+- **No arbitrary command execution.** No tool takes a command parameter and no
+  builder splits a string into argv — the one exception is `shell_command`,
+  whose entire parameter is the command, gated as intrusive (never
+  auto-executed) and executed through the OS shell only there.
 - **Typed validation.** Every parameter declares a type, a default, and a
   validation rule; a value that is not a valid target, port, or enum is refused
   before a command is ever built.
@@ -330,7 +336,7 @@ Core
 
 Security
   [OK] Raw command execution disabled (registry tools only)
-  [OK] No execution path uses a shell
+  [OK] Shell confined to the sanctioned freeform flag (shell_command)
   [OK] Destructive tools disabled
   [OK] Intrusive tools disabled
 
@@ -339,7 +345,7 @@ Stable tools (8/29 installed)
   [OK] curl_headers (curl)
   [MISSING] 21 other stable tools not installed (--all to list)
 
-Registry availability (36/255 tools on PATH)
+Registry availability (38/257 tools on PATH)
   [OK] web: 8/38 available
   [MISSING] network: 0/21 available
 ```
@@ -386,12 +392,12 @@ other binding unless `NEXHUNTER_EXTERNAL_BIND_ALLOWED` is set.
 
 ## Tool registry & maturity
 
-255 tools across 20 categories. Maturity is asserted per tool, never guessed.
+257 tools across 20 categories. Maturity is asserted per tool, never guessed.
 
 | Level | Meaning | Count |
 |---|---:|---:|
 | **stable** | Command builder, availability check, parser (where applicable), tests | 29 |
-| **beta** | Registered and validated, less exercised | 204 |
+| **beta** | Registered and validated, less exercised | 206 |
 | **experimental** | Registered but not honestly usable as written (placeholder binary or hardcoded stand-in args); kept out of the focused profiles | 22 |
 
 Risk levels: 56 passive · 166 active · 31 intrusive · 2 destructive. Cloud,
@@ -420,7 +426,7 @@ See [.env.example](.env.example).
 ## Testing
 
 ```bash
-pytest                                                    # 317 tests
+pytest                                                    # 327 tests
 pytest --cov=nexhunter --cov-report=term-missing          # coverage
 ruff check .                                              # zero lint errors
 mypy --explicit-package-bases .                           # zero type errors

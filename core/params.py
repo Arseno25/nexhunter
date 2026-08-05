@@ -25,6 +25,10 @@ class ParamType(Enum):
     """Declared type of a tool parameter."""
 
     STRING = "string"
+    # Free-form text: newlines and shell syntax allowed, null bytes not. Used
+    # only by tools whose entire parameter IS the payload (shell_command,
+    # python_script), where control characters are meaningful, not injection.
+    TEXT = "text"
     BOOLEAN = "boolean"
     INTEGER = "integer"
     ENUM = "enum"
@@ -125,7 +129,8 @@ class ParamSpec:
                 raise ValidationError(
                     f"{self.name} exceeds {self.max_length} characters"
                 )
-            _reject_control_characters(value)
+            if self.type is not ParamType.TEXT:
+                _reject_control_characters(value)
 
         try:
             return _VALIDATORS[self.type](self, value)
@@ -139,6 +144,21 @@ class ParamSpec:
 
 def _validate_string(spec: ParamSpec, value: Any) -> str:
     text = str(value).strip()
+    _reject_option_injection(text)
+    return text
+
+
+def _validate_text(spec: ParamSpec, value: Any) -> str:
+    """Free-form text: newlines and shell syntax pass through unmolested.
+
+    The value is executed in full (shell_command) or as the sole script body
+    (python_script), so it is never embedded in a larger argv where a newline
+    could re-split arguments. Null bytes still truncate inside C-level APIs,
+    so they stay rejected.
+    """
+    text = str(value).strip()
+    if "\x00" in text:
+        raise ValidationError("value contains a null byte")
     _reject_option_injection(text)
     return text
 
@@ -389,6 +409,7 @@ def _validate_duration(spec: ParamSpec, value: Any) -> str:
 
 _VALIDATORS = {
     ParamType.STRING: _validate_string,
+    ParamType.TEXT: _validate_text,
     ParamType.BOOLEAN: _validate_boolean,
     ParamType.INTEGER: _validate_integer,
     ParamType.ENUM: _validate_enum,
