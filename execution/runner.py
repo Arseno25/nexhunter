@@ -152,7 +152,7 @@ class ProcessRunner:
         cmd is normally an argument list and there is no shell involved. The
         one sanctioned exception is a ``ShellCommand``: a builder-authored
         string that must run through the OS shell as a single command
-        (shell_command, gated behind intrusive risk). The execution mode is
+        (execute_command, gated behind intrusive risk). The execution mode is
         the builder's contract, never a caller-supplied flag.
         `cancel` is polled to support external termination. `on_spawn`, if
         given, is called with the child pid the moment it starts, so a live

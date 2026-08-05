@@ -58,8 +58,8 @@ python -m nexhunter.api.mcp --list-profiles
 | `nexhunter-ctf` | One-stop CTF profile: Web Exploitation, Cryptography, Reverse Engineering & Pwn, Forensics, OSINT |
 | `nexhunter-full` | **Default (no `--profile`).** Every non-destructive tool. Large payload; prefer a focused profile when you know the job |
 
-Every profile also surfaces the two freeform tools — `shell_command` (raw
-shell command strings, HexStrike-style) and `python_script` (Python snippets).
+Every profile also surfaces the two freeform tools — `execute_command` (raw
+shell command strings, HexStrike-style) and `execute_python_script` (Python snippets).
 Both are intrusive, recorded, and withheld from autonomous runs; a profile can
 opt out with `include_freeform_tools=False`.
 
@@ -115,7 +115,7 @@ without spending a tool call:
 ## What the model cannot do
 
 - **Run an arbitrary command.** There is no command parameter anywhere in the
-  registry except the sanctioned `shell_command` — intrusive, withheld from
+  registry except the sanctioned `execute_command` — intrusive, withheld from
   autonomous runs, and off every default profile. Model output is a tool name
   plus typed parameters; it is never a command line.
 - **Send invalid parameters.** Values are type-checked server-side; a value

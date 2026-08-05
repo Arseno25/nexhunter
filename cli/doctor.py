@@ -133,7 +133,7 @@ def run(check_versions: bool = True, show_all_tools: bool = False) -> int:
 
     security = [
         (OK, "Raw command execution disabled (registry tools only)"),
-        (OK, "Shell execution only via the shell_command builder contract"),
+        (OK, "Shell execution only via the execute_command builder contract"),
     ]
     security.extend(_check_destructive_flags())
     sections.append(("Security", security))

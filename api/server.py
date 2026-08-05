@@ -260,6 +260,18 @@ def _sandbox_write(body):
     return write_file(body.get("path", ""), body.get("content", ""))
 
 
+def _sandbox_delete(body):
+    from nexhunter.execution.sandbox import delete_file
+
+    return delete_file(body.get("path", ""))
+
+
+def _sandbox_modify(body):
+    from nexhunter.execution.sandbox import modify_file
+
+    return modify_file(body.get("path", ""), body.get("content", ""), append=body.get("append", False))
+
+
 def _sandbox_python(body):
     from nexhunter.execution.sandbox import python_run
 
@@ -347,6 +359,7 @@ def health():
         mode = deg.get("data", {}).get("mode", "degraded")
     return jsonify({
         "ok": True,
+        "status": "healthy",  # Added for HexStrike client compatibility
         "version": "1.0.0",
         "mode": mode,
         "agents": sorted(AGENTS),
@@ -554,16 +567,43 @@ def visual_vulnerabilities():
 @app.post("/api/command")
 def command():
     body = _body()
-    # Only registered tools may run. Raw OS command passthrough was removed:
-    # arbitrary "cmd" strings are no longer accepted under any condition.
+    # Support both NexHunter registry calls and HexStrike raw command string execution.
     tool_name = body.get("tool")
+    no_cache = bool(body.get("no_cache"))
+
+    if not tool_name and "command" in body:
+        # HexStrike-mode REST command execution. Route it through our secure
+        # execute_command ToolSpec so it runs inside ExecutionService.
+        res = EXEC.execute(
+            tool_name="execute_command",
+            params={"command": body["command"]},
+            run_async=bool(body.get("async")),
+            no_cache=not body.get("use_cache", True),
+            direct=bool(body.get("direct", True)),
+        )
+        return jsonify({
+            "success": res.get("ok", False),
+            "stdout": res.get("stdout", ""),
+            "stderr": res.get("stderr", ""),
+            "exit_code": res.get("exit"),
+            "execution_time": res.get("duration_s", 0),
+            "error": res.get("error"),
+            "cached": res.get("cached", False),
+        })
+
     if not tool_name:
         return jsonify({"ok": False, "error": "missing 'tool'; raw command execution is not permitted", "code": "TOOL_REQUIRED"})
+
+    params = body.get("params", {})
+    # If called via MCP tool (where parameters are merged into params dict)
+    if "use_cache" in params:
+        no_cache = not params["use_cache"]
+
     return jsonify(EXEC.execute(
         tool_name=tool_name,
-        params=body.get("params", {}),
+        params=params,
         run_async=bool(body.get("async")),
-        no_cache=bool(body.get("no_cache")),
+        no_cache=no_cache,
         # Default is the direct in-process path; set "direct": false
         # to opt into tracked executions (records/async/process mgmt).
         direct=bool(body.get("direct", True)),
@@ -634,6 +674,104 @@ def python_run():
 @app.post("/api/cache/clear")
 def cache_clear():
     return jsonify({"ok": True, "cleared": EXEC.cache.clear()})
+
+
+# ---------------------------------------------------------------------------
+# HexStrike Compatibility File & Python REST API Endpoints
+# ---------------------------------------------------------------------------
+
+@app.route("/api/files/list", methods=["GET", "POST"])
+def files_list_compat():
+    if request.method == "POST":
+        body = _body()
+    else:
+        body = {"path": request.args.get("directory", "")}
+
+    # Map "directory" key to "path"
+    if "directory" in body and "path" not in body:
+        body["path"] = body["directory"]
+
+    res = _sandbox_list(body)
+    return jsonify({
+        "success": res.get("ok", False),
+        "files": [f["name"] for f in res.get("entries", [])] if res.get("ok") else [],
+        "error": res.get("error"),
+    })
+
+
+@app.post("/api/files/create")
+def files_create_compat():
+    body = _body()
+    # Map "filename" key to "path"
+    body["path"] = body.get("filename", "")
+    res = _sandbox_write(body)
+    return jsonify({
+        "success": res.get("ok", False),
+        "path": res.get("path"),
+        "error": res.get("error"),
+    })
+
+
+@app.post("/api/files/modify")
+def files_modify_compat():
+    body = _body()
+    body["path"] = body.get("filename", "")
+    res = _sandbox_modify(body)
+    return jsonify({
+        "success": res.get("ok", False),
+        "path": res.get("path"),
+        "error": res.get("error"),
+    })
+
+
+@app.post("/api/files/delete")
+def files_delete_compat():
+    body = _body()
+    body["path"] = body.get("filename", "")
+    res = _sandbox_delete(body)
+    return jsonify({
+        "success": res.get("ok", False),
+        "path": res.get("path"),
+        "error": res.get("error"),
+    })
+
+
+@app.post("/api/python/execute")
+def python_execute_compat():
+    body = _body()
+    # Map "script" key to "code"
+    body["code"] = body.get("script", "")
+    res = _sandbox_python(body)
+    return jsonify({
+        "success": res.get("ok", False),
+        "stdout": res.get("stdout", ""),
+        "stderr": res.get("stderr", ""),
+        "exit_code": res.get("exit"),
+        "error": res.get("error"),
+    })
+
+
+@app.post("/api/python/install")
+def python_install_compat():
+    import subprocess
+    import sys
+    body = _body()
+    package = body.get("package", "")
+    if not package:
+        return jsonify({"success": False, "error": "package name is required"})
+    try:
+        proc = subprocess.run(
+            [sys.executable, "-m", "pip", "install", package],
+            capture_output=True, text=True, timeout=120
+        )
+        return jsonify({
+            "success": proc.returncode == 0,
+            "stdout": proc.stdout,
+            "stderr": proc.stderr,
+            "exit_code": proc.returncode,
+        })
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)})
 
 
 @app.post("/api/autonomous")

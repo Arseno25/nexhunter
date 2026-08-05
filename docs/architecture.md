@@ -35,7 +35,7 @@ flowchart LR
 
 An AI client is a caller like any other. It can propose a tool and parameters;
 it cannot propose a command line — except through the two gated freeform tools
-(`shell_command`, `python_script`), which are intrusive, recorded, and withheld
+(`execute_command`, `execute_python_script`), which are intrusive, recorded, and withheld
 from autonomous runs. The autonomous orchestrator sits on top of the same
 service and may only execute what its risk ceiling permits.
 
@@ -149,7 +149,7 @@ Execution safety lives in the parameter contract, not in a policy layer:
   or enum is refused before a command is ever built.
 - **No passthrough.** No parameter carries a command line, no builder splits a
   string into argv, and no execution path uses a shell — except the one
-  sanctioned builder contract: `shell_command` returns a `ShellCommand` whose
+  sanctioned builder contract: `execute_command` returns a `ShellCommand` whose
   entire content is the command string (intrusive, uncacheable, withheld from
   autonomy). Any other free-form command parameter is an arbitrary-command API
   and is a regression test failure.
@@ -224,8 +224,8 @@ Without a `--profile` flag the bridge defaults to `nexhunter-full` (255 tools,
 everything non-destructive). A focused profile cuts initialization payload and
 token cost and stops a model choosing blindly between near-identical tools —
 `nexhunter-core`, for example, exposes 17 tools (15 passive stable checks plus
-the two freeform tools). Every profile surfaces `shell_command` and
-`python_script` — like the workflow tools, since they serve any engagement —
+the two freeform tools). Every profile surfaces `execute_command` and
+`execute_python_script` — like the workflow tools, since they serve any engagement —
 and a profile can opt out with `include_freeform_tools=False`.
 
 ## Artifact containment
@@ -262,7 +262,7 @@ Both sit on the one execution path and add no way to reach the OS.
   withheld by the orchestrator's risk ceiling; autonomy is bounded to passive
   and active steps.
 - **No arbitrary command execution.** No parameter carries a command line and
-  no builder splits a string into argv. The sole exception is `shell_command`:
+  no builder splits a string into argv. The sole exception is `execute_command`:
   its builder returns a `ShellCommand` whose content is the entire command,
   executed through the OS shell — gated as intrusive (never auto-executed by
   the orchestrator), uncacheable, and recorded.

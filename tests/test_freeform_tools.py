@@ -1,12 +1,12 @@
 """Free-form execution tools: the sanctioned, contained HexStrike-style path.
 
-shell_command and python_script take an entire payload string and execute it
--- the capability HexStrike exposes through its raw /api/command, kept inside
-the registry where it is typed, gated (intrusive), recorded, uncacheable, and
-withheld from autonomous runs. There is no shell flag anywhere: shell_command
-is just a builder that returns a ShellCommand instead of an argv list, and the
-runner honors that contract. Every MCP profile surfaces both tools, since they
-serve any engagement.
+execute_command and execute_python_script take an entire payload string and
+execute it -- the capability HexStrike exposes through its raw /api/command,
+kept inside the registry where it is typed, gated (intrusive), recorded,
+uncacheable, and withheld from autonomous runs. There is no shell flag
+anywhere: execute_command is just a builder that returns a ShellCommand instead
+of an argv list, and the runner honors that contract. Every MCP profile
+surfaces both tools, since they serve any engagement.
 """
 
 import sys
@@ -20,7 +20,7 @@ from nexhunter.core import tools as T
 from nexhunter.core.tools import ShellCommand
 from nexhunter.execution.service import ExecutionService
 
-FREEFORM = {"shell_command", "python_script"}
+FREEFORM = {"execute_command", "execute_python_script"}
 
 
 def test_freeform_tools_are_registered_and_gated():
@@ -32,10 +32,10 @@ def test_freeform_tools_are_registered_and_gated():
         assert not spec.cacheable, f"{name} must not be cached"
         assert spec.available, f"{name} must always be available (runs in-process)"
 
-    shell = T.get_tool_spec("shell_command")
+    shell = T.get_tool_spec("execute_command")
     assert isinstance(shell.build_cmd({"command": "echo hi"}), ShellCommand)
-    python = T.get_tool_spec("python_script")
-    assert isinstance(python.build_cmd({"code": "print(1)"}), list)
+    python = T.get_tool_spec("execute_python_script")
+    assert isinstance(python.build_cmd({"script": "print(1)"}), list)
 
 
 def test_only_sanctioned_builders_emit_shell_commands():
@@ -52,7 +52,7 @@ def test_only_sanctioned_builders_emit_shell_commands():
             continue
         if isinstance(built, ShellCommand):
             shell_builders.append(name)
-    assert shell_builders == ["shell_command"], f"ShellCommand emitted by: {shell_builders}"
+    assert shell_builders == ["execute_command"], f"ShellCommand emitted by: {shell_builders}"
 
 
 def test_every_profile_includes_freeform():
@@ -73,7 +73,7 @@ def test_profile_can_opt_out_of_freeform():
 
 
 def test_text_params_allow_newlines_but_reject_null():
-    spec = P.ParamSpec(name="code", type=P.ParamType.TEXT, required=True)
+    spec = P.ParamSpec(name="script", type=P.ParamType.TEXT, required=True)
     assert spec.validate("line1\nline2\tprint(1)") == "line1\nline2\tprint(1)"
     try:
         spec.validate("bad\x00byte")
@@ -83,36 +83,36 @@ def test_text_params_allow_newlines_but_reject_null():
         raise AssertionError("null byte must be rejected in TEXT params")
 
 
-def test_shell_command_executes_through_the_shell():
+def test_execute_command_executes_through_the_shell():
     service = ExecutionService()
-    result = service.run_direct("shell_command", {"command": "echo a && echo b"})
+    result = service.run_direct("execute_command", {"command": "echo a && echo b"})
     assert result["ok"], result
     assert "a" in result["output"], result
     assert "b" in result["output"], result
     assert result["cached"] is False
 
 
-def test_shell_command_is_recorded_on_the_tracked_path():
+def test_execute_command_is_recorded_on_the_tracked_path():
     service = ExecutionService()
     result = service.execute(
-        "shell_command", {"command": "echo tracked"}, direct=False
+        "execute_command", {"command": "echo tracked"}, direct=False
     )
     assert result["ok"], result
     assert "tracked" in result["output"], result
     assert result.get("execution_id"), "tracked run must mint a record"
 
 
-def test_python_script_executes():
+def test_execute_python_script_executes():
     service = ExecutionService()
-    result = service.run_direct("python_script", {"code": "print(2 + 2)"})
+    result = service.run_direct("execute_python_script", {"script": "print(2 + 2)"})
     assert result["ok"], result
     assert "4" in result["output"], result
 
 
-def test_python_script_accepts_multiline_code():
+def test_execute_python_script_accepts_multiline_code():
     service = ExecutionService()
     code = "for i in range(3):\n    print(i)"
-    result = service.run_direct("python_script", {"code": code})
+    result = service.run_direct("execute_python_script", {"script": code})
     assert result["ok"], result
     for line in ("0", "1", "2"):
         assert line in result["output"], result
@@ -120,7 +120,7 @@ def test_python_script_accepts_multiline_code():
 
 def test_missing_required_param_rejected():
     service = ExecutionService()
-    result = service.run_direct("shell_command", {})
+    result = service.run_direct("execute_command", {})
     assert not result["ok"]
     assert result["code"] == "INVALID_PARAMS", result
 
@@ -132,9 +132,9 @@ if __name__ == "__main__":
     test_every_profile_includes_freeform()
     test_profile_can_opt_out_of_freeform()
     test_text_params_allow_newlines_but_reject_null()
-    test_shell_command_executes_through_the_shell()
-    test_shell_command_is_recorded_on_the_tracked_path()
-    test_python_script_executes()
-    test_python_script_accepts_multiline_code()
+    test_execute_command_executes_through_the_shell()
+    test_execute_command_is_recorded_on_the_tracked_path()
+    test_execute_python_script_executes()
+    test_execute_python_script_accepts_multiline_code()
     test_missing_required_param_rejected()
     print("\n=== All Free-form Tests Passed ===\n")

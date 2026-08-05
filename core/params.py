@@ -26,8 +26,8 @@ class ParamType(Enum):
 
     STRING = "string"
     # Free-form text: newlines and shell syntax allowed, null bytes not. Used
-    # only by tools whose entire parameter IS the payload (shell_command,
-    # python_script), where control characters are meaningful, not injection.
+    # only by tools whose entire parameter IS the payload (execute_command,
+    # execute_python_script), where control characters are meaningful, not injection.
     TEXT = "text"
     BOOLEAN = "boolean"
     INTEGER = "integer"
@@ -151,8 +151,8 @@ def _validate_string(spec: ParamSpec, value: Any) -> str:
 def _validate_text(spec: ParamSpec, value: Any) -> str:
     """Free-form text: newlines and shell syntax pass through unmolested.
 
-    The value is executed in full (shell_command) or as the sole script body
-    (python_script), so it is never embedded in a larger argv where a newline
+    The value is executed in full (execute_command) or as the sole script body
+    (execute_python_script), so it is never embedded in a larger argv where a newline
     could re-split arguments. Null bytes still truncate inside C-level APIs,
     so they stay rejected.
     """

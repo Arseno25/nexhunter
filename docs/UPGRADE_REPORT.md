@@ -20,7 +20,7 @@ Since this report was written:
   now hosts REST + MCP + the visual endpoints.
 - **Registry grew** to 257 tools (29 stable / 206 beta / 22 experimental) with
   16 MCP profiles; `nexhunter-full` (default) exposes 255.
-- **Freeform execution** (`shell_command`, `python_script`): HexStrike-style
+- **Freeform execution** (`execute_command`, `execute_python_script`): HexStrike-style
   raw command execution restored as two registry tools — intrusive, recorded,
   uncacheable, withheld from autonomous runs, and surfaced by every profile
   (they serve any engagement; opt out per profile).
@@ -154,7 +154,7 @@ Every caller enters through `ExecutionService`. Diagrams in
   refused before a command is ever built.
 - No parameter carries a command line; no builder splits a string into argv;
   no execution path uses a shell — except the single sanctioned
-  `shell_command` builder contract (a `ShellCommand` string), gated as
+  `execute_command` builder contract (a `ShellCommand` string), gated as
   intrusive. Regression tests fail if anything else is reintroduced.
 - Secret-shaped parameters are redacted by name (with per-binary short-flag
   resolution, so `-p` is a password to hydra and a port list to nmap) in
@@ -319,9 +319,9 @@ Notable tests:
    only in the full profile.
 6. **CI is unverified on a remote.**
 7. **`datetime.utcnow()` deprecation** across several modules.
-8. **Freeform tools are a raw execution surface.** `shell_command` and
-   `python_script` run exactly what a caller types (metacharacters live for
-   `shell_command`). The containment is procedural — intrusive gate, no
+8. **Freeform tools are a raw execution surface.** `execute_command` and
+   `execute_python_script` run exactly what a caller types (metacharacters live for
+   `execute_command`). The containment is procedural — intrusive gate, no
    autonomous runs, operator presence required — not a sandbox.
 
 ## Recommended Next Phase
@@ -336,7 +336,7 @@ Notable tests:
 Restores raw command execution as a *registered, gated capability* rather than
 a raw endpoint:
 
-- `shell_command` and `python_script` registered in `core/tools.py`. There is
+- `execute_command` and `execute_python_script` registered in `core/tools.py`. There is
   **no shell flag anywhere**: a builder either returns an argv list (default)
   or a `ShellCommand` (a str subclass) when the whole payload must run through
   the OS shell. The ProcessRunner is the only spawn site and derives the mode
@@ -351,7 +351,7 @@ a raw endpoint:
   they serve any engagement. `Profile.include_freeform_tools` (default True)
   lets a profile opt out; the dedicated `nexhunter-freeform` profile was
   removed as redundant.
-- Regression updates: `ALLOWED_TEXT_PARAMS` lists `shell_command.command` with
+- Regression updates: `ALLOWED_TEXT_PARAMS` lists `execute_command.command` with
   a reason; `test_no_shell_true_anywhere_in_execution_paths` stays unchanged
   (no literal `shell=True` exists in the codebase);
   `test_only_sanctioned_builders_emit_shell_commands` proves exactly one

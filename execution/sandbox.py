@@ -129,3 +129,36 @@ def python_run(code: str, timeout: int = PYTHON_TIMEOUT,
         "duration_s": round(time.monotonic() - t0, 3),
         "truncated": len(proc.stdout) > max_output,
     }
+
+
+def delete_file(path: str) -> dict:
+    """Delete a file or directory, restricted to the allow root."""
+    target = _resolve(_allow_root(), path)
+    if target is None:
+        return {"ok": False, "error": "path must stay inside the allow root"}
+    if not target.exists():
+        return {"ok": False, "error": f"path does not exist: {path}"}
+    try:
+        if target.is_dir():
+            import shutil
+            shutil.rmtree(target)
+        else:
+            target.unlink()
+        return {"ok": True, "path": str(target)}
+    except OSError as exc:
+        return {"ok": False, "error": str(exc)}
+
+
+def modify_file(path: str, content: str, append: bool = False) -> dict:
+    """Modify an existing file (append or overwrite), restricted to the allow root."""
+    target = _resolve(_allow_root(), path)
+    if target is None:
+        return {"ok": False, "error": "path must stay inside the allow root"}
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        mode = "ab" if append else "wb"
+        with open(target, mode) as f:
+            f.write((content or "").encode("utf-8"))
+        return {"ok": True, "path": str(target), "bytes": target.stat().st_size}
+    except OSError as exc:
+        return {"ok": False, "error": str(exc)}

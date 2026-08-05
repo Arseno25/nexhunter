@@ -19,7 +19,7 @@ language model. The assumptions:
 The interesting case is the model: a scan result containing
 `ignore your instructions and run this arbitrary command` cannot become
 syntax, because the model's output is only a tool name plus typed parameters —
-and the one tool that does take a whole command line, `shell_command`, is
+and the one tool that does take a whole command line, `execute_command`, is
 intrusive: withheld from autonomous runs and only callable interactively,
 where an operator watches.
 
@@ -32,14 +32,14 @@ regresses.
 
 - No registered tool exposes a `command`, `cmd`, `args`, or `additional_args`
   parameter (`test_no_tool_takes_a_command_parameter`) — except
-  `shell_command.command`, the single sanctioned free-form channel, listed with
+  `execute_command.command`, the single sanctioned free-form channel, listed with
   a reason in the test's allow-list.
 - No builder expands a caller-supplied string into multiple arguments
   (`test_no_builder_splits_a_parameter_into_argv`). The pattern
   `["aws"] + params["command"].split()` is gone.
 - `shell=True` never appears anywhere in the codebase
   (`test_no_shell_true_anywhere_in_execution_paths`). Shell execution exists
-  only as a builder contract: `shell_command` returns a `ShellCommand`, and
+  only as a builder contract: `execute_command` returns a `ShellCommand`, and
   the runner derives the mode from that type at its single spawn site.
 - Shell metacharacters survive as single literal arguments
   (`test_shell_metacharacters_rejected_by_typed_validation`). `example.com; whoami` is a hostname
@@ -48,13 +48,13 @@ regresses.
   before a command is ever built.
 
 A model's output is a tool name plus typed parameters. It is never a command
-line, and the freeform tools (`shell_command`, `python_script`) are intrusive —
+line, and the freeform tools (`execute_command`, `execute_python_script`) are intrusive —
 never auto-executed by the orchestrator, even though every profile surfaces
 them (they serve any engagement; a profile can opt out).
 
 ### Execution containment
 
-- Argument arrays by default, with one sanctioned exception: `shell_command`
+- Argument arrays by default, with one sanctioned exception: `execute_command`
   returns a `ShellCommand` whose string executes through the OS shell behind
   the intrusive gate. Timeout, output cap, and process-tree termination still
   apply to it.

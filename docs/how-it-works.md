@@ -56,7 +56,7 @@ exact same code. Follow one call, and you have followed them all.
 |---|---|
 | 1. Lookup | The name must be in the registry; anything else is `unknown tool`. |
 | 2. Validate | `target` must be a valid hostname — a value like `; rm -rf /` or `$(curl evil)` is refused as an invalid target before any command exists. |
-| 3. Build | The registry's builder emits a fixed argv: `["nmap", "-sV", "-p", "80,443", "scanme.example.com"]`. No shell, no strings, no free-text — except `shell_command`, whose single string runs through the OS shell as its entire payload. |
+| 3. Build | The registry's builder emits a fixed argv: `["nmap", "-sV", "-p", "80,443", "scanme.example.com"]`. No shell, no strings, no free-text — except `execute_command`, whose single string runs through the OS shell as its entire payload. |
 | 4. Run | Spawned in an isolated workspace with a timeout that kills the whole process tree; stdout is capped. |
 | 5. Record | Exit code, duration, redacted output, and any artifacts are stored under that execution's ID. |
 
@@ -74,7 +74,7 @@ Every tool is a `ToolSpec` with the same anatomy:
 | `category` | One of 20 categories. Drives which MCP profile surfaces the tool. |
 | `maturity` | `stable` (parser + fixture + test), `beta` (registered, less exercised), or `experimental` (registered but not honestly usable as written). |
 | `available` | Whether the binary exists on this host — checked with `shutil.which`, never guessed. |
-| `builder` | The only place a command line can come into being. Returns an argv list by default, or a `ShellCommand` (a str subclass) when the whole payload must run through the OS shell — used by exactly one tool, `shell_command`. |
+| `builder` | The only place a command line can come into being. Returns an argv list by default, or a `ShellCommand` (a str subclass) when the whole payload must run through the OS shell — used by exactly one tool, `execute_command`. |
 
 Profiles are slices over these fields: `nexhunter-ctf` asks for eight
 categories, `nexhunter-osint` asks for the `osint` category, `nexhunter-core`
@@ -87,8 +87,8 @@ everything.
 
 Three registered tools expose scan tuning as discrete typed parameters instead
 of a free-form command line — the same no-passthrough contract as everything
-else in the registry (freeform execution lives in `shell_command` and
-`python_script`, the two sanctioned exceptions, surfaced by every profile):
+else in the registry (freeform execution lives in `execute_command` and
+`execute_python_script`, the two sanctioned exceptions, surfaced by every profile):
 
 | Tool | Added knobs (all typed) | Output |
 |---|---|---|
@@ -187,7 +187,7 @@ parser is recorded as a parser failure — never as a clean result.
 
 | Can | Cannot |
 |---|---|
-| Propose any registered tool and typed parameters — `propose_plan` reviews it first | Propose a command line — except through `shell_command` / `python_script`, which are intrusive and withheld from autonomous runs |
+| Propose any registered tool and typed parameters — `propose_plan` reviews it first | Propose a command line — except through `execute_command` / `execute_python_script`, which are intrusive and withheld from autonomous runs |
 | Get a plan executed only if every step validates and fits the ceiling | Have a withheld (intrusive/destructive) step auto-run in a plan |
 | Call tools one at a time or start an autonomous run | Run a destructive tool without a feature flag and a human |
 | Ask for a higher risk ceiling | Get one — requests are clamped to `active` |

@@ -308,7 +308,7 @@ class ToolSpec:
 
         The output is the builder's contract: an argv list by default, or a
         ShellCommand string when the tool's whole payload must run through the
-        OS shell (shell_command). Anything else is None (build refused).
+        OS shell (execute_command). Anything else is None (build refused).
         """
         normalized, error = self.normalize(user_params)
         if error is not None or not self.builder:
@@ -1583,38 +1583,44 @@ _tool_specs = {
     # That is the exact capability a HexStrike-style operator wants, kept inside
     # the registry: intrusive risk (never auto-executed, recorded, redacted,
     # timeout-capped), and surfaced by every MCP profile like the workflow
-    # tools, since they serve any engagement. shell_command's builder returns a
+    # tools, since they serve any engagement. execute_command's builder returns a
     # ShellCommand, so its string executes through the OS shell with live
-    # metacharacters; python_script is a plain argv call.
-    "shell_command": ToolSpec(
-        name="shell_command", binary="sh",
+    # metacharacters; execute_python_script is a plain argv call.
+    "execute_command": ToolSpec(
+        name="execute_command", binary="sh",
         description="Run a free-form command string through the system shell "
                     "(HexStrike-style arbitrary command execution). Pipes, "
                     "redirects, and chaining are live. Recorded, redacted, "
                     "timeout-capped, intrusive, and withheld from autonomous "
                     "runs. Authorized targets only.",
-        params={"command": None}, timeout=120, cacheable=False,
+        params={"command": None, "use_cache": True}, timeout=120, cacheable=False,
         category="utility", risk_level="intrusive",
         availability_check=lambda: True,
         param_specs=(
             P.ParamSpec(name="command", type=P.ParamType.TEXT, required=True,
                         description="The shell command string to execute"),
+            P.ParamSpec(name="use_cache", type=P.ParamType.BOOLEAN, required=False, default=True,
+                        description="Whether to use caching (default: True)"),
         ),
         builder=lambda p: ShellCommand(p["command"])),
-    "python_script": ToolSpec(
-        name="python_script", binary="python",
+    "execute_python_script": ToolSpec(
+        name="execute_python_script", binary="python",
         description="Run a free-form Python snippet with the server's "
                     "interpreter (HexStrike-style custom scripting). Recorded, "
                     "redacted, timeout-capped, intrusive, and withheld from "
                     "autonomous runs. Authorized targets only.",
-        params={"code": None}, timeout=120, cacheable=False,
+        params={"script": None, "env_name": "default", "filename": ""}, timeout=120, cacheable=False,
         category="utility", risk_level="intrusive",
         availability_check=lambda: True,
         param_specs=(
-            P.ParamSpec(name="code", type=P.ParamType.TEXT, required=True,
+            P.ParamSpec(name="script", type=P.ParamType.TEXT, required=True,
                         description="Python source code to execute"),
+            P.ParamSpec(name="env_name", type=P.ParamType.STRING, required=False, default="default",
+                        description="Virtual environment name (default: default)"),
+            P.ParamSpec(name="filename", type=P.ParamType.STRING, required=False, default="",
+                        description="Optional script filename"),
         ),
-        builder=lambda p: ["python", "-c", p["code"]]),
+        builder=lambda p: ["python", "-c", p["script"]]),
 }
 
 def _parse_nmap_xml(text):

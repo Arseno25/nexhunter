@@ -21,7 +21,7 @@ DEFAULT_RISK_LEVELS = ("passive", "active")
 
 # Freeform tools serve any engagement, so every profile surfaces them -- like
 # the workflow tools, which are always registered regardless of profile.
-FREEFORM_TOOLS = frozenset({"shell_command", "python_script"})
+FREEFORM_TOOLS = frozenset({"execute_command", "execute_python_script"})
 
 
 @dataclass(frozen=True)
@@ -35,7 +35,7 @@ class Profile:
     maturities: tuple = ("stable", "beta")
     # Workflow-level MCP tools (assess, recon, findings...) this profile keeps.
     include_workflow_tools: bool = True
-    # Freeform tools (shell_command, python_script) surface in every profile;
+    # Freeform tools (execute_command, execute_python_script) surface in every profile;
     # set False to keep a profile strictly scoped to its own categories.
     include_freeform_tools: bool = True
 

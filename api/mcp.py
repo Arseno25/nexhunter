@@ -469,6 +469,36 @@ def report(fmt: str = "markdown") -> str:
     return _render(api("/api/report", {"fmt": fmt}), indent=1)
 
 
+@mcp.tool()
+def create_file(filename: str, content: str, binary: bool = False) -> str:
+    """Create a file with specified content on the server. Confined to sandbox root."""
+    return _render(api("/api/files/create", {"filename": filename, "content": content, "binary": binary}), indent=1)
+
+
+@mcp.tool()
+def modify_file(filename: str, content: str, append: bool = False) -> str:
+    """Modify an existing file on the server (append or overwrite). Confined to sandbox."""
+    return _render(api("/api/files/modify", {"filename": filename, "content": content, "append": append}), indent=1)
+
+
+@mcp.tool()
+def delete_file(filename: str) -> str:
+    """Delete a file or directory on the server. Confined to sandbox."""
+    return _render(api("/api/files/delete", {"filename": filename}), indent=1)
+
+
+@mcp.tool()
+def list_files(directory: str = ".") -> str:
+    """List files in a directory on the server. Confined to sandbox."""
+    return _render(api("/api/files/list", {"directory": directory}), indent=1)
+
+
+@mcp.tool()
+def install_python_package(package: str, env_name: str = "default") -> str:
+    """Install a Python package in the environment on the server."""
+    return _render(api("/api/python/install", {"package": package, "env_name": env_name}), indent=1)
+
+
 def _register(name, spec):
     """Dynamically register tool as MCP tool."""
     def fn(**kwargs):

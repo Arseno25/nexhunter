@@ -26,7 +26,7 @@ ALLOWED_TEXT_PARAMS: dict[tuple[str, str], str] = {
     # The deliberate HexStrike-style free-form channel: the whole parameter IS
     # the command. Gated as intrusive, uncacheable, recorded, and withheld from
     # autonomous runs -- an operator-facing escape hatch, not a caller API.
-    ("shell_command", "command"): "the parameter is the entire shell command, by design",
+    ("execute_command", "command"): "the parameter is the entire shell command, by design",
 }
 
 
@@ -152,7 +152,7 @@ def test_free_text_values_stay_single_arguments():
 def test_no_shell_true_anywhere_in_execution_paths():
     """No execution path passes shell=True.
 
-    The shell mode exists, but as a builder contract: shell_command returns a
+    The shell mode exists, but as a builder contract: execute_command returns a
     ShellCommand string and the runner derives ``shell=isinstance(...)`` at
     the one sanctioned spawn site. No module ever hardcodes shell=True.
     """

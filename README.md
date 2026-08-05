@@ -25,7 +25,7 @@ isolated workspace, and records what happened.
 
 The distinguishing property: **an AI client is a caller like any other.** It can
 propose a tool and its parameters. It cannot propose a command line — except
-through `shell_command` and `python_script`, the two explicitly gated freeform
+through `execute_command` and `execute_python_script`, the two explicitly gated freeform
 tools (intrusive risk, withheld from autonomous runs), and the autonomous loop
 cannot escalate its own risk ceiling.
 
@@ -34,7 +34,7 @@ cannot escalate its own risk ceiling.
 - **One execution path.** REST, MCP, CLI, and the autonomous loop all walk the
   same code: lookup → typed validation → build argv → isolated run → record.
 - **No arbitrary commands.** No tool takes a command parameter — except
-  `shell_command`, the one sanctioned free-form channel (intrusive, recorded,
+  `execute_command`, the one sanctioned free-form channel (intrusive, recorded,
   withheld from autonomy). A regression suite enforces the rest.
 - **Bounded autonomy.** The orchestrator's risk ceiling is clamped to `active`;
   intrusive and destructive tools are withheld for human approval.
@@ -163,8 +163,8 @@ narrows the registry to one job.
 | `nexhunter-ctf` | 89 | All CTF domains: web, crypto, RE/pwn, forensics, OSINT |
 | `nexhunter-full` | 255 | **Default (no `--profile`).** Everything non-destructive, incl. experimental |
 
-Every profile also surfaces the two freeform tools — `shell_command` and
-`python_script` (intrusive, withheld from autonomous runs) — since they serve
+Every profile also surfaces the two freeform tools — `execute_command` and
+`execute_python_script` (intrusive, withheld from autonomous runs) — since they serve
 any engagement; a profile can opt out with `include_freeform_tools=False`.
 
 ```bash
@@ -293,7 +293,7 @@ progress bars and the MCP `vulnerability_card` / `dashboard` tools.
 Enforced and covered by tests:
 
 - **No arbitrary command execution.** No tool takes a command parameter and no
-  builder splits a string into argv — the one exception is `shell_command`,
+  builder splits a string into argv — the one exception is `execute_command`,
   whose entire parameter is the command, gated as intrusive (never
   auto-executed) and executed through the OS shell only there.
 - **Typed validation.** Every parameter declares a type, a default, and a
@@ -339,7 +339,7 @@ Core
 
 Security
   [OK] Raw command execution disabled (registry tools only)
-  [OK] Shell execution only via the shell_command builder contract
+  [OK] Shell execution only via the execute_command builder contract
   [OK] Destructive tools disabled
   [OK] Intrusive tools disabled
 
