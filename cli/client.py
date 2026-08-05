@@ -14,6 +14,7 @@ import argparse
 import json
 import os
 import sys
+import time
 import urllib.request
 from pathlib import Path
 
@@ -184,6 +185,165 @@ def cmd_assess(args):
         print(f"  {SEV_COLOR[sev](sev.upper().ljust(8))} [{item.get('tool')}] {item.get('title')}")
     verbose(args, d)
     return 0
+
+
+_TERMINAL = {"completed", "failed", "timed_out", "terminated", "blocked", "stopped"}
+_SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+
+
+def _draw(line):
+    """Redraw one status line: in place on a TTY, appended otherwise."""
+    if sys.stderr.isatty():
+        sys.stderr.write("\r\x1b[2K" + line)
+    else:
+        sys.stderr.write(line + "\n")
+    sys.stderr.flush()
+
+
+def _clear_line():
+    if sys.stderr.isatty():
+        sys.stderr.write("\r\x1b[2K")
+        sys.stderr.flush()
+
+
+def _fmt_secs(s):
+    s = int(s or 0)
+    return f"{s // 60}m{s % 60:02d}s" if s >= 60 else f"{s}s"
+
+
+def cmd_run(args):
+    """Run one registered tool with a live progress indicator.
+
+    Kicks off an async execution and polls its status so the terminal shows a
+    spinner + elapsed + captured bytes instead of hanging silently. A single
+    tool does not report a percentage, so this is an activity indicator, not a
+    bar; the autonomous command shows a real bar.
+    """
+    params = {}
+    for kv in (args.param or []):
+        if "=" not in kv:
+            print(ERR(f"[-] bad --param {kv!r}, expected key=value"))
+            return 1
+        key, value = kv.split("=", 1)
+        params[key] = value
+
+    start = api("/api/command", {"tool": args.tool, "params": params, "async": True})
+    if not start.get("ok"):
+        print(ERR("[-] " + str(start.get("error") or start.get("code") or "start failed")))
+        return 1
+
+    eid = start["execution_id"]
+    t0 = time.time()
+    i = 0
+    status = "running"
+    last = None
+    rec = {}
+    while True:
+        st = api(f"/api/executions/{eid}", timeout=15)
+        rec = st.get("execution", {}) if st.get("ok") else {}
+        status = rec.get("status", "running")
+        if status in _TERMINAL:
+            break
+        elapsed = _fmt_secs(time.time() - t0)
+        kb = (rec.get("stdout_bytes", 0) or 0) / 1024
+        if sys.stderr.isatty():
+            frame = _SPINNER[i % len(_SPINNER)]
+            i += 1
+            _draw(f"  {INFO(frame)} {args.tool}  {MUTE(status)}  {elapsed}  {kb:.0f} KB")
+        elif status != last:
+            _draw(f"  [{status}] {args.tool} {elapsed}")
+            last = status
+        time.sleep(0.4)
+
+    _clear_line()
+    ok = status == "completed"
+    badge = OK("[+]") if ok else ERR("[-]")
+    dur = _fmt_secs(rec.get("duration_s") or (time.time() - t0))
+    print(f"  {badge} {args.tool}  {status}  ({dur})")
+
+    out = api(f"/api/executions/{eid}/output")
+    body = out.get("stdout", "") if out.get("ok") else ""
+    for line in body.splitlines()[:60]:
+        print(f"  {MUTE(line)}")
+    extra = len(body.splitlines()) - 60
+    if extra > 0:
+        print(MUTE(f"  ... {extra} more lines (GET /api/executions/{eid}/output)"))
+    if not ok:
+        err = out.get("stderr", "") if out.get("ok") else ""
+        for line in err.splitlines()[:20]:
+            print(f"  {WARN(line)}")
+    verbose(args, rec)
+    return 0 if ok else 1
+
+
+def cmd_autonomous(args):
+    """Run an adaptive autonomous assessment with a live progress bar."""
+    from nexhunter.api.visual import render_progress_bar
+
+    start = api("/api/autonomous", {
+        "target": args.target,
+        "risk_ceiling": args.ceiling,
+        "max_steps": args.max_steps,
+        "objective": args.objective,
+        "strategy": args.strategy,
+        "async": True,
+    })
+    if not start.get("ok"):
+        print(ERR("[-] " + str(start.get("error") or "start failed")))
+        return 1
+
+    run = start.get("run", {})
+    rid = run.get("run_id", "")
+    print(f"  {OK('[+]')} autonomous run {INFO(rid)}  target={args.target}  ceiling={args.ceiling}")
+
+    last_phase = None
+    try:
+        while True:
+            r = api(f"/api/autonomous/{rid}", timeout=15).get("run", {})
+            status = r.get("status", "running")
+            steps = r.get("steps_taken", 0)
+            total = r.get("max_steps", 0) or 1
+            phase = r.get("current_phase", "")
+            if status != "running":
+                break
+            if sys.stderr.isatty():
+                bar = render_progress_bar(steps, total, width=24, color=True)
+                _draw(f"  {bar}  {MUTE(f'step {steps}/{total}')}  {INFO(phase)}")
+            elif phase != last_phase:
+                _draw(f"  step {steps}/{total} · {phase}")
+                last_phase = phase
+            time.sleep(1.0)
+    except KeyboardInterrupt:
+        _clear_line()
+        print(WARN(f"  [~] detached; the run continues server-side: {rid}"))
+        return 1
+
+    _clear_line()
+    r = api(f"/api/autonomous/{rid}").get("run", {})
+    ok = r.get("status") == "completed"
+    print(f"  {OK('[+]') if ok else ERR('[-]')} status={r.get('status')}  "
+          f"steps={r.get('steps_taken')}/{r.get('max_steps')}")
+
+    execs = r.get("executions", [])
+    if execs:
+        print(HEAD("  Executed:"))
+        for e in execs:
+            mark = OK("ok ") if e.get("ok") else ERR("err")
+            print(f"    {mark} {e.get('tool')}  {MUTE(e.get('status') or '')}")
+    withheld = r.get("recommended_next", [])
+    if withheld:
+        print(HEAD("  Withheld (needs human approval):"))
+        for w in withheld[:10]:
+            print(f"    {WARN('[!]')} {w.get('tool')}  {MUTE(w.get('risk_level', ''))}")
+
+    summ = api("/api/findings/summary")
+    if isinstance(summ, dict) and summ.get("ok"):
+        s = summ.get("summary", {})
+        total_f = s.get("total") if isinstance(s, dict) else None
+        if total_f:
+            print(HEAD(f"  Findings: {total_f}") + MUTE("  (nexhunter report)"))
+    verbose(args, r)
+    return 0 if ok else 1
 
 
 def cmd_vulnerabilities(args):
@@ -481,6 +641,17 @@ def main(argv=None):
     p_probe.add_argument("target")
     p_assess = sub.add_parser("assess", help="comprehensive security assessment")
     p_assess.add_argument("target")
+    p_run = sub.add_parser("run", help="run one registered tool with a live progress indicator")
+    p_run.add_argument("tool")
+    p_run.add_argument("--param", action="append", metavar="KEY=VALUE", help="tool parameter (repeatable)")
+    p_auto = sub.add_parser("autonomous", help="adaptive autonomous assessment with a live progress bar")
+    p_auto.add_argument("target")
+    p_auto.add_argument("--ceiling", default="active", choices=["passive", "active", "intrusive"],
+                        help="risk ceiling (clamped to active for autonomy)")
+    p_auto.add_argument("--max-steps", type=int, default=20, dest="max_steps")
+    p_auto.add_argument("--objective", default="standard",
+                        choices=["quick", "standard", "comprehensive", "stealth"])
+    p_auto.add_argument("--strategy", default="methodology", choices=["methodology", "select"])
     p_report = sub.add_parser("report", help="generate findings report")
     p_report.add_argument("--fmt", choices=["markdown", "json"], default="markdown")
     sub.add_parser("telemetry", help="server performance and cache statistics")
@@ -531,6 +702,8 @@ def main(argv=None):
         "tools": cmd_tools,
         "probe": cmd_probe,
         "assess": cmd_assess,
+        "run": cmd_run,
+        "autonomous": cmd_autonomous,
         "report": cmd_report,
         "telemetry": cmd_telemetry,
         "vulns": cmd_vulnerabilities,
