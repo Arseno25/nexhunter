@@ -25,7 +25,7 @@ from __future__ import annotations
 
 import ipaddress
 import os
-from typing import Any, Dict, Optional
+from typing import Any
 from urllib.parse import urlparse
 
 from nexhunter.core.params import ParamType
@@ -82,7 +82,7 @@ _TECH_EXTENSIONS = (
 _DEFAULT_EXTENSIONS = "php,html,txt,js"
 
 
-def _first_existing(paths) -> Optional[str]:
+def _first_existing(paths) -> str | None:
     for path in paths:
         if os.path.isfile(path):
             return path
@@ -136,11 +136,11 @@ class ParameterOptimizer:
         self,
         spec: ToolSpec,
         target: str,
-        profile: Optional[TargetProfile] = None,
+        profile: TargetProfile | None = None,
         objective: str = "standard",
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Return tuned parameters for one tool. Only fills what it can justify."""
-        params: Dict[str, Any] = {}
+        params: dict[str, Any] = {}
         for pspec in spec.param_specs or ():
             value = self._value_for(pspec, spec, target, profile, objective)
             if value is not None:
@@ -214,19 +214,19 @@ class ParameterOptimizer:
         return None
 
     @staticmethod
-    def _is_web(target: str, profile: Optional[TargetProfile]) -> bool:
+    def _is_web(target: str, profile: TargetProfile | None) -> bool:
         if (target or "").startswith(("http://", "https://")):
             return True
         return bool(profile and profile.has_web_surface())
 
     @staticmethod
-    def _wordlist_for(spec: ToolSpec) -> Optional[str]:
+    def _wordlist_for(spec: ToolSpec) -> str | None:
         name = spec.name.lower()
         is_dns = "dns" in name or (spec.category == "recon" and "domain" in spec.params)
         return _first_existing(_DNS_WORDLISTS if is_dns else _DIR_WORDLISTS)
 
     @staticmethod
-    def _extensions_for(profile: Optional[TargetProfile]) -> str:
+    def _extensions_for(profile: TargetProfile | None) -> str:
         """Pick brute-force extensions from the detected technology stack."""
         techs = " ".join(profile.technology_names()) if profile else ""
         for needles, extensions in _TECH_EXTENSIONS:
@@ -235,7 +235,7 @@ class ParameterOptimizer:
         return _DEFAULT_EXTENSIONS
 
 
-def optimize_preview(target: str, tool: str, objective: str = "standard") -> Dict[str, Any]:
+def optimize_preview(target: str, tool: str, objective: str = "standard") -> dict[str, Any]:
     """Show how one tool would be invoked against a target, without running it.
 
     Returns the tuned parameters and the exact argv they build -- the answer to

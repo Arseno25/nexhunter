@@ -262,7 +262,7 @@ def test_autonomous_never_exceeds_risk_ceiling():
     fake = FakeExecutionService()
     orchestrator = AutonomousOrchestrator(execution_service=fake, finding_store=FindingStore())
 
-    run = orchestrator.start(
+    orchestrator.start(
         target="https://example.com",
         risk_ceiling="active",
         max_steps=25,

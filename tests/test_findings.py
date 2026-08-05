@@ -394,7 +394,7 @@ def test_unknown_export_format_rejected():
     print("[TEST] Unknown export format rejected...")
     try:
         export([_finding()], "pdf")
-        assert False, "expected an unknown format to raise"
+        raise AssertionError("expected an unknown format to raise")
     except ValueError as exc:
         assert "unknown format" in str(exc)
     print("  [OK] Unknown format rejected")

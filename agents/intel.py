@@ -58,8 +58,8 @@ class CVEIntelligenceManager(Agent):
 
         try:
             url = NVD + urllib.parse.urlencode({"keywordSearch": q, "resultsPerPage": limit})
-            req = urllib.request.Request(url, headers={"User-Agent": "nexhunter/1.0"})
-            with urllib.request.urlopen(req, timeout=6) as resp:
+            req = urllib.request.Request(url, headers={"User-Agent": "nexhunter/1.0"})  # noqa: S310 - NVD API/https only
+            with urllib.request.urlopen(req, timeout=6) as resp:  # noqa: S310
                 data = json.load(resp)
             out = []
             for v in data.get("vulnerabilities", [])[:limit]:
@@ -109,8 +109,8 @@ class AIExploitGenerator(Agent):
 
         try:
             url = NVD + urllib.parse.urlencode({"cveId": cve_id})
-            req = urllib.request.Request(url, headers={"User-Agent": "nexhunter/1.0"})
-            with urllib.request.urlopen(req, timeout=8) as resp:
+            req = urllib.request.Request(url, headers={"User-Agent": "nexhunter/1.0"})  # noqa: S310 - NVD API/https only
+            with urllib.request.urlopen(req, timeout=8) as resp:  # noqa: S310
                 data = json.load(resp)
             vuls = data.get("vulnerabilities") or []
             if not vuls:

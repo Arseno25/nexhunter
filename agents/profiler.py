@@ -12,7 +12,7 @@ import os
 import re
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 # Target modality detection. A target string tells us which kind of assessment
 # is even possible: a URL is a web app, a file is a binary or a capture, a
@@ -70,16 +70,16 @@ class TargetProfile:
 
     target: str
     target_type: str = "unknown"   # web_application | host | network | domain
-    resolved_addresses: List[str] = field(default_factory=list)
-    technologies: List[Observation] = field(default_factory=list)
-    services: List[Observation] = field(default_factory=list)
-    observations: List[Observation] = field(default_factory=list)
+    resolved_addresses: list[str] = field(default_factory=list)
+    technologies: list[Observation] = field(default_factory=list)
+    services: list[Observation] = field(default_factory=list)
+    observations: list[Observation] = field(default_factory=list)
     updated_at: datetime = field(default_factory=datetime.utcnow)
 
-    def technology_names(self) -> List[str]:
+    def technology_names(self) -> list[str]:
         return sorted({o.value.lower() for o in self.technologies})
 
-    def open_ports(self) -> List[int]:
+    def open_ports(self) -> list[int]:
         ports = set()
         for service in self.services:
             match = re.search(r"\b(\d{1,5})\b", service.value)
@@ -97,7 +97,7 @@ class TargetProfile:
             return True
         return bool(self.technologies)
 
-    def recommended_safe_workflows(self) -> List[str]:
+    def recommended_safe_workflows(self) -> list[str]:
         """Passive-first workflow suggestions, grounded in what was observed."""
         recommendations = []
         if self.has_web_surface():
@@ -108,7 +108,7 @@ class TargetProfile:
             recommendations.append("recon-passive")
         return recommendations
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "target": self.target,
             "target_type": self.target_type,
@@ -160,7 +160,7 @@ class Profiler:
         return "domain"
 
     @staticmethod
-    def _file_kind(target: str, low: str) -> Optional[str]:
+    def _file_kind(target: str, low: str) -> str | None:
         """Classify a file target by extension, or by being a real file."""
         if low.endswith(_MOBILE_EXTS):
             return "mobile"

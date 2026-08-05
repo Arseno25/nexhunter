@@ -84,7 +84,7 @@ def test_unknown_profile_raises():
     print("[TEST] Unknown profile rejected...")
     try:
         P.get_profile("nexhunter-does-not-exist")
-        assert False, "expected a KeyError for an unknown profile"
+        raise AssertionError("expected a KeyError for an unknown profile")
     except KeyError as exc:
         assert "known profiles" in str(exc)
     print("  [OK] Unknown profile raises")

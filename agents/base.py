@@ -1,6 +1,6 @@
 """Agent base class with standardized result schema."""
 
-from typing import Any, Dict, Optional
+from typing import Any
 
 
 class Agent:
@@ -13,7 +13,7 @@ class Agent:
     def __init__(self, ctx):
         self.ctx = ctx
 
-    def validate_params(self, params: dict) -> tuple[bool, Optional[str]]:
+    def validate_params(self, params: dict) -> tuple[bool, str | None]:
         """Validate parameters against schema. Return (ok, error_msg)."""
         for param, (required, param_type) in self.param_schema.items():
             if required and param not in params:
@@ -22,7 +22,7 @@ class Agent:
                 return False, f"param {param} must be {param_type.__name__}, got {type(params[param]).__name__}"
         return True, None
 
-    def result(self, ok: bool, data: Any = None, error: Optional[str] = None, meta: Optional[dict] = None) -> dict:
+    def result(self, ok: bool, data: Any = None, error: str | None = None, meta: dict | None = None) -> dict:
         """Standardized result format: {ok, data/error, meta, agent}."""
         r = {"ok": ok, "agent": self.name}
         if ok and data is not None:

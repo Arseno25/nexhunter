@@ -19,7 +19,6 @@ before deciding which subset to actually execute.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional
 
 from nexhunter.core import tools as T
 from nexhunter.core.risk import RiskLevel
@@ -30,7 +29,7 @@ from nexhunter.agents.profiler import TargetProfile
 # map is treated as irrelevant -- e.g. forensics tooling never surfaces for a
 # plain web application. `unknown` is the permissive fallback used before any
 # evidence has narrowed the target down.
-TARGET_TYPE_CATEGORIES: Dict[str, Dict[str, float]] = {
+TARGET_TYPE_CATEGORIES: dict[str, dict[str, float]] = {
     "web_application": {
         "web": 1.0, "vuln_scan": 0.9, "api": 0.8, "recon": 0.55,
         "crypto": 0.5, "exploitation": 0.4, "payloads": 0.3, "osint": 0.3,
@@ -72,7 +71,7 @@ TARGET_TYPE_CATEGORIES: Dict[str, Dict[str, float]] = {
 
 # Category -> the methodology phase it belongs to, so a shortlist can be grouped
 # and ordered the way an operator would walk it.
-CATEGORY_PHASE: Dict[str, str] = {
+CATEGORY_PHASE: dict[str, str] = {
     "recon": "recon", "osint": "recon", "utility": "recon",
     "network": "enumeration",
     "web": "web_enum", "api": "web_enum",
@@ -83,7 +82,7 @@ CATEGORY_PHASE: Dict[str, str] = {
     "exploitation": "exploitation", "privesc": "exploitation",
     "payloads": "exploitation", "wireless": "exploitation",
 }
-PHASE_ORDER: List[str] = ["recon", "enumeration", "web_enum", "assessment", "exploitation"]
+PHASE_ORDER: list[str] = ["recon", "enumeration", "web_enum", "assessment", "exploitation"]
 
 _RISK_ORDER = {
     RiskLevel.PASSIVE: 0,
@@ -124,7 +123,7 @@ class Objective:
     passive_only: bool = False
 
 
-OBJECTIVES: Dict[str, Objective] = {
+OBJECTIVES: dict[str, Objective] = {
     "quick": Objective(cap=5, threshold=0.50),
     "standard": Objective(cap=12, threshold=0.35),
     "comprehensive": Objective(cap=30, threshold=0.20),
@@ -141,7 +140,7 @@ class ScoredTool:
     score: float
     available: bool
     within_ceiling: bool
-    reasons: List[str] = field(default_factory=list)
+    reasons: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict:
         return {
@@ -160,13 +159,13 @@ class SelectionResult:
     target: str
     objective: str
     risk_ceiling: str
-    selected: List[ScoredTool]
-    withheld: List[ScoredTool]
+    selected: list[ScoredTool]
+    withheld: list[ScoredTool]
     considered: int
 
-    def phases(self) -> Dict[str, List[dict]]:
+    def phases(self) -> dict[str, list[dict]]:
         """Selected tools grouped by phase, in methodology order."""
-        grouped: Dict[str, List[dict]] = {}
+        grouped: dict[str, list[dict]] = {}
         for st in self.selected:
             grouped.setdefault(st.phase, []).append(st.to_dict())
         return {p: grouped[p] for p in PHASE_ORDER if p in grouped}
@@ -195,7 +194,7 @@ class ToolSelector:
 
     def _score(
         self, spec, profile: TargetProfile, tech_blob: str
-    ) -> Optional[tuple]:
+    ) -> tuple | None:
         """Score one tool for this profile. Returns (score, reasons) or None."""
         cats = TARGET_TYPE_CATEGORIES.get(
             profile.target_type, TARGET_TYPE_CATEGORIES["unknown"]
@@ -254,14 +253,14 @@ class ToolSelector:
         profile: TargetProfile,
         objective: str = "standard",
         ceiling: RiskLevel = RiskLevel.ACTIVE,
-        cap: Optional[int] = None,
+        cap: int | None = None,
     ) -> SelectionResult:
         """Rank the registry, cap the picks, and partition withheld tools."""
         obj = OBJECTIVES.get(objective, OBJECTIVES["standard"])
         tech_blob = " ".join(profile.technology_names())
         ceiling_rank = _RISK_ORDER.get(ceiling, 1)
 
-        scored: List[ScoredTool] = []
+        scored: list[ScoredTool] = []
         for spec in T.TOOLS.values():
             if obj.passive_only and spec.risk_level != "passive":
                 continue

@@ -28,9 +28,9 @@ def base_url():
 
 def _post(url, payload):
     data = json.dumps(payload).encode()
-    req = urllib.request.Request(url, data=data, headers={"Content-Type": "application/json"})
+    req = urllib.request.Request(url, data=data, headers={"Content-Type": "application/json"})  # noqa: S310 - base_url localhost test fixture
     try:
-        with urllib.request.urlopen(req, timeout=10) as resp:
+        with urllib.request.urlopen(req, timeout=10) as resp:  # noqa: S310
             return resp.status, json.loads(resp.read())
     except urllib.error.HTTPError as e:
         return e.code, json.loads(e.read())
@@ -66,7 +66,7 @@ def test_missing_params_rejected(base_url):
 def test_health_public(base_url):
     """Test /health remains reachable."""
     print("[TEST] Health is public...")
-    with urllib.request.urlopen(base_url + "/health", timeout=10) as resp:
+    with urllib.request.urlopen(base_url + "/health", timeout=10) as resp:  # noqa: S310 - localhost test fixture
         body = json.loads(resp.read())
     assert body["ok"] is True
     print("  [OK] Health public")
@@ -76,13 +76,13 @@ def test_oversized_body_rejected(base_url):
     """An oversized request body is refused instead of exhausting memory."""
     print("[TEST] Oversized body rejected...")
     data = b"x" * (6 * 1024 * 1024)
-    req = urllib.request.Request(
+    req = urllib.request.Request(  # noqa: S310 - localhost test fixture
         base_url + "/api/command",
         data=data,
         headers={"Content-Type": "application/json"},
-    )
+    )  # noqa: S310 - localhost test fixture
     try:
-        with urllib.request.urlopen(req, timeout=10) as resp:
+        with urllib.request.urlopen(req, timeout=10) as resp:  # noqa: S310
             status = resp.status
             body = json.loads(resp.read())
     except urllib.error.HTTPError as e:
@@ -95,9 +95,9 @@ def test_oversized_body_rejected(base_url):
 def test_unknown_tool_endpoint_returns_json_error(base_url):
     """A GET for an unknown tool returns JSON, not a dropped connection."""
     print("[TEST] Unknown tool GET returns JSON error...")
-    req = urllib.request.Request(base_url + "/api/tools/nope_not_a_tool")
+    req = urllib.request.Request(base_url + "/api/tools/nope_not_a_tool")  # noqa: S310 - localhost test fixture
     try:
-        with urllib.request.urlopen(req, timeout=10) as resp:
+        with urllib.request.urlopen(req, timeout=10) as resp:  # noqa: S310
             status = resp.status
             body = json.loads(resp.read())
     except urllib.error.HTTPError as e:

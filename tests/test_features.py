@@ -1,7 +1,6 @@
 """Comprehensive tests for all NexHunter features."""
 
 import sys
-import json
 from pathlib import Path
 
 # Add parent to path
@@ -17,14 +16,8 @@ from nexhunter.api.security_features import (
 from nexhunter.api.visual import VulnerabilityCard, ProgressTracker, DashboardMetrics
 from nexhunter.workflows.security_workflows import (
     BugBountyWorkflow,
-    PenetrationTestingWorkflow,
-    RedTeamWorkflow,
-    SecurityAuditWorkflow,
     ApiSecurityWorkflow,
-    MobileSecurityWorkflow,
     CloudSecurityWorkflow,
-    SupplyChainSecurityWorkflow,
-    DevSecOpsWorkflow,
     WORKFLOW_TYPES,
 )
 from nexhunter.agents.enhanced import ENHANCED_AGENTS

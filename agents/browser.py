@@ -44,8 +44,8 @@ class BrowserAgent(Agent):
             return self.result(ok=False, error="url required")
 
         try:
-            req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
-            with urllib.request.urlopen(req, timeout=15) as resp:
+            req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})  # noqa: S310 - url dari caller/engine
+            with urllib.request.urlopen(req, timeout=15) as resp:  # noqa: S310
                 html = resp.read().decode(errors="replace")[:500000]
                 status = resp.status
                 headers = dict(resp.headers.items())
