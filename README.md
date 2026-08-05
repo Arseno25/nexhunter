@@ -7,7 +7,7 @@
 <div align="center">
 > Advanced AI-Driven Security Assessment Platform
 
-![Version](https://img.shields.io/badge/version-3.1.0-blue) ![Python](https://img.shields.io/badge/python-3.8+-green) ![Tools](https://img.shields.io/badge/tools-164-blue) ![Tests](https://img.shields.io/badge/tests-100%25-green)
+![Version](https://img.shields.io/badge/version-1.0.0-blue) ![Python](https://img.shields.io/badge/python-3.8+-green) ![Tools](https://img.shields.io/badge/tools-164-blue) ![Tests](https://img.shields.io/badge/tests-100%25-green)
 </div>
 
 ---
@@ -178,7 +178,7 @@ Add to your AI provider's config file (e.g., `~/.claude/config.json`):
 
 <div align="center">
 
-**NexHunter v3.1.0** — AI-Integrated Security Assessment
+**NexHunter v1.0.0** — AI-Integrated Security Assessment
 
 [GitHub](https://github.com/Arseno25/nexhunter)
 
