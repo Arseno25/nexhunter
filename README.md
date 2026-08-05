@@ -29,74 +29,88 @@ python -m nexhunter.api.mcp --server http://127.0.0.1:8888
 
 ---
 
-## 🔗 MCP Integration
+## 🔗 MCP Setup
 
-### Setup
+Add to your AI provider's config file (e.g., `~/.claude/config.json`):
 
-**Step 1:** Start NexHunter Server
-```bash
-python -m nexhunter.api.server --port 8888
-```
-
-**Step 2:** Start MCP Bridge
-```bash
-python -m nexhunter.api.mcp --server http://127.0.0.1:8888
-```
-
-**Step 3:** Configure AI Model
-
-**Claude Desktop**
 ```json
 {
-  "mcpServers": {
+  "mcp": {
     "nexhunter": {
-      "command": "python",
-      "args": ["-m", "nexhunter.api.mcp", "--server", "http://127.0.0.1:8888"],
-      "timeout": 300
+      "type": "local",
+      "command": [
+        "/path/to/python",
+        "-m",
+        "nexhunter.api.mcp",
+        "--server",
+        "http://127.0.0.1:8888"
+      ],
+      "environment": {
+        "PYTHONPATH": "/path/to/nexhunter"
+      },
+      "enabled": true
     }
   }
 }
 ```
-Edit `~/.claude/config.json` and restart Claude.
 
-**Other AI Models** (Grok, Gemini, GPT-4, Llama, Mistral)
+**Configure for your system:**
 
-See [MCP Universal Guide](docs/MCP_UNIVERSAL.md) for setup instructions.
+| Parameter | Example | Notes |
+|-----------|---------|-------|
+| `/path/to/python` | `/usr/bin/python3` or `C:\Python\python.exe` or `.venv/Scripts/python.exe` | Path to Python interpreter |
+| `/path/to/nexhunter` | `/home/user/nexhunter` or `C:\Users\user\nexhunter` | Path to NexHunter repo |
+| `http://127.0.0.1:8888` | Change port if needed | NexHunter server address |
 
-**Generic MCP Client**
-```python
-import subprocess
-import json
-
-proc = subprocess.Popen(
-    ["python", "-m", "nexhunter.api.mcp", "--server", "http://127.0.0.1:8888"],
-    stdin=subprocess.PIPE,
-    stdout=subprocess.PIPE,
-    text=True
-)
-
-request = {
-    "jsonrpc": "2.0",
-    "method": "tools/call",
-    "params": {"name": "assess", "arguments": {"target": "example.com"}},
-    "id": 1
+**Linux/macOS Example:**
+```json
+{
+  "mcp": {
+    "nexhunter": {
+      "type": "local",
+      "command": [
+        "/usr/bin/python3",
+        "-m",
+        "nexhunter.api.mcp",
+        "--server",
+        "http://127.0.0.1:8888"
+      ],
+      "environment": {
+        "PYTHONPATH": "/home/user/nexhunter"
+      },
+      "enabled": true
+    }
+  }
 }
-
-proc.stdin.write(json.dumps(request) + "\n")
-response = proc.stdout.readline()
-print(json.loads(response))
 ```
 
-### Usage
+**Windows Example:**
+```json
+{
+  "mcp": {
+    "nexhunter": {
+      "type": "local",
+      "command": [
+        "C:\\Users\\user\\nexhunter\\.venv\\Scripts\\python.exe",
+        "-m",
+        "nexhunter.api.mcp",
+        "--server",
+        "http://127.0.0.1:8888"
+      ],
+      "environment": {
+        "PYTHONPATH": "C:\\Users\\user\\nexhunter"
+      },
+      "enabled": true
+    }
+  }
+}
+```
 
-**In Claude:**
+**Usage:**
 ```
 "Scan example.com with nexhunter"
-→ Claude uses available tools automatically
+→ AI model automatically discovers and uses tools
 ```
-
-**In Other AI Models:**
-Same pattern - AI automatically discovers and uses tools via MCP.
 
 ---
 
@@ -152,24 +166,7 @@ Same pattern - AI automatically discovers and uses tools via MCP.
 | Workflows | 9 |
 | Assessment Phases | 73 |
 | MCP Tools | 184 |
-| CLI Commands | 15+ |
 | Test Coverage | 100% |
-
----
-
-## 📚 Documentation
-
-- **[Complete Guide](docs/README.md)** — Full reference
-- **[MCP Universal](docs/MCP_UNIVERSAL.md)** — Integration with all AI models
-- **[Tools Reference](docs/TOOLS.md)** — All 164 tools
-- **[Advanced Features](docs/ADVANCED_FEATURES.md)** — Caching, intelligence
-- **[Production Ready](docs/PRODUCTION_READINESS.md)** — Deployment
-
----
-
-## 📦 Requirements
-
-Python 3.8+, requests >= 2.28.0, urllib3 >= 1.26.0
 
 ---
 
