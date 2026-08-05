@@ -7,7 +7,7 @@
 
   <p>Safe orchestration of security tools for <em>authorized</em> assessments.</p>
 
-![Version](https://img.shields.io/badge/version-2.0.0-blue) ![Python](https://img.shields.io/badge/python-3.10%2B-green) ![Tests](https://img.shields.io/badge/tests-260%20passing-green)
+![Version](https://img.shields.io/badge/version-1.0.0-blue) ![Python](https://img.shields.io/badge/python-3.10%2B-green) ![Tests](https://img.shields.io/badge/tests-260%20passing-green)
 </div>
 
 ---
@@ -358,6 +358,6 @@ discrete values — never a command string. See
 ---
 
 <div align="center">
-<strong>NexHunter v2.0.0</strong> — Tool-Driven AI Security Orchestration<br>
+<strong>NexHunter v1.0.0</strong> — Tool-Driven AI Security Orchestration<br>
 <a href="https://github.com/Arseno25/nexhunter">GitHub</a>
 </div>

@@ -258,13 +258,13 @@ class Handler(BaseHTTPRequestHandler):
                 mode = deg.get("data", {}).get("mode", "degraded")
             self._json(200, {
                 "ok": True,
-                "version": "3.0.0",
+                "version": "1.0.0",
                 "mode": mode,
                 "agents": sorted(AGENTS),
                 "tools_installed": {n: bool(T.which(s.binary)) for n, s in T.TOOLS.items()},
             })
         elif path == "/version":
-            self._json(200, {"ok": True, "version": "3.0.0", "name": "NexHunter"})
+            self._json(200, {"ok": True, "version": "1.0.0", "name": "NexHunter"})
         elif path == "/ready":
             self._json(200, {"ok": True, "ready": True})
         elif path == "/api/telemetry":

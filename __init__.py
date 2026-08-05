@@ -21,4 +21,4 @@ Run:
     python -m nexhunter.api.mcp --server http://127.0.0.1:8888
 """
 
-__version__ = "2.0.0"
+__version__ = "1.0.0"

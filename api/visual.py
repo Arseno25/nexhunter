@@ -131,7 +131,7 @@ def create_banner(
     host: str = "127.0.0.1",
     port: int = 8888,
     mode: str = "unknown",
-    version: str = "3.0.0",
+    version: str = "1.0.0",
     agents: int = 0,
     tools: int = 0,
     color: Optional[bool] = None,
