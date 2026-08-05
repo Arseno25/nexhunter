@@ -1,6 +1,6 @@
 # NexHunter Upgrade Report
 
-**Baseline:** `b19f979` · **Head:** `2416b5a` · **Date:** 2026-08-05
+**Baseline:** `b19f979` · **Head:** `ba2fa4f` · **Date:** 2026-08-05
 **Diff:** 69 files changed, 10,014 insertions, 199 deletions
 
 ## Executive Summary
@@ -231,6 +231,37 @@ Changed: `POST /api/command` no longer accepts `cmd`. Errors carry a stable
 normalized `Finding` dataclass, SHA-256 fingerprints, deduplication, and SARIF
 export remain open.
 
+## Autonomous Assessment
+
+Added after the initial eight phases, at the owner's request: the autonomous
+execution and real-time adaptation flow, built so the AI drives the loop and
+never the operating system.
+
+`agents/profiler.py` accumulates evidence-based knowledge about a target, each
+observation carrying its source tool, observed facts kept separate from
+inferences. `workflows/orchestrator.py` runs an adaptive loop: a deterministic
+planner picks the next tools from the current profile, they run through
+`ExecutionService`, results fold back into the profile, and the plan is
+recomputed. Detecting WordPress pulls in a WordPress scan; an open 443 pulls in
+a TLS check.
+
+The autonomy is bounded three ways the AI cannot lift: every step goes through
+the `SecurityGate` (so it cannot leave the engagement scope), a risk ceiling
+keeps it to passive and active tools while surfacing intrusive and destructive
+ones for human approval, and a step budget stops it running forever. A higher
+ceiling requested is clamped, not granted. This is the line the brief draws:
+credential attacks, brute force, and exploitation must never run automatically.
+
+This also migrated workflow execution onto `ExecutionService`, so autonomous
+runs get real execution records, isolated workspaces, and tree termination that
+the old workflow-agent path lacked.
+
+Interfaces: `POST /api/autonomous`, `GET /api/autonomous[/<id>]`, and the MCP
+tools `autonomous_assess` / `autonomous_status`. Walkthrough in
+`docs/how-it-works.md`. Verified end to end against a live server: a run
+planned dns -> httpx -> nuclei -> testssl from observations, withheld an
+intrusive tool for approval, and completed inside the step budget.
+
 ## Testing Results
 
 ```
@@ -403,8 +434,8 @@ the repository.
 
 1. Typed parameter schemas (`hostname`, `cidr`, `url`, `port`, `file`) with
    per-parameter `secret` markers, which also retires the short-flag map.
-2. Migrate workflows onto `ExecutionService`.
+2. (done) Autonomous runs execute through `ExecutionService`; the legacy standalone workflow-agent path remains for non-autonomous flows.
 3. Finding normalization: SHA-256 fingerprints, deduplication, SARIF export.
 4. Raise coverage on `api/server.py`, `core/engine.py`, and `agents/`.
 5. Run CI on a remote and fix what it surfaces.
-6. Evidence-based target profiler.
+6. (done) Evidence-based target profiler and autonomous orchestration.
