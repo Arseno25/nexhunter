@@ -19,6 +19,10 @@ from nexhunter.core import tools as T
 # any profile; reaching them takes an explicit, separately configured setup.
 DEFAULT_RISK_LEVELS = ("passive", "active")
 
+# Freeform tools serve any engagement, so every profile surfaces them -- like
+# the workflow tools, which are always registered regardless of profile.
+FREEFORM_TOOLS = frozenset({"shell_command", "python_script"})
+
 
 @dataclass(frozen=True)
 class Profile:
@@ -31,9 +35,14 @@ class Profile:
     maturities: tuple = ("stable", "beta")
     # Workflow-level MCP tools (assess, recon, findings...) this profile keeps.
     include_workflow_tools: bool = True
+    # Freeform tools (shell_command, python_script) surface in every profile;
+    # set False to keep a profile strictly scoped to its own categories.
+    include_freeform_tools: bool = True
 
     def accepts(self, spec: "T.ToolSpec") -> bool:
         """True when a tool belongs in this profile."""
+        if self.include_freeform_tools and spec.name in FREEFORM_TOOLS:
+            return True
         if self.categories and spec.category not in self.categories:
             return False
         if spec.risk_level not in self.risk_levels:
@@ -138,14 +147,6 @@ PROFILES: dict[str, Profile] = {
                     "included; the autonomy ceiling still clamps them.",
         categories=("ctf", "crypto", "binary", "forensics", "osint", "web", "api"),
         risk_levels=("passive", "active", "intrusive"),
-    ),
-    "nexhunter-freeform": Profile(
-        name="nexhunter-freeform",
-        description="Free-form execution (HexStrike-style): raw shell commands and "
-                    "Python snippets, exactly as typed. Intrusive tools; recorded "
-                    "and never auto-executed in autonomous runs.",
-        categories=("utility",),
-        risk_levels=("intrusive",),
     ),
     "nexhunter-full": Profile(
         name="nexhunter-full",

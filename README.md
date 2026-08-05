@@ -146,23 +146,26 @@ narrows the registry to one job.
 
 | Profile | Tools | Purpose |
 |---|---:|---|
-| `nexhunter-core` | 15 | Status, findings, executions, passive stable checks only |
-| `nexhunter-recon` | 25 | Host discovery, DNS, subdomains, service identification |
-| `nexhunter-web` | 38 | Content discovery, injection testing, template scanning, TLS, browser crawl |
-| `nexhunter-api` | 7 | Schema and parameter discovery (arjun), JWT, GraphQL |
-| `nexhunter-code` | 16 | Static analysis, secret scanning, dependency review |
-| `nexhunter-cloud` | 8 | Read-only cloud posture |
-| `nexhunter-container` | 14 | Container and Kubernetes review |
-| `nexhunter-forensics` | 28 | Offline artifact, steganography, and binary analysis |
-| `nexhunter-osint` | 5 | OSINT: usernames, emails, footprinting, CVE lookup |
-| `nexhunter-wireless` | 7 | Wireless recon and assessment (destructive withheld) |
-| `nexhunter-privesc` | 5 | Local privilege escalation discovery |
-| `nexhunter-payloads` | 3 | Payload generation, C2 integration (never auto-executed) |
-| `nexhunter-vulnscan` | 8 | Vulnerability scanners and IDS tooling |
-| `nexhunter-mobile` | 6 | APK inspection, decompilation, runtime exploration |
-| `nexhunter-ctf` | 87 | All CTF domains: web, crypto, RE/pwn, forensics, OSINT |
-| `nexhunter-freeform` | 2 | Raw shell commands and Python snippets (HexStrike-style); intrusive, never auto-executed |
+| `nexhunter-core` | 17 | Status, findings, executions, passive stable checks only |
+| `nexhunter-recon` | 27 | Host discovery, DNS, subdomains, service identification |
+| `nexhunter-web` | 40 | Content discovery, injection testing, template scanning, TLS, browser crawl |
+| `nexhunter-api` | 9 | Schema and parameter discovery (arjun), JWT, GraphQL |
+| `nexhunter-code` | 18 | Static analysis, secret scanning, dependency review |
+| `nexhunter-cloud` | 10 | Read-only cloud posture |
+| `nexhunter-container` | 16 | Container and Kubernetes review |
+| `nexhunter-forensics` | 30 | Offline artifact, steganography, and binary analysis |
+| `nexhunter-osint` | 7 | OSINT: usernames, emails, footprinting, CVE lookup |
+| `nexhunter-wireless` | 9 | Wireless recon and assessment (destructive withheld) |
+| `nexhunter-privesc` | 7 | Local privilege escalation discovery |
+| `nexhunter-payloads` | 5 | Payload generation, C2 integration (never auto-executed) |
+| `nexhunter-vulnscan` | 10 | Vulnerability scanners and IDS tooling |
+| `nexhunter-mobile` | 8 | APK inspection, decompilation, runtime exploration |
+| `nexhunter-ctf` | 89 | All CTF domains: web, crypto, RE/pwn, forensics, OSINT |
 | `nexhunter-full` | 255 | **Default (no `--profile`).** Everything non-destructive, incl. experimental |
+
+Every profile also surfaces the two freeform tools — `shell_command` and
+`python_script` (intrusive, withheld from autonomous runs) — since they serve
+any engagement; a profile can opt out with `include_freeform_tools=False`.
 
 ```bash
 nexhunter profiles                          # list them
@@ -336,7 +339,7 @@ Core
 
 Security
   [OK] Raw command execution disabled (registry tools only)
-  [OK] Shell confined to the sanctioned freeform flag (shell_command)
+  [OK] Shell execution only via the shell_command builder contract
   [OK] Destructive tools disabled
   [OK] Intrusive tools disabled
 

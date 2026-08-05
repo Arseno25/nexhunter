@@ -5,7 +5,6 @@ import json
 import re
 import shutil
 import subprocess
-import sys
 from defusedxml import ElementTree as ET
 from dataclasses import dataclass
 from typing import Any
@@ -178,6 +177,17 @@ def _infer_category(name: str, binary: str) -> str:
     return "other"
 
 
+class ShellCommand(str):
+    """A command string that must run through the OS shell.
+
+    A builder returns this instead of an argv list to ask for shell semantics
+    (metacharacters live: pipes, redirects, chaining). The ProcessRunner is
+    the only place that honors it; every other builder output stays argv-only.
+    No ToolSpec flag exists -- the execution mode is part of the builder's
+    output contract, the same way the argv itself is.
+    """
+
+
 @dataclass
 class ToolSpec:
     """Tool specification with validation and execution."""
@@ -208,10 +218,6 @@ class ToolSpec:
     # when the binary alone does not prove the tool can run -- e.g. a wrapper
     # that shells out to Chrome or imports an optional library at runtime.
     availability_check: Callable | None = None
-    # Execute through the OS shell instead of as an argv list. The sole
-    # sanctioned site is shell_command, whose single string IS the command.
-    # The runner honors this flag; every other tool stays argv-only.
-    shell: bool = False
 
     def __post_init__(self):
         if self.timeout == DEFAULT_TOOL_TIMEOUT and self.name in TOOL_TIMEOUTS:
@@ -270,7 +276,6 @@ class ToolSpec:
             "risk_level": self.risk_level,
             "maturity": self.maturity,
             "cacheable": self.cacheable,
-            "shell": self.shell,
             "timeout_s": self.timeout,
             "parameters": {
                 spec.name: spec.describe() for spec in (self.param_specs or ())
@@ -298,8 +303,13 @@ class ToolSpec:
         """
         return P.validate_params(self.param_specs or (), user_params or {})
 
-    def build_cmd(self, user_params: dict) -> list | None:
-        """Build the argument list from validated parameters."""
+    def build_cmd(self, user_params: dict) -> list | ShellCommand | None:
+        """Build the command from validated parameters.
+
+        The output is the builder's contract: an argv list by default, or a
+        ShellCommand string when the tool's whole payload must run through the
+        OS shell (shell_command). Anything else is None (build refused).
+        """
         normalized, error = self.normalize(user_params)
         if error is not None or not self.builder:
             return None
@@ -1572,10 +1582,11 @@ _tool_specs = {
     # builds a fixed argv; these take an entire payload string and execute it.
     # That is the exact capability a HexStrike-style operator wants, kept inside
     # the registry: intrusive risk (never auto-executed, recorded, redacted,
-    # timeout-capped), absent from every default profile, and absent from
-    # autonomous runs. shell_command additionally passes the string through the
-    # OS shell, so metacharacters are live.
-    "shell_command": ToolSpec(  # noqa: S604 - sanctioned: the registry-gated freeform flag, withheld from autonomy
+    # timeout-capped), and surfaced by every MCP profile like the workflow
+    # tools, since they serve any engagement. shell_command's builder returns a
+    # ShellCommand, so its string executes through the OS shell with live
+    # metacharacters; python_script is a plain argv call.
+    "shell_command": ToolSpec(
         name="shell_command", binary="sh",
         description="Run a free-form command string through the system shell "
                     "(HexStrike-style arbitrary command execution). Pipes, "
@@ -1583,13 +1594,13 @@ _tool_specs = {
                     "timeout-capped, intrusive, and withheld from autonomous "
                     "runs. Authorized targets only.",
         params={"command": None}, timeout=120, cacheable=False,
-        category="utility", risk_level="intrusive", shell=True,
+        category="utility", risk_level="intrusive",
         availability_check=lambda: True,
         param_specs=(
             P.ParamSpec(name="command", type=P.ParamType.TEXT, required=True,
                         description="The shell command string to execute"),
         ),
-        builder=lambda p: [p["command"]]),
+        builder=lambda p: ShellCommand(p["command"])),
     "python_script": ToolSpec(
         name="python_script", binary="python",
         description="Run a free-form Python snippet with the server's "
@@ -1603,7 +1614,7 @@ _tool_specs = {
             P.ParamSpec(name="code", type=P.ParamType.TEXT, required=True,
                         description="Python source code to execute"),
         ),
-        builder=lambda p: [sys.executable, "-c", p["code"]]),
+        builder=lambda p: ["python", "-c", p["code"]]),
 }
 
 def _parse_nmap_xml(text):

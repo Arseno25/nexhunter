@@ -168,7 +168,8 @@ class ExecutionService:
             if merged.get(name) not in (None, "")
         ]
         record.redacted_command = self.redactor.redact_command(
-            list(cmd), secret_values=secret_values
+            list(cmd) if isinstance(cmd, list) else [str(cmd)],
+            secret_values=secret_values,
         )
 
         try:
@@ -180,13 +181,13 @@ class ExecutionService:
         if run_async:
             thread = threading.Thread(
                 target=self._run_and_record,
-                args=(record, cmd, spec.timeout, workspace, cache_key, spec.shell),
+                args=(record, cmd, spec.timeout, workspace, cache_key),
                 daemon=True,
             )
             thread.start()
             return {"ok": True, "execution_id": record.id, "status": record.status.value, "async": True, "cached": False}
 
-        self._run_and_record(record, cmd, spec.timeout, workspace, cache_key, spec.shell)
+        self._run_and_record(record, cmd, spec.timeout, workspace, cache_key)
         result = self._result(record, include_output=True)
         result["cached"] = False
         return result
@@ -235,9 +236,7 @@ class ExecutionService:
         # temporary directory gives the process somewhere to run while leaving
         # nothing behind -- no persistent workspace, per the direct contract.
         with tempfile.TemporaryDirectory(prefix="nexhunter-direct-") as scratch:
-            result = self.runner.run(
-                cmd, timeout=spec.timeout, workdir=Path(scratch), shell=spec.shell
-            )
+            result = self.runner.run(cmd, timeout=spec.timeout, workdir=Path(scratch))
         duration = time.time() - t0
 
         payload: dict[str, Any] = {
@@ -281,7 +280,7 @@ class ExecutionService:
 
     def _run_and_record(
         self, record: ExecutionRecord, cmd, timeout: int, workspace: Workspace,
-        cache_key: str | None = None, shell: bool = False,
+        cache_key: str | None = None,
     ) -> None:
         """Run the process and fold its outcome into the record."""
         record.transition(ExecutionStatus.RUNNING)
@@ -299,8 +298,7 @@ class ExecutionService:
             record.pid = pid
 
         result = self.runner.run(
-            cmd, timeout=timeout, workdir=workspace.root, cancel=cancel,
-            on_spawn=on_spawn, shell=shell,
+            cmd, timeout=timeout, workdir=workspace.root, cancel=cancel, on_spawn=on_spawn
         )
 
         record.exit_code = result.exit_code

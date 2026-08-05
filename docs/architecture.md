@@ -102,7 +102,7 @@ sequenceDiagram
     S->>S: validate parameters (typed, secret-aware)
     Note over S: record created: QUEUED → VALIDATING
 
-    S->>S: build argv from ToolSpec (argv-only; shell only via the sanctioned shell_command flag)
+    S->>S: build command from ToolSpec (argv-only; shell only for a ShellCommand builder)
     S->>S: redact secrets from params and command
     S->>S: create isolated workspace
     Note over S: AUTHORIZED → RUNNING
@@ -149,9 +149,10 @@ Execution safety lives in the parameter contract, not in a policy layer:
   or enum is refused before a command is ever built.
 - **No passthrough.** No parameter carries a command line, no builder splits a
   string into argv, and no execution path uses a shell — except the one
-  sanctioned flag on `shell_command`, whose entire parameter is the command
-  (intrusive, uncacheable, withheld from autonomy). Any other free-form command
-  parameter is an arbitrary-command API and is a regression test failure.
+  sanctioned builder contract: `shell_command` returns a `ShellCommand` whose
+  entire content is the command string (intrusive, uncacheable, withheld from
+  autonomy). Any other free-form command parameter is an arbitrary-command API
+  and is a regression test failure.
 - **Secret redaction.** Parameters whose names match secret patterns are
   redacted in records, logs, and responses (`security/redaction.py`).
 - **Artifact containment.** Workspaces live under `NEXHUNTER_DATA_DIR/executions/
@@ -208,24 +209,24 @@ flowchart LR
     F --> CL[cloud · 8]
     F --> CT[container · 14]
     F --> FR[forensics · 28]
-    F --> CTF[ctf · 87]
-    F --> FF[freeform · 2]
+    F --> CTF[ctf · 89]
     F --> FU[full · 255]
 
     C --> CLIENT[AI client]
     CLIENT -.->|every call still| SVC[ExecutionService]
 ```
 
-Seven more specialty profiles (osint, wireless, privesc, payloads, vulnscan,
-mobile, freeform) slice the same registry the same way; the full list with
-counts is in the README.
+Six more specialty profiles (osint, wireless, privesc, payloads, vulnscan,
+mobile) slice the same registry the same way; the full list with counts is in
+the README.
 
 Without a `--profile` flag the bridge defaults to `nexhunter-full` (255 tools,
 everything non-destructive). A focused profile cuts initialization payload and
 token cost and stops a model choosing blindly between near-identical tools —
-`nexhunter-core`, for example, exposes 15 passive stable checks. The freeform
-profile is the deliberate HexStrike-style escape hatch: exactly
-`shell_command` and `python_script`, intrusive and never auto-executed.
+`nexhunter-core`, for example, exposes 17 tools (15 passive stable checks plus
+the two freeform tools). Every profile surfaces `shell_command` and
+`python_script` — like the workflow tools, since they serve any engagement —
+and a profile can opt out with `include_freeform_tools=False`.
 
 ## Artifact containment
 
@@ -262,15 +263,14 @@ Both sit on the one execution path and add no way to reach the OS.
   and active steps.
 - **No arbitrary command execution.** No parameter carries a command line and
   no builder splits a string into argv. The sole exception is `shell_command`:
-  its parameter is the entire command, and it executes through the OS shell —
-  gated as intrusive (never auto-executed by the orchestrator), uncacheable,
-  recorded, and withheld from default profiles.
+  its builder returns a `ShellCommand` whose content is the entire command,
+  executed through the OS shell — gated as intrusive (never auto-executed by
+  the orchestrator), uncacheable, and recorded.
 - **No binary installation.** Missing tools are reported, never fetched.
 - **No off-the-shelf attack automation.** Attack-only tools (payload
-  generation, C2 integration, freeform execution) are registered but confined
-  to the `payloads` and `freeform` profiles: gated by
-  `NEXHUNTER_INTRUSIVE_TOOLS_ENABLED`, never auto-executed by the
-  orchestrator, and never surfaced by default profiles.
+  generation, C2 integration, freeform execution) are registered but
+  intrusive: gated by `NEXHUNTER_INTRUSIVE_TOOLS_ENABLED`, never auto-executed
+  by the orchestrator, and withheld from autonomous runs.
 
 ## Module map
 

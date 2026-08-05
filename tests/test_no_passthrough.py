@@ -149,14 +149,14 @@ def test_free_text_values_stay_single_arguments():
     print("  [OK] Metacharacters cannot become syntax")
 
 
-def test_shell_true_only_at_the_sanctioned_flag():
-    """shell=True exists in exactly one place: the shell_command spec flag.
+def test_no_shell_true_anywhere_in_execution_paths():
+    """No execution path passes shell=True.
 
-    Everything else must stay shell-free. The runner only passes the flag
-    through (``shell=shell``, default False); it never hardcodes a shell, and
-    no other module may touch one.
+    The shell mode exists, but as a builder contract: shell_command returns a
+    ShellCommand string and the runner derives ``shell=isinstance(...)`` at
+    the one sanctioned spawn site. No module ever hardcodes shell=True.
     """
-    print("[TEST] shell=True confined to the sanctioned freeform flag...")
+    print("[TEST] shell=True absent from execution paths...")
 
     root = Path(__file__).parent.parent
     pattern = re.compile(r"shell\s*=\s*True")
@@ -169,19 +169,13 @@ def test_shell_true_only_at_the_sanctioned_flag():
         # third-party libraries that legitimately use shell=True).
         if "test" in path.name or parts & {"__pycache__", ".venv", "venv", "site-packages"}:
             continue
-        rel = path.relative_to(root).as_posix()
-        if rel == "core/tools.py":
-            continue
         text = path.read_text(encoding="utf-8", errors="replace")
         for number, line in enumerate(text.splitlines(), start=1):
             if pattern.search(line) and not line.strip().startswith("#"):
-                offenders.append(f"{rel}:{number}")
+                offenders.append(f"{path.relative_to(root)}:{number}")
 
-    assert not offenders, f"shell=True found outside the sanctioned flag: {', '.join(offenders)}"
-    runner_src = (root / "execution" / "runner.py").read_text(encoding="utf-8")
-    assert "shell=shell" in runner_src, "runner must pass the shell flag through"
-    assert "shell=True" not in runner_src, "runner must never hardcode a shell"
-    print("  [OK] shell=True only in the shell_command spec flag")
+    assert not offenders, f"shell=True found at: {', '.join(offenders)}"
+    print("  [OK] No shell=True in any non-test module")
 
 
 def test_process_spawning_has_a_single_home():
@@ -263,7 +257,7 @@ if __name__ == "__main__":
     test_no_builder_splits_a_parameter_into_argv()
     test_shell_metacharacters_rejected_by_typed_validation()
     test_free_text_values_stay_single_arguments()
-    test_shell_true_only_at_the_sanctioned_flag()
+    test_no_shell_true_anywhere_in_execution_paths()
     test_process_spawning_has_a_single_home()
     test_cloud_and_container_tools_are_fixed_actions()
     test_removed_passthrough_tools_are_gone()

@@ -898,6 +898,9 @@ def selftest():
         # not accept "x"); that is validation working, not a broken builder.
         if argv is None:
             continue
+        if isinstance(argv, T.ShellCommand):
+            _check(bool(str(argv)), name)
+            continue
         _check(isinstance(argv, list) and all(isinstance(a, str) and a for a in argv), name)
         _check(argv[0] == spec.binary, name)
 

@@ -25,16 +25,22 @@ def test_all_expected_profiles_exist():
 
 
 def test_profile_filters_by_category():
-    """A profile exposes only its own categories."""
+    """A profile exposes only its own categories, plus the freeform tools."""
     print("[TEST] Profiles filter by category...")
     web = P.get_profile("nexhunter-web")
     selected = P.tools_for(web)
 
     assert selected, "the web profile should expose some tools"
     for name, spec in selected.items():
+        if name in P.FREEFORM_TOOLS:
+            continue
         assert spec.category in web.categories, (
             f"{name} has category {spec.category!r}, not in {web.categories}"
         )
+
+    # Freeform tools are surfaced by every profile, whatever the category.
+    for name in P.FREEFORM_TOOLS:
+        assert name in selected, f"{name} should be in the web profile"
 
     # A recon-only tool must not appear in the web profile.
     assert "subfinder_enum" not in selected, "subfinder is recon, not web"

@@ -3,7 +3,10 @@
 shell_command and python_script take an entire payload string and execute it
 -- the capability HexStrike exposes through its raw /api/command, kept inside
 the registry where it is typed, gated (intrusive), recorded, uncacheable, and
-withheld from autonomous runs.
+withheld from autonomous runs. There is no shell flag anywhere: shell_command
+is just a builder that returns a ShellCommand instead of an argv list, and the
+runner honors that contract. Every MCP profile surfaces both tools, since they
+serve any engagement.
 """
 
 import sys
@@ -14,6 +17,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 from nexhunter.api import mcp_profiles
 from nexhunter.core import params as P
 from nexhunter.core import tools as T
+from nexhunter.core.tools import ShellCommand
 from nexhunter.execution.service import ExecutionService
 
 FREEFORM = {"shell_command", "python_script"}
@@ -28,24 +32,44 @@ def test_freeform_tools_are_registered_and_gated():
         assert not spec.cacheable, f"{name} must not be cached"
         assert spec.available, f"{name} must always be available (runs in-process)"
 
-    assert T.get_tool_spec("shell_command").shell is True
-    assert T.get_tool_spec("python_script").shell is False
+    shell = T.get_tool_spec("shell_command")
+    assert isinstance(shell.build_cmd({"command": "echo hi"}), ShellCommand)
+    python = T.get_tool_spec("python_script")
+    assert isinstance(python.build_cmd({"code": "print(1)"}), list)
 
 
-def test_only_sanctioned_tools_use_shell():
-    offenders = [name for name, spec in T.TOOLS.items() if spec.shell]
-    assert set(offenders) == {"shell_command"}, f"shell flag on: {offenders}"
+def test_only_sanctioned_builders_emit_shell_commands():
+    """Exactly one builder returns a ShellCommand; every other tool is argv."""
+    probe = "alpha beta --flag; rm -rf /"
+    shell_builders = []
+    for name, spec in T.TOOLS.items():
+        params = {key: (probe if default is None else default) for key, default in spec.params.items()}
+        try:
+            built = spec.build_cmd(params)
+        except Exception:  # noqa: S112 - a builder that refuses the probe is skipped
+            continue
+        if built is None:
+            continue
+        if isinstance(built, ShellCommand):
+            shell_builders.append(name)
+    assert shell_builders == ["shell_command"], f"ShellCommand emitted by: {shell_builders}"
 
 
-def test_freeform_profile_exposes_exactly_the_two_tools():
-    profile = mcp_profiles.get_profile("nexhunter-freeform")
-    exposed = set(mcp_profiles.tools_for(profile))
-    assert exposed == FREEFORM, f"freeform profile exposes: {exposed}"
+def test_every_profile_includes_freeform():
+    """Freeform serves any engagement: all profiles surface the two tools."""
+    for profile in mcp_profiles.PROFILES.values():
+        exposed = set(mcp_profiles.tools_for(profile))
+        assert FREEFORM <= exposed, f"{profile.name} missing freeform tools"
 
 
-def test_default_profile_includes_freeform():
-    profile = mcp_profiles.get_profile("nexhunter-full")
-    assert FREEFORM <= set(mcp_profiles.tools_for(profile))
+def test_profile_can_opt_out_of_freeform():
+    strict = mcp_profiles.Profile(
+        name="strict", description="scoped", categories=("recon",),
+        include_freeform_tools=False,
+    )
+    exposed = set(mcp_profiles.tools_for(strict))
+    assert exposed, "the strict profile should still expose its own tools"
+    assert not (FREEFORM & exposed), f"freeform leaked into an opted-out profile: {FREEFORM & exposed}"
 
 
 def test_text_params_allow_newlines_but_reject_null():
@@ -104,9 +128,9 @@ def test_missing_required_param_rejected():
 if __name__ == "__main__":
     print("\n=== Free-form Execution Tool Tests ===\n")
     test_freeform_tools_are_registered_and_gated()
-    test_only_sanctioned_tools_use_shell()
-    test_freeform_profile_exposes_exactly_the_two_tools()
-    test_default_profile_includes_freeform()
+    test_only_sanctioned_builders_emit_shell_commands()
+    test_every_profile_includes_freeform()
+    test_profile_can_opt_out_of_freeform()
     test_text_params_allow_newlines_but_reject_null()
     test_shell_command_executes_through_the_shell()
     test_shell_command_is_recorded_on_the_tracked_path()

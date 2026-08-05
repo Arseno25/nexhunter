@@ -19,10 +19,11 @@ Since this report was written:
 - **REST rewrite**: the server moved from Werkzeug to Flask; one HTTP server
   now hosts REST + MCP + the visual endpoints.
 - **Registry grew** to 257 tools (29 stable / 206 beta / 22 experimental) with
-  17 MCP profiles; `nexhunter-full` (default) exposes 255.
+  16 MCP profiles; `nexhunter-full` (default) exposes 255.
 - **Freeform execution** (`shell_command`, `python_script`): HexStrike-style
   raw command execution restored as two registry tools — intrusive, recorded,
-  uncacheable, withheld from autonomous runs, and off every default profile.
+  uncacheable, withheld from autonomous runs, and surfaced by every profile
+  (they serve any engagement; opt out per profile).
 - **Zero-noise toolchain**: 263 ruff errors → 0, 70 mypy errors → 0, the suite
   runs at **327 passing tests with no warnings** (previously 304 + a collection
   error + a warning). `test_selector.py` collection was broken (bad package
@@ -153,17 +154,18 @@ Every caller enters through `ExecutionService`. Diagrams in
   refused before a command is ever built.
 - No parameter carries a command line; no builder splits a string into argv;
   no execution path uses a shell — except the single sanctioned
-  `shell_command` flag, gated as intrusive. Regression tests fail if anything
-  else is reintroduced.
+  `shell_command` builder contract (a `ShellCommand` string), gated as
+  intrusive. Regression tests fail if anything else is reintroduced.
 - Secret-shaped parameters are redacted by name (with per-binary short-flag
   resolution, so `-p` is a password to hydra and a port list to nmap) in
   records, logs, and responses.
 
 ## Execution Security
 
-- Argument arrays by default; `shell=True` confined to the `shell_command`
-  spec flag, verified by a test that greps every non-test module and
-  sanctions exactly that one site.
+- Argument arrays by default; `shell=True` never appears in the codebase —
+  shell mode exists only as the builder's `ShellCommand` contract, derived at
+  the runner's single spawn site, verified by a test that greps every
+  non-test module.
 - Isolated workspace per execution under
   `DATA_DIR/executions/<exec>/`.
 - **Process-tree termination.** The old path killed only the direct child. A
@@ -297,7 +299,8 @@ Notable tests:
 |---|---|
 | `test_no_builder_splits_a_parameter_into_argv` | The `["aws"] + cmd.split()` class |
 | `test_shell_metacharacters_rejected_by_typed_validation` | Injection payloads stay one argument |
-| `test_shell_true_only_at_the_sanctioned_flag` | Greps every non-test module; sanctions exactly the `shell_command` flag |
+| `test_only_sanctioned_builders_emit_shell_commands` | Exactly one builder returns a ShellCommand |
+| `test_no_shell_true_anywhere_in_execution_paths` | Greps every non-test module |
 | `test_runner_timeout_kills_children` | Orphaned grandchildren |
 | `test_registry_concurrent_access` | 8 threads × 50 records |
 | `test_serialization_has_no_secrets` | No auth/scope/audit settings survive |
@@ -333,19 +336,26 @@ Notable tests:
 Restores raw command execution as a *registered, gated capability* rather than
 a raw endpoint:
 
-- `shell_command` and `python_script` registered in `core/tools.py` with a new
-  `ToolSpec.shell` flag; the ProcessRunner is the only spawn site and honors
-  the flag only when the spec sets it (`runner.py`, `service.py`).
+- `shell_command` and `python_script` registered in `core/tools.py`. There is
+  **no shell flag anywhere**: a builder either returns an argv list (default)
+  or a `ShellCommand` (a str subclass) when the whole payload must run through
+  the OS shell. The ProcessRunner is the only spawn site and derives the mode
+  from that type (`isinstance(cmd, ShellCommand)`); the service layers pass
+  the builder output through untouched.
 - New `ParamType.TEXT` (`core/params.py`): free-form text that allows newlines
   but still rejects null bytes; used only by the two freeform tools.
 - Both tools are `intrusive`, uncacheable, 120s timeout, recorded on the
   tracked path, and withheld from autonomous runs by the existing risk ceiling
   (orchestrator clamps to `active`).
-- New `nexhunter-freeform` profile exposes exactly these two tools; they are
-  absent from every default profile.
+- **Every MCP profile surfaces both tools** — like the workflow tools, since
+  they serve any engagement. `Profile.include_freeform_tools` (default True)
+  lets a profile opt out; the dedicated `nexhunter-freeform` profile was
+  removed as redundant.
 - Regression updates: `ALLOWED_TEXT_PARAMS` lists `shell_command.command` with
-  a reason; the shell grep test now sanctions exactly `core/tools.py` and
-  asserts the runner only passes the flag through (`shell=shell`).
+  a reason; `test_no_shell_true_anywhere_in_execution_paths` stays unchanged
+  (no literal `shell=True` exists in the codebase);
+  `test_only_sanctioned_builders_emit_shell_commands` proves exactly one
+  builder returns a `ShellCommand`.
 - New suite `tests/test_freeform_tools.py` (10 tests); total 327 passing.
-- Earlier addendum entry "Registry grew" reflects 257 tools / 17 profiles /
+- Earlier addendum entry "Registry grew" reflects 257 tools / 16 profiles /
   full = 255.

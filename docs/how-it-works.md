@@ -74,8 +74,7 @@ Every tool is a `ToolSpec` with the same anatomy:
 | `category` | One of 20 categories. Drives which MCP profile surfaces the tool. |
 | `maturity` | `stable` (parser + fixture + test), `beta` (registered, less exercised), or `experimental` (registered but not honestly usable as written). |
 | `available` | Whether the binary exists on this host — checked with `shutil.which`, never guessed. |
-| `shell` | `False` for every tool except `shell_command`, the one freeform exception: its single string executes through the OS shell (metacharacters live), gated as intrusive. |
-| `builder` | The only place a command line can come into being. |
+| `builder` | The only place a command line can come into being. Returns an argv list by default, or a `ShellCommand` (a str subclass) when the whole payload must run through the OS shell — used by exactly one tool, `shell_command`. |
 
 Profiles are slices over these fields: `nexhunter-ctf` asks for eight
 categories, `nexhunter-osint` asks for the `osint` category, `nexhunter-core`
@@ -89,7 +88,7 @@ everything.
 Three registered tools expose scan tuning as discrete typed parameters instead
 of a free-form command line — the same no-passthrough contract as everything
 else in the registry (freeform execution lives in `shell_command` and
-`python_script`, the two sanctioned exceptions):
+`python_script`, the two sanctioned exceptions, surfaced by every profile):
 
 | Tool | Added knobs (all typed) | Output |
 |---|---|---|

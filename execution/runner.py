@@ -23,6 +23,8 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
+from nexhunter.core.tools import ShellCommand
+
 DEFAULT_MAX_OUTPUT_BYTES = 10 * 1024 * 1024
 DEFAULT_GRACE_SECONDS = 5.0
 _POLL_INTERVAL = 0.05
@@ -139,30 +141,25 @@ class ProcessRunner:
 
     def run(
         self,
-        cmd: list[str],
+        cmd: list[str] | ShellCommand,
         timeout: int,
         workdir: Path,
         cancel: Callable[[], bool] | None = None,
         on_spawn: Callable[[int], None] | None = None,
-        shell: bool = False,
     ) -> RunResult:
         """Execute cmd, writing output into workdir.
 
-        cmd must be an argument list; there is no shell involved anywhere in
-        this path except the one sanctioned exception: when the ``shell`` flag
-        is set, the single element of cmd is handed to the OS shell as one
-        command string (the shell_command tool, which the registry gates
-        behind intrusive risk). `cancel` is polled to support external
-        termination. `on_spawn`, if given, is called with the child pid the
-        moment it starts, so a live process is visible before it finishes.
+        cmd is normally an argument list and there is no shell involved. The
+        one sanctioned exception is a ``ShellCommand``: a builder-authored
+        string that must run through the OS shell as a single command
+        (shell_command, gated behind intrusive risk). The execution mode is
+        the builder's contract, never a caller-supplied flag.
+        `cancel` is polled to support external termination. `on_spawn`, if
+        given, is called with the child pid the moment it starts, so a live
+        process is visible before it finishes.
         """
         if not cmd:
             return RunResult(exit_code=None, error="empty command", error_code="EMPTY_COMMAND")
-        if shell and len(cmd) != 1:
-            return RunResult(
-                exit_code=None, error="shell mode requires exactly one command string",
-                error_code="SHELL_FORMAT",
-            )
 
         workdir = Path(workdir)
         workdir.mkdir(parents=True, exist_ok=True)
@@ -171,9 +168,10 @@ class ProcessRunner:
 
         try:
             with open(stdout_path, "wb") as out, open(stderr_path, "wb") as err:
+                through_shell = isinstance(cmd, ShellCommand)
                 proc = subprocess.Popen(
-                    cmd[0] if shell else cmd,
-                    shell=shell,
+                    str(cmd) if through_shell else cmd,
+                    shell=through_shell,
                     stdout=out,
                     stderr=err,
                     stdin=subprocess.DEVNULL,

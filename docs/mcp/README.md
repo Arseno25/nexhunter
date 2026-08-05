@@ -56,8 +56,12 @@ python -m nexhunter.api.mcp --list-profiles
 | `nexhunter-vulnscan` | Vulnerability scanners and network IDS tooling |
 | `nexhunter-mobile` | APK inspection, decompilation, runtime exploration |
 | `nexhunter-ctf` | One-stop CTF profile: Web Exploitation, Cryptography, Reverse Engineering & Pwn, Forensics, OSINT |
-| `nexhunter-freeform` | Raw shell commands and Python snippets (HexStrike-style). Intrusive; never auto-executed in autonomous runs |
 | `nexhunter-full` | **Default (no `--profile`).** Every non-destructive tool. Large payload; prefer a focused profile when you know the job |
+
+Every profile also surfaces the two freeform tools — `shell_command` (raw
+shell command strings, HexStrike-style) and `python_script` (Python snippets).
+Both are intrusive, recorded, and withheld from autonomous runs; a profile can
+opt out with `include_freeform_tools=False`.
 
 No profile lists a destructive tool. Reaching one takes explicit, separately
 configured setup.
