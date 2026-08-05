@@ -23,6 +23,9 @@ from fastmcp import FastMCP
 from nexhunter.core import tools as T
 
 SERVER = "http://127.0.0.1:8888"
+# Bearer token forwarded to the server. Read from env so the MCP bridge works
+# against a token-protected (enforced) server without code changes.
+API_TOKEN = os.environ.get("NEXHUNTER_API_TOKEN", "")
 
 mcp = FastMCP(
     "nexhunter",
@@ -45,10 +48,13 @@ mcp = FastMCP(
 
 def api(path, payload=None, timeout=600):
     url = SERVER + path
+    headers = {"Content-Type": "application/json"}
+    if API_TOKEN:
+        headers["Authorization"] = f"Bearer {API_TOKEN}"
     req = urllib.request.Request(
         url,
         data=json.dumps(payload or {}).encode() if payload is not None else None,
-        headers={"Content-Type": "application/json"},
+        headers=headers,
         method="POST" if payload is not None else "GET",
     )
     try:
@@ -58,19 +64,19 @@ def api(path, payload=None, timeout=600):
         return {"ok": False, "error": f"server unreachable at {SERVER}: {e}"}
 
 
-@mcp.tool
+@mcp.tool()
 def server_status() -> str:
     """Check nexhunter server health: mode, agents, installed tool binaries."""
     return json.dumps(api("/health"), indent=1)
 
 
-@mcp.tool
+@mcp.tool()
 def agents() -> str:
     """List all available AI agents (technology, decision, optimizer, rate_limit, cve, exploit, recovery, performance, degradation, correlator, bugbounty, ctf, browser)."""
     return json.dumps(api("/api/agents/list"), indent=1)
 
 
-@mcp.tool
+@mcp.tool()
 def run_agent(name: str, params: str = "{}") -> str:
     """Run an AI agent by name. params = JSON object string, e.g. '{"target": "https://x"}'."""
     try:
@@ -80,7 +86,7 @@ def run_agent(name: str, params: str = "{}") -> str:
     return json.dumps(api(f"/api/agents/{name}", p), indent=1)
 
 
-@mcp.tool
+@mcp.tool()
 def run_flow(flow: str, target: str, category: str = "", file: str = "") -> str:
     """Run a workflow agent: 'bugbounty' (phased recon->report) or 'ctf' (category: web/crypto/forensics/pwn/recon)."""
     if flow == "bugbounty":
@@ -90,97 +96,102 @@ def run_flow(flow: str, target: str, category: str = "", file: str = "") -> str:
     return json.dumps({"ok": False, "error": "flow must be 'bugbounty' or 'ctf'"})
 
 
-@mcp.tool
+@mcp.tool()
 def analyze_target(target: str) -> str:
     """AI analysis: tech fingerprint, recommended tools, CVE lookup, scan pace advice."""
     return json.dumps(api("/api/intelligence/analyze-target", {"target": target}), indent=1)
 
 
-@mcp.tool
+@mcp.tool()
 def select_tools(target: str, intent: str = "auto") -> str:
     """Pick tools for intent (recon/web/network/auto) given installed binaries + detected tech."""
     return json.dumps(api("/api/intelligence/select-tools", {"target": target, "intent": intent}), indent=1)
 
 
-@mcp.tool
+@mcp.tool()
 def optimize_parameters(tool: str) -> str:
     """Recommended parameters and timeout for a tool."""
     return json.dumps(api("/api/intelligence/optimize-parameters", {"tool": tool}), indent=1)
 
 
-@mcp.tool
-def run_command(cmd: str, async_run: bool = False) -> str:
-    """Run a shell command on the server as a tracked process (async_run=True returns pid immediately)."""
-    return json.dumps(api("/api/command", {"cmd": cmd, "async": async_run}), indent=1)
+@mcp.tool()
+def run_tool(tool: str, params: str = "{}", async_run: bool = False) -> str:
+    """Run a registered tool by name with JSON params (async_run=True returns pid immediately).
+
+    Raw shell command execution is not supported; only tools in the registry
+    may run, subject to the server's policy engine.
+    """
+    parsed = json.loads(params) if params else {}
+    return json.dumps(api("/api/command", {"tool": tool, "params": parsed, "async": async_run}), indent=1)
 
 
-@mcp.tool
+@mcp.tool()
 def processes() -> str:
     """List tracked server processes."""
     return json.dumps(api("/api/processes/list"), indent=1)
 
 
-@mcp.tool
+@mcp.tool()
 def process_status(pid: int) -> str:
     """Process status and recent output."""
     return json.dumps(api(f"/api/processes/status/{pid}"), indent=1)
 
 
-@mcp.tool
+@mcp.tool()
 def process_terminate(pid: int) -> str:
     """Kill a tracked process."""
     return json.dumps(api(f"/api/processes/terminate/{pid}", {}), indent=1)
 
 
-@mcp.tool
+@mcp.tool()
 def telemetry() -> str:
     """Server metrics: uptime, request count, avg response, cache, findings."""
     return json.dumps(api("/api/telemetry"), indent=1)
 
 
-@mcp.tool
+@mcp.tool()
 def cache_stats() -> str:
     """Cache entries, hits, evictions."""
     return json.dumps(api("/api/cache/stats"), indent=1)
 
 
-@mcp.tool
+@mcp.tool()
 def probe(target: str) -> str:
     """Quick HTTP probe: status, title, tech fingerprint (JSON)."""
     return json.dumps(api("/api/probe", {"target": target}), indent=1)
 
 
-@mcp.tool
+@mcp.tool()
 def portscan(target: str, ports: str = "") -> str:
     """Port/service scan, nmap -sV -T4 (JSON). ports='80,443' to limit."""
     return json.dumps(api("/api/portscan", {"target": target, "ports": ports}), indent=1)
 
 
-@mcp.tool
+@mcp.tool()
 def webscan(target: str) -> str:
     """Web vuln scan tuned to detected tech."""
     return json.dumps(api("/api/webscan", {"target": target}), indent=1)
 
 
-@mcp.tool
+@mcp.tool()
 def recon(domain: str) -> str:
     """Parallel passive recon: whois, dns, subdomain enumeration."""
     return json.dumps(api("/api/recon", {"domain": domain}), indent=1)
 
 
-@mcp.tool
+@mcp.tool()
 def assess(target: str) -> str:
     """Full pipeline: probe -> portscan -> conditional webscan, correlated findings."""
     return json.dumps(api("/api/assess", {"target": target}), indent=1)
 
 
-@mcp.tool
+@mcp.tool()
 def findings() -> str:
     """All recorded findings as JSON."""
     return json.dumps(api("/api/findings"), indent=1)
 
 
-@mcp.tool
+@mcp.tool()
 def report(fmt: str = "markdown") -> str:
     """Generate assessment report: 'markdown' or 'json'."""
     return json.dumps(api("/api/report", {"fmt": fmt}), indent=1)
@@ -194,6 +205,8 @@ def _register(name, spec):
 
     fn.__name__ = name
     fn.__annotations__ = {k: str for k in spec.params}
+    # Required params (None default) must precede defaulted ones in the signature.
+    ordered = sorted(spec.params.items(), key=lambda kv: kv[1] is not None)
     fn.__signature__ = inspect.Signature(
         [
             inspect.Parameter(
@@ -202,10 +215,16 @@ def _register(name, spec):
                 annotation=str,
                 default=(inspect.Parameter.empty if v is None else v),
             )
-            for k, v in spec.params.items()
+            for k, v in ordered
         ]
     )
-    fn.__doc__ = f"{spec.description}\nParams: {', '.join(spec.params)}"
+    fn.__doc__ = (
+        f"{spec.description}\n"
+        f"Risk: {spec.risk_level} | Binary: {spec.binary}\n"
+        f"Params: {', '.join(spec.params)}\n"
+        "Subject to the server's policy engine; intrusive/destructive tools may "
+        "require an in-scope engagement and approval."
+    )
     mcp.tool()(fn)
 
 
@@ -214,12 +233,15 @@ for _name, _spec in T.TOOLS.items():
 
 
 def main():
-    global SERVER
+    global SERVER, API_TOKEN
     parser = argparse.ArgumentParser(description="nexhunter MCP bridge")
     parser.add_argument("--server", default="http://127.0.0.1:8888", help="nexhunter server URL")
+    parser.add_argument("--token", default="", help="bearer token (else NEXHUNTER_API_TOKEN)")
     parser.add_argument("--debug", action="store_true")
     args = parser.parse_args()
     SERVER = args.server.rstrip("/")
+    if args.token:
+        API_TOKEN = args.token
     mcp.run()
 
 

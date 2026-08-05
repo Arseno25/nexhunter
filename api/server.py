@@ -29,7 +29,8 @@ Key Endpoints:
     GET  /api/agents/list       List all agents
     POST /api/agents/<name>     Run agent
   Tools:
-    POST /api/command           Direct tool execution
+    POST /api/command           Registered tool execution (by name; raw
+                                OS commands are rejected)
   Intelligence:
     POST /api/intelligence/analyze-target
     POST /api/intelligence/select-tools
@@ -57,7 +58,6 @@ Access:
 import argparse
 import json
 import os
-import shlex
 import subprocess
 import sys
 import threading
@@ -73,9 +73,11 @@ from nexhunter.agents.enhanced import ENHANCED_AGENTS
 from nexhunter.core.engine import Engine
 from nexhunter.api.visual import VulnerabilityCard, ProgressTracker, DashboardMetrics
 from nexhunter.security.authentication import TokenValidator, AuthenticationError
+from nexhunter.security.enforcement import SecurityGate, risk_level_from_str
 
 ENGINE = Engine()
 TOKEN_VALIDATOR = TokenValidator()
+GATE = SecurityGate(token_validator=TOKEN_VALIDATOR)
 
 
 class ProcessManager:
@@ -228,27 +230,44 @@ class Handler(BaseHTTPRequestHandler):
             return {}
 
     def _command(self, body):
-        if "tool" in body:
-            spec = T.get_tool_spec(body["tool"])
-            if not spec:
-                return {"ok": False, "error": f"unknown tool: {body['tool']}"}
-            user_params = body.get("params", {})
-            params = {k: user_params.get(k, spec.params.get(k)) for k in spec.params}
-            ok, err = spec.validate(params)
-            if not ok:
-                return {"ok": False, "error": err}
-            cmd = spec.build_cmd(params)
-            if not cmd:
-                return {"ok": False, "error": f"failed to build command for {body['tool']}"}
-            timeout = spec.timeout
-        else:
-            cmd = shlex.split(body.get("cmd", ""))
-            if not cmd:
-                return {"ok": False, "error": "empty cmd"}
-            timeout = int(body.get("timeout", 300))
+        # Only registered tools may run. Raw OS command passthrough was removed:
+        # arbitrary "cmd" strings are no longer accepted under any condition.
+        tool_name = body.get("tool")
+        if not tool_name:
+            return {"ok": False, "error": "missing 'tool'; raw command execution is not permitted", "code": "TOOL_REQUIRED"}
+
+        spec = T.get_tool_spec(tool_name)
+        if not spec:
+            return {"ok": False, "error": f"unknown tool: {tool_name}", "code": "UNKNOWN_TOOL"}
+
+        user_params = body.get("params", {})
+        # Validate the raw user params so missing required fields are caught
+        # before defaults mask them.
+        ok, err = spec.validate(user_params)
+        if not ok:
+            return {"ok": False, "error": err, "code": "INVALID_PARAMS"}
+        params = {k: user_params.get(k, spec.params.get(k)) for k in spec.params}
+
+        target = spec.target_of(params)
+        gate = GATE.authorize_tool(
+            auth_header=self.headers.get("Authorization"),
+            tool_name=tool_name,
+            target=target,
+            risk_level=risk_level_from_str(spec.risk_level),
+            source_ip=self.client_address[0] if self.client_address else "unknown",
+        )
+        if not gate.allowed:
+            code = gate.policy.policy_code or "DENIED"
+            return {"ok": False, "error": gate.policy.reason, "code": code,
+                    "requires_approval": gate.policy.requires_approval}
+
+        cmd = spec.build_cmd(params)
+        if not cmd:
+            return {"ok": False, "error": f"failed to build command for {tool_name}", "code": "BUILD_FAILED"}
+
         if body.get("async"):
             return PM.start(cmd, cmd[0])
-        return PM.start_and_wait(cmd, cmd[0], timeout)
+        return PM.start_and_wait(cmd, cmd[0], spec.timeout)
 
     def do_GET(self):
         t0 = time.time()

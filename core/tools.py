@@ -10,6 +10,43 @@ from typing import Callable, Optional, Dict, Any
 from nexhunter.core.config import TOOL_TIMEOUTS, DEFAULT_TOOL_TIMEOUT
 
 
+# Risk classification by keyword in tool name or binary. First match wins,
+# checked most-dangerous first. Anything unmatched defaults to "active".
+# ponytail: keyword heuristic over 164 tools; override per-tool via
+# ToolSpec(risk_level=...) when a specific tool is misclassified.
+_RISK_KEYWORDS = [
+    ("destructive", ("wipe", "destroy", "format", "deauth", "aireplay", "flood")),
+    ("intrusive", (
+        "sqlmap", "hydra", "john", "hashcat", "medusa", "ncrack", "brute",
+        "gobuster", "ffuf", "dirb", "wfuzz", "nikto", "wpscan", "metasploit",
+        "msf", "exploit", "dalfox", "commix", "xsstrike", "crackmap", "responder",
+        "slowhttp", "hping", "dos",
+    )),
+    ("passive", (
+        "whois", "dig", "nslookup", "host_lookup", "subfinder", "amass",
+        "assetfinder", "dnsx", "waybackurls", "gau", "crt", "shodan", "censys",
+        "theharvester", "sublist3r", "findomain", "cero", "recon",
+    )),
+]
+
+
+def _infer_risk(name: str, binary: str) -> str:
+    """Infer a tool's risk level from its name and binary."""
+    hay = f"{name} {binary}".lower()
+    for level, keywords in _RISK_KEYWORDS:
+        if any(kw in hay for kw in keywords):
+            return level
+    return "active"
+
+
+def _infer_target_param(params: Dict[str, Any]) -> Optional[str]:
+    """Guess which parameter carries the scope target."""
+    for candidate in ("target", "url", "domain", "host", "query", "ip"):
+        if candidate in params:
+            return candidate
+    return None
+
+
 @dataclass
 class ToolSpec:
     """Tool specification with validation and execution."""
@@ -21,10 +58,24 @@ class ToolSpec:
     timeout: int = DEFAULT_TOOL_TIMEOUT
     parser: Optional[str] = None
     builder: Optional[Callable] = None
+    # Risk classification for the policy engine. None => inferred from name/binary.
+    risk_level: Optional[str] = None
+    # Which param carries the scope target (for scope enforcement). None => inferred.
+    target_param: Optional[str] = None
 
     def __post_init__(self):
         if self.timeout == DEFAULT_TOOL_TIMEOUT and self.name in TOOL_TIMEOUTS:
             self.timeout = TOOL_TIMEOUTS[self.name]
+        if self.risk_level is None:
+            self.risk_level = _infer_risk(self.name, self.binary)
+        if self.target_param is None:
+            self.target_param = _infer_target_param(self.params)
+
+    def target_of(self, params: dict) -> str:
+        """Extract the scope target value from params."""
+        if self.target_param and self.target_param in params:
+            return str(params[self.target_param] or "")
+        return ""
 
     def validate(self, user_params: dict) -> tuple[bool, Optional[str]]:
         """Validate user params against spec. Return (ok, error_msg)."""
@@ -845,6 +896,12 @@ TOOLS = _tool_specs
 def get_tool_spec(name: str) -> Optional[ToolSpec]:
     """Get tool specification by name."""
     return TOOLS.get(name)
+
+
+def risk_of(name: str) -> str:
+    """Return the risk level string for a registered tool (default 'active')."""
+    spec = TOOLS.get(name)
+    return spec.risk_level if spec else "active"
 
 
 def parse_output(tool: str, text: str):
