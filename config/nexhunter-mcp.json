@@ -1,16 +1,16 @@
 {
   "mcpServers": {
     "nexhunter": {
-      "command": "python",
+      "command": "python3",
       "args": [
         "-m",
         "nexhunter.api.mcp",
         "--server",
         "http://127.0.0.1:8888"
       ],
-      "description": "NexHunter - AI-driven security assessment platform (18 agents, 164 tools, 9 workflows)",
+      "description": "NexHunter v3.1.0 - AI-Driven Security Assessment Platform. 164 tools, 9 workflows, 18 agents. Configure IP and port as needed.",
       "timeout": 300,
-      "disabled": false
+      "alwaysAllow": []
     }
   }
 }
