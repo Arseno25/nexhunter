@@ -7,7 +7,7 @@
 
   <p>Safe orchestration of security tools for <em>authorized</em> assessments.</p>
 
-![Version](https://img.shields.io/badge/version-1.0.0-blue) ![Python](https://img.shields.io/badge/python-3.10%2B-green) ![Tests](https://img.shields.io/badge/tests-304%20passing-green)
+![Version](https://img.shields.io/badge/version-1.0.0-blue) ![Python](https://img.shields.io/badge/python-3.10%2B-green) ![Tests](https://img.shields.io/badge/tests-317%20passing-green)
 </div>
 
 ---
@@ -142,7 +142,7 @@ narrows the registry to one job.
 
 | Profile | Tools | Purpose |
 |---|---:|---|
-| `nexhunter-core` | 12 | Status, findings, executions, passive stable checks only |
+| `nexhunter-core` | 15 | Status, findings, executions, passive stable checks only |
 | `nexhunter-recon` | 25 | Host discovery, DNS, subdomains, service identification |
 | `nexhunter-web` | 38 | Content discovery, injection testing, template scanning, TLS, browser crawl |
 | `nexhunter-api` | 7 | Schema and parameter discovery (arjun), JWT, GraphQL |
@@ -321,25 +321,31 @@ NexHunter Doctor
 
 Core
   [OK] Python 3.13.7
-  [OK] Data directory writable
+  [OK] Windows 11
+  [OK] Data directory writable: ./nexhunter_data
   [OK] Server binds to loopback (127.0.0.1)
-  [OK] Browser engine ready (selenium + google-chrome)
+  [OK] fastmcp available (MCP server)
+  [OK] defusedxml available (safe XML parsing)
   [OK] Process execution works
 
 Security
   [OK] Raw command execution disabled (registry tools only)
   [OK] No execution path uses a shell
   [OK] Destructive tools disabled
+  [OK] Intrusive tools disabled
 
-Stable tools (9/29 installed)
-  [OK] nmap_scan (nmap 7.80)
-  [OK] curl_headers (curl 8.12.1)
-  [MISSING] 20 other stable tools not installed
+Stable tools (8/29 installed)
+  [OK] nmap_scan (nmap)
+  [OK] curl_headers (curl)
+  [MISSING] 21 other stable tools not installed (--all to list)
 
-Registry availability (115/255 tools on PATH)
-  [OK] web: 20/37 available
-  [MISSING] wireless: 0/9 available
+Registry availability (36/255 tools on PATH)
+  [OK] web: 8/38 available
+  [MISSING] network: 0/21 available
 ```
+
+Your numbers differ — this is a health check of *your* machine, not a
+specification. No failures and no warnings is a healthy install.
 
 NexHunter never installs binaries for you.
 
@@ -414,9 +420,14 @@ See [.env.example](.env.example).
 ## Testing
 
 ```bash
-pytest                                                    # 304 tests
+pytest                                                    # 317 tests
 pytest --cov=nexhunter --cov-report=term-missing          # coverage
+ruff check .                                              # zero lint errors
+mypy --explicit-package-bases .                           # zero type errors
 ```
+
+The lint and type gates are clean; the CI matrix runs Python 3.10–3.13 on
+Ubuntu and Windows with the same commands.
 
 Coverage is measured, not claimed. The execution and findings layers are the
 best covered; legacy agent and engine code is thinner.

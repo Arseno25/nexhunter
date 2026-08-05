@@ -76,8 +76,7 @@ jobs:
         continue-on-error: true  # formatting is advisory until the tree is normalized
 
       - name: mypy
-        run: mypy nexhunter --ignore-missing-imports
-        continue-on-error: true  # type coverage is being added incrementally
+        run: mypy --explicit-package-bases . --ignore-missing-imports
 
   security:
     name: Security checks

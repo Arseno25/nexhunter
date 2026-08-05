@@ -25,8 +25,8 @@ not a security control.
 python -m nexhunter.api.server --port 8888
 ```
 
-Binds to `127.0.0.1` by default. See [../deployment.md](../deployment.md) before
-exposing it anywhere else.
+Binds to `127.0.0.1` by default. See the production configuration section of
+[security-model.md](../security-model.md) before exposing it anywhere else.
 
 ## 2. Pick a profile
 
@@ -67,16 +67,9 @@ non-destructive tool. If your client shows too many tools, narrow it with
 
 ## 3. Configure your client
 
-Per-client instructions:
-
-- [Claude Desktop](claude-desktop.md)
-- [Claude Code](claude-code.md)
-- [Cursor](cursor.md)
-- [VS Code](vscode.md)
-- [Roo Code](roo-code.md)
-- [OpenCode](opencode.md)
-
-All of them take the same shape:
+Every supported client (Claude Desktop, Claude Code, Cursor, VS Code, Roo
+Code, OpenCode) uses the same configuration shape — only the interpreter path
+differs. The JSON below works in all of them:
 
 ```json
 {

@@ -3,6 +3,32 @@
 **Baseline:** `b19f979` · **Date:** 2026-08-05
 **Diff (initial upgrade):** 69 files changed, 10,014 insertions, 199 deletions
 
+> This report is a point-in-time snapshot of the security upgrade. It is kept
+> verbatim as history; later work is tracked in the addendum at the bottom.
+> Current numbers (tools, tests, profiles) live in the [README](../README.md).
+
+## Addendum (2026-08-06)
+
+Since this report was written:
+
+- **Browser engine** (`agents/browser.py`): Selenium-backed page analysis,
+  screenshots, network capture, crawl, and form discovery, with a stdlib
+  fallback when Selenium/Chrome is absent. Exposed as `/api/browser/*`.
+- **Visual engine** (`api/visual.py`): HexStrike-style severity cards, live
+  dashboard, progress bars; ANSI with ASCII degradation and `NO_COLOR`.
+- **REST rewrite**: the server moved from Werkzeug to Flask; one HTTP server
+  now hosts REST + MCP + the visual endpoints.
+- **Registry grew** to 255 tools (29 stable / 204 beta / 22 experimental) with
+  16 MCP profiles; `nexhunter-full` (default) exposes 253.
+- **Zero-noise toolchain**: 263 ruff errors → 0, 70 mypy errors → 0, the suite
+  runs at **317 passing tests with no warnings** (previously 304 + a collection
+  error + a warning). `test_selector.py` collection was broken (bad package
+  import) and hid one failing test that is now fixed; the CI `mypy` step was
+  pointing at a path that never resolved.
+- The old report's "remaining risks" 6 and 7 (`CI unverified`, `utcnow`
+  deprecation) are now the only unremediated items; risk 4 (hand-maintained
+  short-flag map) was deliberately retained.
+
 ## Executive Summary
 
 NexHunter was a capable tool orchestrator with a modular layout and no

@@ -196,16 +196,16 @@ The bridge decides what a client is *shown*. The service decides what is
 ```mermaid
 flowchart LR
     REG[(Tool registry<br/>~255 tools)] --> F{Profile filter<br/>category · risk · maturity}
-    F --> C[core · 12]
-    F --> RC[recon · 23]
-    F --> W[web · 37]
+    F --> C[core · 15]
+    F --> RC[recon · 25]
+    F --> W[web · 38]
     F --> AP[api · 7]
     F --> CD[code · 16]
     F --> CL[cloud · 8]
     F --> CT[container · 14]
     F --> FR[forensics · 28]
-    F --> CTF[ctf · 86]
-    F --> FU[full · 250]
+    F --> CTF[ctf · 87]
+    F --> FU[full · 253]
 
     C --> CLIENT[AI client]
     CLIENT -.->|every call still| SVC[ExecutionService]
@@ -215,10 +215,10 @@ Six more specialty profiles (osint, wireless, privesc, payloads, vulnscan,
 mobile) slice the same registry the same way; the full list with counts is in
 the README.
 
-Without a `--profile` flag the bridge defaults to `nexhunter-full` (250 tools,
+Without a `--profile` flag the bridge defaults to `nexhunter-full` (253 tools,
 everything non-destructive). A focused profile cuts initialization payload and
 token cost and stops a model choosing blindly between near-identical tools —
-`nexhunter-core`, for example, exposes 12 passive stable checks.
+`nexhunter-core`, for example, exposes 15 passive stable checks.
 
 ## Artifact containment
 
@@ -256,13 +256,19 @@ Both sit on the one execution path and add no way to reach the OS.
 - **No arbitrary command execution.** No parameter carries a command line, no
   builder splits a string into argv, no path uses a shell.
 - **No binary installation.** Missing tools are reported, never fetched.
-- **No offensive capability added.** Tools that only make sense for attack (C2
-  frameworks) are not registered.
+- **No off-the-shelf attack automation.** Attack-only tools (payload
+  generation, C2 integration) are registered but confined to the `payloads`
+  profile: gated by `NEXHUNTER_INTRUSIVE_TOOLS_ENABLED`, never auto-executed by
+  the orchestrator, and never surfaced by default profiles.
 
 ## Module map
 
 | Path | Contents |
 |---|---|
+| `api/server.py` | REST interface (Flask); the only external entry to the service |
+| `api/mcp.py` | FastMCP bridge with profile filtering and tool limits |
+| `api/visual.py` | Vulnerability cards, dashboards, progress bars (ANSI/ASCII) |
+| `agents/browser.py` | Selenium page analysis with stdlib fallback |
 | `execution/models.py` | ExecutionRecord and its state machine |
 | `execution/workspace.py` | Per-execution isolated directories |
 | `execution/runner.py` | Process spawning, tree termination, output caps |

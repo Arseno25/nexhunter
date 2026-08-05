@@ -72,7 +72,7 @@ Every tool is a `ToolSpec` with the same anatomy:
 | `params` → `param_specs` | Typed schemas: type, default, validation rule. Refused server-side if violated. |
 | `risk_level` | `passive` / `active` / `intrusive` / `destructive`. The ceiling keys off this. |
 | `category` | One of 20 categories. Drives which MCP profile surfaces the tool. |
-| `maturity` | `stable` (parser + fixture + test) or `beta` (registered, less exercised). |
+| `maturity` | `stable` (parser + fixture + test), `beta` (registered, less exercised), or `experimental` (registered but not honestly usable as written). |
 | `available` | Whether the binary exists on this host — checked with `shutil.which`, never guessed. |
 | `builder` | The only place a command line can come into being. |
 
