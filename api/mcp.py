@@ -336,18 +336,48 @@ def execution_terminate(execution_id: str) -> str:
 
 
 @mcp.tool()
-def autonomous_assess(target: str, risk_ceiling: str = "active", max_steps: int = 20) -> str:
-    """Run an adaptive autonomous assessment of a target.
+def propose_plan(target: str, steps: list, risk_ceiling: str = "active") -> str:
+    """Validate an AI-proposed plan WITHOUT executing anything.
 
-    The orchestrator plans tools from what it observes, runs them, folds the
-    results back into a target profile, and re-plans -- adapting in real time.
-
-    risk_ceiling caps what runs automatically (passive or active). Intrusive
-    and destructive tools are never auto-executed; they are returned under
-    'recommended_next' for a human to approve. Returns a run id to poll with
-    autonomous_status.
+    steps is a list of objects: [{"tool": "nmap_scan", "params": {"target": ...}}].
+    Every step is looked up in the registry, its parameters are typed-validated,
+    and its risk level is checked against the ceiling. Returns three lists:
+    approved (validated, within the ceiling), withheld (above the ceiling,
+    needs human approval), invalid (unknown tool or bad parameters). Nothing
+    runs. Send the approved steps back to autonomous_assess to execute.
     """
-    payload = {"target": target, "risk_ceiling": risk_ceiling, "max_steps": max_steps, "async": True}
+    payload = {"target": target, "steps": steps, "risk_ceiling": risk_ceiling}
+    return json.dumps(api("/api/plan", payload), indent=1)
+
+
+@mcp.tool()
+def autonomous_assess(
+    target: str,
+    risk_ceiling: str = "active",
+    max_steps: int = 20,
+    steps: list = None,
+) -> str:
+    """Run an autonomous assessment of a target.
+
+    Without steps, the orchestrator plans tools from what it observes, runs
+    them, folds the results back into a target profile, and re-plans -- adapting
+    in real time.
+
+    With steps (the AI's own plan, e.g. the 'approved' list from propose_plan),
+    exactly those steps are executed: each is typed-validated and ceiling-
+    filtered again before it runs; anything above the ceiling is withheld.
+
+    risk_ceiling caps what runs automatically (passive or active) and is
+    clamped regardless of what is asked. Intrusive and destructive tools are
+    never auto-executed; they are returned under 'recommended_next' for a human
+    to approve. Returns a run id to poll with autonomous_status.
+    """
+    payload = {
+        "target": target, "risk_ceiling": risk_ceiling, "max_steps": max_steps,
+        "async": True,
+    }
+    if steps is not None:
+        payload["steps"] = steps
     return json.dumps(api("/api/autonomous", payload), indent=1)
 
 

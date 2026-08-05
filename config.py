@@ -87,7 +87,7 @@ class Config:
     cache_ttl: int = 600
     cache_max_entries: int = 1000
 
-    mcp_profile: str = "nexhunter-core"
+    mcp_profile: str = "nexhunter-full"
 
     destructive_tools_enabled: bool = False
     intrusive_tools_enabled: bool = False
@@ -125,7 +125,7 @@ class Config:
             cache_ttl=_integer("NEXHUNTER_CACHE_TTL", 600, minimum=0),
             cache_max_entries=_integer("NEXHUNTER_CACHE_MAX_ENTRIES", 1000, minimum=0),
 
-            mcp_profile=_get("NEXHUNTER_MCP_PROFILE", "nexhunter-core"),
+            mcp_profile=_get("NEXHUNTER_MCP_PROFILE", "nexhunter-full"),
 
             destructive_tools_enabled=_flag("NEXHUNTER_DESTRUCTIVE_TOOLS_ENABLED", False),
             intrusive_tools_enabled=_flag("NEXHUNTER_INTRUSIVE_TOOLS_ENABLED", False),

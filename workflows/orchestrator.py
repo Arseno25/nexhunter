@@ -47,6 +47,69 @@ class RunStatus(Enum):
 
 
 @dataclass
+class PlanStep:
+    """One AI-proposed step: a tool plus its parameters."""
+
+    tool: str
+    params: dict = field(default_factory=dict)
+
+
+def review_plan(target: str, steps, risk_ceiling: str = "active") -> dict:
+    """Validate AI-proposed steps without executing anything.
+
+    Every step is looked up in the registry, its parameters are typed-validated,
+    and its risk level is checked against the ceiling. The result is three
+    lists: approved (validated, within the ceiling), withheld (valid, but above
+    the ceiling -- needs a human), and invalid (unknown tool or bad parameters).
+
+    This is the whole point of the plan-first flow: the AI can propose a plan,
+    but nothing it proposed reaches the OS unvalidated.
+    """
+    try:
+        ceiling = RiskLevel(risk_ceiling)
+    except ValueError:
+        ceiling = RiskLevel.ACTIVE
+    if _RISK_ORDER[ceiling] > _RISK_ORDER[RiskLevel.ACTIVE]:
+        ceiling = RiskLevel.ACTIVE
+
+    approved, withheld, invalid = [], [], []
+    for step in steps or []:
+        if not isinstance(step, dict):
+            invalid.append({"tool": str(step), "reason": "step must be an object with tool and params"})
+            continue
+        tool = step.get("tool")
+        params = step.get("params") or {}
+        spec = T.get_tool_spec(tool)
+        if spec is None:
+            invalid.append({"tool": tool, "reason": f"unknown tool: {tool}"})
+            continue
+        ok, err = spec.validate(params)
+        if not ok:
+            invalid.append({"tool": tool, "params": params, "reason": err})
+            continue
+        try:
+            level = RiskLevel(spec.risk_level)
+        except ValueError:
+            level = RiskLevel.ACTIVE
+        if _RISK_ORDER[level] > _RISK_ORDER[ceiling]:
+            withheld.append({
+                "tool": tool, "params": params, "risk_level": spec.risk_level,
+                "reason": f"{spec.risk_level} exceeds the autonomous ceiling ({ceiling.value}); "
+                          "requires human approval",
+            })
+            continue
+        approved.append({"tool": tool, "params": params, "risk_level": spec.risk_level})
+
+    return {
+        "target": target,
+        "risk_ceiling": ceiling.value,
+        "approved": approved,
+        "withheld": withheld,
+        "invalid": invalid,
+    }
+
+
+@dataclass
 class PlannedStep:
     """A tool the planner wants to run next, and why."""
 
@@ -141,6 +204,7 @@ class RunRecord:
     executions: List[dict] = field(default_factory=list)
     withheld: List[dict] = field(default_factory=list)   # above the ceiling
     errors: List[dict] = field(default_factory=list)
+    plan: Optional[List[dict]] = None                    # AI-proposed, approved steps
     profile: Optional[dict] = None
     started_at: datetime = field(default_factory=datetime.utcnow)
     completed_at: Optional[datetime] = None
@@ -164,6 +228,7 @@ class RunRecord:
             "executions": self.executions,
             "recommended_next": self.withheld,
             "errors": self.errors,
+            "plan": self.plan,
             "profile": self.profile,
             "started_at": self.started_at.isoformat(),
             "completed_at": self.completed_at.isoformat() if self.completed_at else None,
@@ -189,14 +254,26 @@ class AutonomousOrchestrator:
         with self._lock:
             return self._runs.get(run_id)
 
+    @staticmethod
+    def review_plan(target: str, steps, risk_ceiling: str = "active") -> dict:
+        """Validate AI-proposed steps without executing anything."""
+        return review_plan(target, steps, risk_ceiling)
+
     def start(
         self,
         target: str,
         risk_ceiling: str = "active",
         max_steps: int = 20,
         run_async: bool = True,
+        steps: Optional[Sequence[dict]] = None,
     ) -> RunRecord:
-        """Begin an autonomous run. Returns the record immediately when async."""
+        """Begin an autonomous run. Returns the record immediately when async.
+
+        With `steps`, the AI's own plan is executed: every step is validated
+        and ceiling-filtered again at run time (review_plan already did so; a
+        second pass keeps a race from slipping one through). Without `steps`,
+        the adaptive loop plans from observed evidence.
+        """
         try:
             ceiling = RiskLevel(risk_ceiling)
         except ValueError:
@@ -216,6 +293,9 @@ class AutonomousOrchestrator:
         with self._lock:
             self._runs[record.id] = record
 
+        if steps:
+            record.plan = list(steps)
+
         if run_async:
             threading.Thread(
                 target=self._run_loop,
@@ -227,40 +307,46 @@ class AutonomousOrchestrator:
         return record
 
     def _run_loop(self, record, ceiling):
-        """The adaptive loop: plan from the profile, execute, observe, repeat."""
+        """The adaptive loop: plan from the profile, execute, observe, repeat.
+
+        With a plan, the loop executes exactly the approved steps instead.
+        """
         try:
             profile = self.profiler.new_profile(record.target)
             already_run: List[str] = []
 
-            while record.steps_taken < record.max_steps:
-                steps = self.planner.plan(profile, already_run, ceiling)
-                if not steps:
-                    break
-
-                record.current_phase = "planning"
-                runnable = [s for s in steps if self._within_ceiling(s, ceiling)]
-                self._record_withheld(record, steps, ceiling)
-
-                if not runnable:
-                    break
-
-                progressed = False
-                for step in runnable:
-                    if record.steps_taken >= record.max_steps:
+            if record.plan is not None:
+                self._run_plan(record, ceiling, profile)
+            else:
+                while record.steps_taken < record.max_steps:
+                    steps = self.planner.plan(profile, already_run, ceiling)
+                    if not steps:
                         break
-                    already_run.append(step.tool)
-                    record.current_phase = f"running {step.tool}"
-                    record.steps_taken += 1
-                    progressed = True
 
-                    result = self.exec.execute(
-                        tool_name=step.tool,
-                        params={self._target_param(step.tool): record.target},
-                    )
-                    self._absorb(record, profile, step, result)
+                    record.current_phase = "planning"
+                    runnable = [s for s in steps if self._within_ceiling(s, ceiling)]
+                    self._record_withheld(record, steps, ceiling)
 
-                if not progressed:
-                    break
+                    if not runnable:
+                        break
+
+                    progressed = False
+                    for step in runnable:
+                        if record.steps_taken >= record.max_steps:
+                            break
+                        already_run.append(step.tool)
+                        record.current_phase = f"running {step.tool}"
+                        record.steps_taken += 1
+                        progressed = True
+
+                        result = self.exec.execute(
+                            tool_name=step.tool,
+                            params={self._target_param(step.tool): record.target},
+                        )
+                        self._absorb(record, profile, step, result)
+
+                    if not progressed:
+                        break
 
             record.profile = profile.to_dict()
             record.status = RunStatus.COMPLETED
@@ -270,6 +356,48 @@ class AutonomousOrchestrator:
         finally:
             record.current_phase = "done"
             record.completed_at = datetime.utcnow()
+
+    def _run_plan(self, record, ceiling, profile):
+        """Execute the AI-approved plan, re-validating every step."""
+        for step in record.plan or []:
+            if record.steps_taken >= record.max_steps:
+                break
+
+            tool = step.get("tool")
+            params = dict(step.get("params") or {})
+            spec = T.get_tool_spec(tool)
+            if spec is None:
+                record.errors.append({"tool": tool, "error": f"unknown tool: {tool}"})
+                continue
+
+            ok, err = spec.validate(params)
+            if not ok:
+                record.errors.append({"tool": tool, "error": err})
+                continue
+
+            try:
+                level = RiskLevel(spec.risk_level)
+            except ValueError:
+                level = RiskLevel.ACTIVE
+            if _RISK_ORDER[level] > _RISK_ORDER[ceiling]:
+                self._record_withheld(record, [
+                    PlannedStep(tool=tool, reason="AI plan step above the ceiling",
+                                risk_level=spec.risk_level),
+                ], ceiling)
+                continue
+
+            # A plan step without the target parameter gets the run target,
+            # the same default the adaptive loop applies.
+            if spec.target_param and spec.target_param not in params:
+                params[spec.target_param] = record.target
+
+            record.current_phase = f"running {tool}"
+            record.steps_taken += 1
+            result = self.exec.execute(tool_name=tool, params=params)
+            self._absorb(record, profile,
+                         PlannedStep(tool=tool, reason="from the AI plan",
+                                     risk_level=spec.risk_level),
+                         result)
 
     def _within_ceiling(self, step: PlannedStep, ceiling: RiskLevel) -> bool:
         try:

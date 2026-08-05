@@ -268,6 +268,69 @@ def test_step_budget_is_honored():
     print(f"  [OK] Stopped at {run.steps_taken} steps")
 
 
+# --------------------------------------------------------------------------
+# AI-proposed plan
+# --------------------------------------------------------------------------
+
+def test_ai_plan_is_validated_and_ceiling_filtered():
+    """A proposed plan is reviewed without running anything.
+
+    Valid steps are approved, intrusive steps are withheld for a human, and
+    unknown tools or invalid parameters are rejected outright. This is the
+    plan-first contract: the AI writes the plan, the registry and the ceiling
+    filter it before anything touches the OS.
+    """
+    print("[TEST] AI plan validated and filtered...")
+    fake = FakeExecutionService()
+    orchestrator = AutonomousOrchestrator(execution_service=fake, finding_store=FindingStore())
+
+    review = orchestrator.review_plan(
+        "https://example.com",
+        [
+            {"tool": "nmap_scan", "params": {"target": "example.com", "ports": "80,443"}},
+            {"tool": "sqlmap_scan", "params": {"url": "https://example.com"}},
+            {"tool": "not_a_tool", "params": {}},
+            {"tool": "nmap_scan", "params": {"target": "; rm -rf /"}},
+        ],
+        "active",
+    )
+
+    assert [s["tool"] for s in review["approved"]] == ["nmap_scan"], review
+    assert [s["tool"] for s in review["withheld"]] == ["sqlmap_scan"], review
+    assert review["withheld"][0]["risk_level"] == "intrusive"
+    assert len(review["invalid"]) == 2, review
+    assert fake.calls == [], "review must not execute anything"
+
+    print("  [OK] Approved 1, withheld 1 (intrusive), rejected 2, nothing ran")
+
+
+def test_ai_plan_executes_only_approved_steps():
+    """A run with steps executes exactly them, re-validated, ceiling-clamped."""
+    print("[TEST] AI plan executes only approved steps...")
+    fake = FakeExecutionService()
+    orchestrator = AutonomousOrchestrator(execution_service=fake, finding_store=FindingStore())
+
+    run = orchestrator.start(
+        target="https://example.com",
+        risk_ceiling="active",
+        max_steps=10,
+        run_async=False,
+        steps=[
+            {"tool": "nmap_scan", "params": {"target": "example.com"}},
+            {"tool": "sqlmap_scan", "params": {"url": "https://example.com"}},
+            {"tool": "not_a_tool", "params": {}},
+            {"tool": "nmap_scan", "params": {"target": "bad target !"}},
+        ],
+    )
+
+    assert run.status is RunStatus.COMPLETED, run.errors
+    assert fake.tools_called() == ["nmap_scan"], fake.tools_called()
+    assert run.plan is not None
+    assert [w["tool"] for w in run.withheld] == ["sqlmap_scan"], "intrusive step withheld"
+
+    print("  [OK] Ran only the valid, within-ceiling step")
+
+
 def test_async_run_is_pollable():
     """An async run returns immediately and can be polled to completion."""
     print("[TEST] Async run is pollable...")
@@ -303,5 +366,7 @@ if __name__ == "__main__":
     test_ceiling_is_clamped_even_if_intrusive_requested()
     test_denied_step_is_recorded_not_fatal()
     test_step_budget_is_honored()
+    test_ai_plan_is_validated_and_ceiling_filtered()
+    test_ai_plan_executes_only_approved_steps()
     test_async_run_is_pollable()
     print("\n=== All Autonomous Orchestration Tests Passed ===\n")

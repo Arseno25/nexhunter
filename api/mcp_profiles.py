@@ -150,7 +150,7 @@ PROFILES: Dict[str, Profile] = {
     ),
 }
 
-DEFAULT_PROFILE = "nexhunter-core"
+DEFAULT_PROFILE = "nexhunter-full"
 
 
 def get_profile(name: Optional[str]) -> Profile:

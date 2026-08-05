@@ -64,17 +64,18 @@ def test_no_profile_exposes_destructive_tools():
     print("  [OK] No destructive tool in any profile")
 
 
-def test_default_profile_is_the_most_conservative():
-    """The default profile is passive and stable only."""
-    print("[TEST] Default profile is conservative...")
+def test_default_profile_is_full():
+    """No profile selected means the full non-destructive registry."""
+    print("[TEST] Default profile is full...")
     default = P.get_profile(None)
-    assert default.name == P.DEFAULT_PROFILE
+    assert default.name == P.DEFAULT_PROFILE == "nexhunter-full"
 
-    for name, spec in P.tools_for(default).items():
-        assert spec.risk_level == "passive", f"{name} is {spec.risk_level}, not passive"
-        assert spec.maturity == "stable", f"{name} is {spec.maturity}, not stable"
+    selected = P.tools_for(default)
+    assert len(selected) == len(P.tools_for(P.get_profile("nexhunter-full")))
+    for name, spec in selected.items():
+        assert spec.risk_level != "destructive", f"{name} is destructive"
 
-    print(f"  [OK] Default '{default.name}' is passive+stable only")
+    print(f"  [OK] Default '{default.name}' exposes {len(selected)} non-destructive tools")
 
 
 def test_unknown_profile_raises():
@@ -174,7 +175,7 @@ if __name__ == "__main__":
     test_profile_filters_by_category()
     test_profile_is_smaller_than_full_registry()
     test_no_profile_exposes_destructive_tools()
-    test_default_profile_is_the_most_conservative()
+    test_default_profile_is_full()
     test_unknown_profile_raises()
     test_every_tool_has_category_risk_and_maturity()
     test_stable_tools_are_declared_not_guessed()

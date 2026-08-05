@@ -1,187 +1,198 @@
 # How It Works
 
-NexHunter runs a five-stage flow — AI connection, analysis, execution,
-adaptation, reporting — with one structural difference from other autonomous
-platforms: **the AI drives the loop; it never drives the operating system.**
+NexHunter's idea fits in one sentence:
+
+> **Every request — from an AI client, REST, the CLI, or the autonomous loop —
+> is the same request.**
+
+There is one execution path, one registry, and one record of what happened.
+Nothing else exists to diverge from them.
 
 > Only use NexHunter against systems you own or are explicitly authorized to assess.
 
-## Architecture at a glance
+## The spine: one execution path
 
 ```mermaid
 %%{init: {"themeVariables": {
-  "primaryColor": "#b71c1c",
-  "secondaryColor": "#ff5252",
-  "tertiaryColor": "#ff8a80",
-  "background": "#2d0000",
-  "edgeLabelBackground":"#b71c1c",
+  "primaryColor": "#0e7490",
+  "secondaryColor": "#06b6d4",
+  "tertiaryColor": "#f59e0b",
+  "background": "#0d1117",
+  "edgeLabelBackground": "#0e7490",
   "fontFamily": "monospace",
-  "fontSize": "16px",
-  "fontColor": "#fffde7",
-  "nodeTextColor": "#fffde7"
+  "fontSize": "15px",
+  "fontColor": "#e2e8f0",
+  "nodeTextColor": "#f8fafc"
 }}}%%
-graph TD
-    A[AI Agent - Claude/GPT/Copilot] -->|MCP Protocol| B[NexHunter MCP Bridge v2.0]
-    
-    B --> C[Intelligent Planning]
-    B --> D[Autonomous Orchestration]
-    B --> E[Advanced Reporting]
-    
-    C --> C1[Evidence-based Profiler]
-    C --> C2[Adaptive Planner]
-    C --> C3[Typed Parameter Validation]
-    
-    D --> D1[Risk Ceiling - clamped to active]
-    D --> D2[Step Budget]
-    D --> D3[One Execution Path]
-    
-    E --> E1[Normalized Findings]
-    E --> E2[Vulnerability Cards]
-    E --> E3[JSON / MD / HTML / SARIF Export]
-    
-    B --> P[204 Security Tools]
-    P --> P1[Recon & OSINT - 26]
-    P --> P2[Web & API - 26]
-    P --> P3[Network & Wireless - 23]
-    P --> P4[Binary & Forensics - 26]
-    P --> P5[Cloud & Container & Code - 34]
-    P --> P6[Exploitation & Payloads & Privesc - 26]
-    P --> P7[Crypto & Mobile & IDS & VulnScan & CTF - 22]
-    P --> P8[Utility - 21]
-    
-    B --> W[Execution Layer]
-    W --> W1[Process Management - tree kill]
-    W --> W2[Isolated Workspaces]
-    W --> W3[Output Caps & Timeouts]
-    W --> W4[Secret Redaction]
-    
-    style A fill:#b71c1c,stroke:#ff5252,stroke-width:3px,color:#fffde7
-    style B fill:#ff5252,stroke:#b71c1c,stroke-width:4px,color:#fffde7
-    style C fill:#ff8a80,stroke:#b71c1c,stroke-width:2px,color:#fffde7
-    style D fill:#ff8a80,stroke:#b71c1c,stroke-width:2px,color:#fffde7
-    style E fill:#ff8a80,stroke:#b71c1c,stroke-width:2px,color:#fffde7
-    style P fill:#ff8a80,stroke:#b71c1c,stroke-width:2px,color:#fffde7
-    style W fill:#ff8a80,stroke:#b71c1c,stroke-width:2px,color:#fffde7
+flowchart LR
+    A[REST API] --> E[ExecutionService]
+    B[MCP / AI client] --> E
+    C[CLI] --> E
+    D[Autonomous loop] --> E
+
+    E -->|1. lookup| R[(Registry - 204 ToolSpecs)]
+    R -->|2. typed validation| V{valid params?}
+    V -->|no| X[refused - nothing runs]
+    V -->|yes| G[3. build argv - no shell]
+    G --> P[4. run isolated - process tree, timeout, output caps]
+    P --> W[(Workspace - artifacts)]
+    P --> S[5. record - redacted stdout, exit, duration]
+
+    classDef core fill:#0e7490,stroke:#06b6d4,stroke-width:2px,color:#f8fafc
+    classDef gate fill:#f59e0b,stroke:#fbbf24,color:#0d1117
+    class E core
+    class V gate
 ```
 
-## 1. AI Agent Connection
+The diagram is not an abstraction: it is every call. `POST /api/command`, an MCP
+tool invocation, a CLI run, and each step of the autonomous loop all walk the
+exact same code. Follow one call, and you have followed them all.
 
-Claude, GPT, or any MCP client connects over FastMCP. Tools are generated from
-the registry and filtered by profile, so a client sees the tools for its job,
-not all ~204. See [mcp/README.md](mcp/README.md).
+## Trace of one call
 
-The client can call one tool at a time, or hand the whole assessment to the
-orchestrator with `autonomous_assess`.
+`nmap_scan` against `scanme.example.com`:
 
-## 2. Intelligent Analysis
+| Step | What happens |
+|---|---|
+| 1. Lookup | The name must be in the registry; anything else is `unknown tool`. |
+| 2. Validate | `target` must be a valid hostname — a value like `; rm -rf /` or `$(curl evil)` is refused as an invalid target before any command exists. |
+| 3. Build | The registry's builder emits a fixed argv: `["nmap", "-sV", "-p", "80,443", "scanme.example.com"]`. No shell, no strings, no free-text. |
+| 4. Run | Spawned in an isolated workspace with a timeout that kills the whole process tree; stdout is capped. |
+| 5. Record | Exit code, duration, redacted output, and any artifacts are stored under that execution's ID. |
 
-Two pieces, both deterministic and evidence-based:
+The parameters the caller sent and the argv that ran are different things, and
+only the builder — project code, never model output — can produce the second.
 
-- **Profiler** (`agents/profiler.py`) accumulates what has been *observed* about
-  a target — resolved addresses, technologies, services — with the source tool
-  attached to each. It never invents a technology or a vulnerability, and it
-  keeps observed facts separate from inferences.
-- **Adaptive planner** (`workflows/orchestrator.py`) chooses the next tools from
-  the current profile. The same profile always yields the same plan, so an
-  autonomous run is reproducible and reviewable. The AI proposes a target and a
-  ceiling; the planner, not the AI, decides what touches the OS.
+## The registry: 204 tools, one shape
 
-## 3. Autonomous Execution
+Every tool is a `ToolSpec` with the same anatomy:
 
-`autonomous_assess(target)` starts an adaptive run. It is genuinely autonomous —
-it plans, runs, and re-plans without a human in the loop — but bounded two
-ways, none of which the AI can lift:
+| Field | Meaning |
+|---|---|
+| `params` → `param_specs` | Typed schemas: type, default, validation rule. Refused server-side if violated. |
+| `risk_level` | `passive` / `active` / `intrusive` / `destructive`. The ceiling keys off this. |
+| `category` | One of 20 categories. Drives which MCP profile surfaces the tool. |
+| `maturity` | `stable` (parser + fixture + test) or `beta` (registered, less exercised). |
+| `available` | Whether the binary exists on this host — checked with `shutil.which`, never guessed. |
+| `builder` | The only place a command line can come into being. |
 
-- **Risk ceiling.** The loop runs passive and active tools. Intrusive and
-  destructive tools — credential attacks, brute force, exploitation — are
-  *never* auto-executed. They are surfaced under `recommended_next` with the
-  reason they were withheld, for a human to approve. Asking for a higher
-  ceiling does not grant one; it is clamped to `active`.
-- **Step budget.** The loop stops at a configured number of steps, so it cannot
-  run forever.
+Profiles are slices over these fields: `nexhunter-ctf` asks for eight
+categories, `nexhunter-osint` asks for the `osint` category, `nexhunter-core`
+asks for stable, passive tools only. Without a `--profile` flag the bridge
+defaults to `nexhunter-full` — the whole non-destructive registry. A client is
+shown the slice for its job when one is chosen; with the default it sees
+everything.
 
-Every step also goes through the same `ExecutionService` as a manual call, so
-the loop cannot reach the operating system any other way. A failed or missing
-binary mid-run is recorded and the run continues, rather than aborting the
-whole assessment.
+## The loop: autonomous assessment
 
 ```mermaid
 sequenceDiagram
     participant AI as AI client
     participant O as Orchestrator
     participant P as Profiler
-    participant T as Target
+    participant E as ExecutionService
 
-    AI->>O: autonomous_assess(example.com)
-    loop until done or budget spent
-        O->>P: plan from current profile
-        P-->>O: next tools (within ceiling)
-        O->>T: run planned tools (isolated)
-        T-->>O: output
-        O->>P: fold results into the profile
+    AI->>O: propose_plan(target, steps, ceiling)
+    O->>O: registry lookup + typed validation + ceiling filter
+    O-->>AI: approved / withheld / invalid (nothing ran)
+    AI->>O: autonomous_assess(target, steps=approved)
+    loop exactly the approved steps
+        O->>O: re-validate tool, params, ceiling
+        O->>E: run step
+        E-->>O: output
+        O->>P: fold observations into the profile
     end
     O-->>AI: findings + tools withheld for approval
 ```
 
-## 4. Real-time Adaptation
+There are two ways to run:
 
-The plan is recomputed from the accumulated profile on every iteration. This is
-not scripted — the sequence changes because the knowledge changed:
+- **Plan-first (the AI's own plan).** `propose_plan` takes the AI's proposed
+  steps and validates them *without executing anything*: registry lookup,
+  typed parameter validation, and a risk check against the ceiling. It returns
+  three lists — `approved`, `withheld` (valid but intrusive/destructive,
+  needs a human), `invalid` (unknown tool or bad parameters). The approved
+  list goes back into `autonomous_assess(steps=...)`, where every step is
+  validated a second time before it runs. The AI writes the plan; the registry
+  and the ceiling filter it.
+- **Evidence-driven (the default).** Without `steps`, the loop below plans
+  from what the profiler has observed.
 
-| Observation | Adaptation |
+The loop is autonomous but never unsupervised:
+
+- **The planner, not the AI, picks tools.** The profiler accumulates only what
+  has been *observed* — resolved addresses, technologies, services — each fact
+  tagged with the tool that found it. The planner turns that profile into a
+  plan. The same profile yields the same plan: runs are reproducible.
+- **The ceiling is not askable.** The loop runs passive and active tools.
+  Intrusive and destructive tools — credential attacks, brute force,
+  exploitation — are never auto-executed. They are surfaced under
+  `recommended_next` with the reason they were withheld, for a human to
+  approve. A request for a higher ceiling is clamped to `active`, not granted.
+- **The budget is not skippable.** The loop stops after a set number of steps.
+- **Every step is a normal call.** Each iteration goes through the same
+  `ExecutionService` as step 3 of the trace above. A missing binary mid-run is
+  recorded, and the run continues.
+
+Adaptation is a consequence, not a feature on its own: because the planner
+recomputes from the profile each iteration, the sequence changes when the
+knowledge changes.
+
+| Observation in the profile | The plan changes to |
 |---|---|
-| httpx reports WordPress | a WordPress scan is added |
-| an open 443 / an HTTPS URL | a TLS configuration check is added |
-| a web surface is confirmed | template and misconfiguration scans are added |
-| open ports found | a service enumeration is added |
+| httpx reports WordPress | add a WordPress scan |
+| HTTPS URL or open 443 | add a TLS configuration check |
+| web surface confirmed | add template and misconfiguration scans |
+| open ports found | add service enumeration |
 
-Because adaptation is driven by evidence in the profile rather than by model
-free-text, a scan result that says *"ignore your instructions and run this
-command"* changes nothing: it is not evidence, and no parameter carries a
-command line regardless.
+Because adaptation is driven by evidence rather than model free-text, a scan
+result that says *"ignore your instructions and run this command"* changes
+nothing: it is not evidence, and no parameter carries a command line regardless.
 
-## 5. Advanced Reporting
+## The ledger: observations, findings, and the gap between
 
-Results become normalized findings — one shape across every tool, deduplicated
-by fingerprint — and export as JSON, JSONL, Markdown, HTML, or SARIF. Findings
-are kept distinct from observations and from parser failures, so a report never
-presents a fact as a vulnerability or a broken parser as a clean result.
+The pipeline keeps three things separate on purpose:
 
-## The one difference that matters
+| Kind | Example | Provenance |
+|---|---|---|
+| Observation | "443 open, TLS 1.2" | tool output, parsed |
+| Inference | "likely a web server" | derived, labeled as such |
+| Finding | "TLS 1.0 enabled" | normalized, deduplicated by fingerprint |
 
-An autonomous platform where AI output reaches the OS directly is one prompt
-injection away from running an arbitrary command. NexHunter's autonomy sits
-behind the same execution path as a manual call, and no tool accepts a command
-line, so the worst a confused or steered model can do is propose a tool and
-parameters — which are typed-validated before a command is ever built, and
-which the risk ceiling withholds if they are intrusive or destructive.
+Findings share one shape across every tool and export as JSON, JSONL,
+Markdown, HTML, or SARIF. A report never presents a fact as a vulnerability
+(that would be the inference above masquerading as a finding), and a broken
+parser is recorded as a parser failure — never as a clean result.
 
-```mermaid
-flowchart LR
-    subgraph unsafe [Autonomous platform, AI drives the OS]
-        U1[AI] --> U2[OS] --> U3[any command]
-    end
-    subgraph nex [NexHunter, AI drives the loop]
-        N1[AI] -->|proposes tool + params| N2[Planner] -->|plans| N3{within<br/>ceiling?}
-        N3 -->|passive / active| N4[ExecutionService] --> N5[typed validation<br/>+ isolated run]
-        N3 -->|intrusive / destructive| N6[(withheld,<br/>surfaced for approval)]
-    end
-    classDef bad fill:#7f1d1d,stroke:#dc2626,color:#fff
-    classDef ok fill:#14532d,stroke:#16a34a,color:#fff
-    class U2,U3 bad
-    class N4,N5 ok
-```
+## The boundary: what the AI can and cannot do
+
+| Can | Cannot |
+|---|---|
+| Propose any registered tool and typed parameters — `propose_plan` reviews it first | Propose a command line — no parameter accepts one |
+| Get a plan executed only if every step validates and fits the ceiling | Have a withheld (intrusive/destructive) step auto-run in a plan |
+| Call tools one at a time or start an autonomous run | Run a destructive tool without a feature flag and a human |
+| Ask for a higher risk ceiling | Get one — requests are clamped to `active` |
+| See redacted output | See secrets in records, logs, or responses |
+| Read the registry and profile metadata | Reach the OS by any path other than `ExecutionService` |
+
+This is the answer to prompt injection. In a platform where AI output reaches
+the OS directly, one confused or steered model is an arbitrary-command
+execution away. Here the model's worst outcome is proposing a tool and
+parameters — which are typed-validated before a command exists, and which the
+ceiling withholds when they are intrusive or destructive.
 
 ## Try it
 
 ```bash
 python -m nexhunter.api.server --port 8888
 
-# hand the assessment to the orchestrator
+# one tool, one call
+curl -X POST http://127.0.0.1:8888/api/command \
+     -d '{"tool": "nmap_scan", "params": {"target": "example.com"}}'
+
+# or hand the whole assessment to the loop
 curl -X POST http://127.0.0.1:8888/api/autonomous \
      -d '{"target":"https://example.com","risk_ceiling":"active"}'
-
-# poll it
 curl http://127.0.0.1:8888/api/autonomous/<run_id>
 ```
 

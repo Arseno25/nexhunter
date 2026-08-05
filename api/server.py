@@ -269,7 +269,7 @@ class Handler(BaseHTTPRequestHandler):
         )
 
     def _start_autonomous(self, body):
-        """Kick off an adaptive autonomous run."""
+        """Kick off an adaptive autonomous run, or an AI-proposed plan."""
         target = body.get("target")
         if not target:
             return {"ok": False, "error": "target is required", "code": "TARGET_REQUIRED"}
@@ -278,8 +278,20 @@ class Handler(BaseHTTPRequestHandler):
             risk_ceiling=body.get("risk_ceiling", "active"),
             max_steps=int(body.get("max_steps", 20)),
             run_async=bool(body.get("async", True)),
+            steps=body.get("steps"),
         )
         return {"ok": True, "run": run.to_dict()}
+
+    def _propose_plan(self, body):
+        """Validate an AI-proposed plan without executing anything."""
+        target = body.get("target")
+        steps = body.get("steps")
+        if not target:
+            return {"ok": False, "error": "target is required", "code": "TARGET_REQUIRED"}
+        if not isinstance(steps, list):
+            return {"ok": False, "error": "steps must be a list of {tool, params}", "code": "PLAN_REQUIRED"}
+        review = ORCHESTRATOR.review_plan(target, steps, body.get("risk_ceiling", "active"))
+        return {"ok": True, "plan": review}
 
     def do_GET(self):
         t0 = time.time()
@@ -414,6 +426,8 @@ class Handler(BaseHTTPRequestHandler):
                 fn = lambda: self._command(body)
             elif path == "/api/autonomous":
                 fn = lambda: self._start_autonomous(body)
+            elif path == "/api/plan":
+                fn = lambda: self._propose_plan(body)
             elif path.startswith("/api/executions/") and path.endswith("/terminate"):
                 execution_id = path[len("/api/executions/"):-len("/terminate")].strip("/")
                 fn = lambda: EXEC.terminate(execution_id)

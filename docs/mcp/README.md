@@ -41,7 +41,7 @@ python -m nexhunter.api.mcp --list-profiles
 
 | Profile | Exposes |
 |---|---|
-| `nexhunter-core` | **Default.** Status, findings, executions, and passive stable checks only |
+| `nexhunter-core` | Status, findings, executions, and passive stable checks only |
 | `nexhunter-recon` | Host discovery, DNS, subdomain enumeration, service identification |
 | `nexhunter-web` | Web security: content discovery, injection testing, templates, TLS — incl. sqlmap/ffuf/nikto |
 | `nexhunter-api` | API surface testing: schema discovery, parameter discovery (arjun), GraphQL |
@@ -56,10 +56,14 @@ python -m nexhunter.api.mcp --list-profiles
 | `nexhunter-vulnscan` | Vulnerability scanners and network IDS tooling |
 | `nexhunter-mobile` | APK inspection, decompilation, runtime exploration |
 | `nexhunter-ctf` | One-stop CTF profile: Web Exploitation, Cryptography, Reverse Engineering & Pwn, Forensics, OSINT |
-| `nexhunter-full` | Every non-destructive tool. Large payload; prefer a focused profile |
+| `nexhunter-full` | **Default (no `--profile`).** Every non-destructive tool. Large payload; prefer a focused profile when you know the job |
 
 No profile lists a destructive tool. Reaching one takes explicit, separately
 configured setup.
+
+Without `--profile`, the bridge defaults to `nexhunter-full` — every
+non-destructive tool. If your client shows too many tools, narrow it with
+`--profile nexhunter-recon` or similar.
 
 ## 3. Configure your client
 

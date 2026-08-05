@@ -37,18 +37,28 @@ def test_active_profile_tools_exposed():
 
 
 def test_registration_generated_from_registry():
-    """Registering another profile picks its tools up without hand-written code."""
+    """Registering a profile picks its tools up without hand-written code.
+
+    The default profile is nexhunter-full, so a focused profile's tools are
+    already exposed; the contract is that registration is registry-driven
+    (the returned count matches the profile) and idempotent (no duplicates).
+    """
     print("[TEST] Registration is registry-driven...")
     before = _tool_names()
 
-    added = M.register_profile_tools("nexhunter-recon")
+    count = M.register_profile_tools("nexhunter-recon")
     after = _tool_names()
 
-    assert added > 0, "the recon profile should contribute tools"
-    assert after > before, "registering a profile should expose new tools"
-    assert "subfinder_enum" in after, "a recon tool should now be exposed"
+    expected = P.tools_for(P.get_profile("nexhunter-recon"))
+    assert count == len(expected), "register_profile_tools should report the profile size"
+    for name in expected:
+        assert name in after, f"{name} in the recon profile but missing from MCP"
 
-    print(f"  [OK] {added} recon tools registered from the registry alone")
+    # With the full default, a focused profile adds nothing new and no duplicates.
+    assert after == before, "registering a subset profile should not add or duplicate tools"
+    assert "subfinder_enum" in after, "a recon tool should be exposed"
+
+    print(f"  [OK] {count} recon tools covered, registry-driven and idempotent")
 
 
 def test_no_raw_command_tool():

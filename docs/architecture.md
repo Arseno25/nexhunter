@@ -196,23 +196,29 @@ The bridge decides what a client is *shown*. The service decides what is
 ```mermaid
 flowchart LR
     REG[(Tool registry<br/>~204 tools)] --> F{Profile filter<br/>category · risk · maturity}
-    F --> C[core · 7]
-    F --> RC[recon · 15]
-    F --> W[web · 13]
-    F --> AP[api · 13]
-    F --> CD[code · 10]
+    F --> C[core · 12]
+    F --> RC[recon · 16]
+    F --> W[web · 21]
+    F --> AP[api · 5]
+    F --> CD[code · 15]
     F --> CL[cloud · 8]
-    F --> CT[container · 10]
-    F --> FR[forensics · 17]
+    F --> CT[container · 11]
+    F --> FR[forensics · 26]
+    F --> CTF[ctf · 69]
     F --> FU[full · 202]
 
     C --> CLIENT[AI client]
     CLIENT -.->|every call still| SVC[ExecutionService]
 ```
 
-The default profile exposes 12 tools rather than 202, which cuts initialization
-payload and token cost and stops a model choosing blindly between near-identical
-tools.
+Six more specialty profiles (osint, wireless, privesc, payloads, vulnscan,
+mobile) slice the same registry the same way; the full list with counts is in
+the README.
+
+Without a `--profile` flag the bridge defaults to `nexhunter-full` (202 tools,
+everything non-destructive). A focused profile cuts initialization payload and
+token cost and stops a model choosing blindly between near-identical tools —
+`nexhunter-core`, for example, exposes 12 passive stable checks.
 
 ## Artifact containment
 
@@ -258,4 +264,4 @@ NEXHUNTER_DATA_DIR/
 
 - [security-model.md](security-model.md) — threat model and guarantees
 - [mcp/README.md](mcp/README.md) — MCP setup and client configuration
-- [how-it-works.md](how-it-works.md) — five-stage flow with diagrams
+- [how-it-works.md](how-it-works.md) — one execution path, the loop, the boundary

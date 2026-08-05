@@ -27,45 +27,32 @@ The distinguishing property: **an AI client is a caller like any other.** It can
 propose a tool and parameters. It cannot propose a command line, and the
 autonomous loop cannot escalate its own risk ceiling.
 
-```mermaid
-flowchart LR
-    subgraph callers [Callers]
-        REST[REST API]
-        MCP[MCP / AI client]
-        CLI[CLI]
-    end
-
-    REST --> SVC[ExecutionService]
-    MCP --> SVC
-    CLI --> SVC
-
-    SVC --> RUN[Isolated execution<br/>typed validation · argv only · no shell]
-    RUN --> WS[(Workspace<br/>artifacts)]
-
-    classDef allow fill:#14532d,stroke:#16a34a,color:#fff
-    class RUN allow
-```
-
 ## How it works
 
 ```mermaid
 flowchart LR
-    A[AI Agent] -->|MCP| B[NexHunter Bridge]
-    B --> C[Plan - profiler + planner]
-    C --> D[Execute - bounded loop]
-    D --> E[Adapt - evidence-driven]
-    E --> F[Report - findings + exports]
-    style B fill:#b71c1c,stroke:#ff5252,stroke-width:3px,color:#fffde7
-    style D fill:#b71c1c,stroke:#ff5252,color:#fffde7
+    A[REST] --> E[ExecutionService]
+    B[MCP / AI client] --> E
+    C[CLI] --> E
+    D[Autonomous loop] --> E
+    E --> R[Registry - 204 tools]
+    E --> G[validate + build argv]
+    E --> S[run isolated + record]
+    style E fill:#0e7490,stroke:#06b6d4,stroke-width:3px,color:#f8fafc
 ```
 
-1. **AI Agent Connection** — FastMCP bridge; tools filtered by profile.
-2. **Intelligent Analysis** — profiler accumulates *observed* facts; planner picks tools from them.
-3. **Autonomous Execution** — adaptive loop, clamped to a risk ceiling, on one execution path.
-4. **Real-time Adaptation** — plan recomputed from new evidence each step.
-5. **Advanced Reporting** — normalized findings, JSON/MD/HTML/SARIF export.
+1. **One execution path** — every caller (REST, MCP, CLI, autonomous loop) walks
+   the same code: lookup → typed validation → build argv → isolated run → record.
+2. **The registry** — 204 `ToolSpec`s with typed params, risk, category,
+   maturity; profiles slice it per client.
+3. **The loop** — autonomous assessment: profiler evidence → planner → bounded
+   by a clamped risk ceiling and a step budget.
+4. **The ledger** — observations, inferences, and findings kept separate;
+   deduplicated, exported as JSON/MD/HTML/SARIF.
+5. **The boundary** — the AI can propose tools and parameters, never a command
+   line; no path to the OS except `ExecutionService`.
 
-Full walkthrough with architecture and sequence diagrams:
+Full walkthrough with a call trace, sequence diagram, and the can/cannot table:
 [docs/how-it-works.md](docs/how-it-works.md).
 
 ## Quick start
@@ -113,7 +100,7 @@ narrows that to one job.
 
 | Profile | Tools | Purpose |
 |---|---:|---|
-| `nexhunter-core` | 12 | **Default.** Status, findings, executions, passive stable checks |
+| `nexhunter-core` | 12 | Status, findings, executions, passive stable checks only |
 | `nexhunter-recon` | 16 | Host discovery, DNS, subdomains, service identification |
 | `nexhunter-web` | 21 | Content discovery, injection testing, template scanning, TLS (incl. sqlmap/ffuf/nikto) |
 | `nexhunter-api` | 5 | Schema and parameter discovery (arjun), GraphQL |
@@ -128,16 +115,17 @@ narrows that to one job.
 | `nexhunter-vulnscan` | 10 | Vulnerability scanners and IDS tooling |
 | `nexhunter-mobile` | 5 | APK inspection, decompilation, runtime exploration |
 | `nexhunter-ctf` | 69 | All CTF domains: web, crypto, RE/pwn, forensics, OSINT |
-| `nexhunter-full` | 202 | Everything non-destructive. Large payload |
+| `nexhunter-full` | 202 | **Default (no `--profile`).** Everything non-destructive. Large payload |
 
 ```bash
 nexhunter profiles                          # list them
 nexhunter profiles --name nexhunter-web     # see what one exposes
 ```
 
-No profile lists a destructive tool. Profiles are a usability control, not a
-security control — every execution goes through the same typed validation
-regardless of which profile surfaced the tool.
+No profile lists a destructive tool. Without `--profile`, the bridge exposes
+`nexhunter-full` (202 tools); pass a profile to narrow the payload. Profiles
+are a usability control, not a security control — every execution goes through
+the same typed validation regardless of which profile surfaced the tool.
 
 ## Autonomous assessment
 
@@ -151,6 +139,20 @@ curl -X POST http://127.0.0.1:8888/api/autonomous \
 ```
 
 Or over MCP: *"Run an autonomous assessment of example.com."*
+
+Plan-first over MCP (the AI proposes, the registry and ceiling filter):
+
+```bash
+curl -X POST http://127.0.0.1:8888/api/plan \
+     -d '{"target":"https://example.com","risk_ceiling":"active",
+          "steps":[{"tool":"nmap_scan","params":{"target":"example.com"}}]}'
+```
+
+`propose_plan` validates the AI's steps *without executing anything* and
+returns `approved`, `withheld`, and `invalid` lists; the approved list is then
+passed back via `autonomous_assess(steps=...)`, where every step is
+re-validated a second time before it runs. The AI writes the plan; the registry
+and the ceiling filter it.
 
 Two bounds the AI cannot lift:
 
@@ -270,7 +272,7 @@ NEXHUNTER_BIND_HOST=127.0.0.1
 NEXHUNTER_BIND_PORT=8888
 NEXHUNTER_EXTERNAL_BIND_ALLOWED=false
 NEXHUNTER_DATA_DIR=./nexhunter_data
-NEXHUNTER_MCP_PROFILE=nexhunter-core
+NEXHUNTER_MCP_PROFILE=nexhunter-full
 NEXHUNTER_DESTRUCTIVE_TOOLS_ENABLED=false
 NEXHUNTER_INTRUSIVE_TOOLS_ENABLED=false
 ```
@@ -306,7 +308,7 @@ best covered; legacy agent and engine code is thinner.
 |---|---|
 | [docs/architecture.md](docs/architecture.md) | Layers, execution flow, state machine, diagrams |
 | [docs/security-model.md](docs/security-model.md) | Threat model, guarantees, non-guarantees |
-| [docs/how-it-works.md](docs/how-it-works.md) | Five-stage flow with architecture and sequence diagrams |
+| [docs/how-it-works.md](docs/how-it-works.md) | One execution path, call trace, the loop, and the can/cannot boundary |
 | [docs/mcp/](docs/mcp/) | MCP setup per client |
 
 ## Contributing
