@@ -80,6 +80,7 @@ differs. The JSON below works in all of them:
 {
   "mcpServers": {
     "nexhunter": {
+      "type": "local",
       "command": "python",
       "args": [
         "-m", "nexhunter.api.mcp",

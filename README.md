@@ -127,6 +127,7 @@ Roo Code, OpenCode — see [docs/mcp/](docs/mcp/)):
 {
   "mcpServers": {
     "nexhunter": {
+      "type": "local",
       "command": "python",
       "args": [
         "-m", "nexhunter.api.mcp",
