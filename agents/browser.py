@@ -392,6 +392,11 @@ def _network_requests(driver, limit: int = 200) -> list:
 
 def _status_of(driver) -> int:
     try:
+        nav = driver.execute_script(
+            "return performance.getEntriesByType('navigation')[0]?.toJSON() || null"
+        )
+        if nav and nav.get("responseStatus"):
+            return nav["responseStatus"]
         entries = driver.execute_script(
             "return performance.getEntriesByType('resource').map(e => e.toJSON())"
         ) or []
