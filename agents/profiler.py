@@ -8,10 +8,24 @@ worse than none, because the next decision is made from it.
 """
 
 import ipaddress
+import os
 import re
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Dict, List, Optional
+
+# Target modality detection. A target string tells us which kind of assessment
+# is even possible: a URL is a web app, a file is a binary or a capture, a
+# directory is a codebase, an interface is wireless. This is what lets the
+# selector reach file/cloud/code/wireless tooling instead of only network tools.
+_BINARY_EXTS = (".elf", ".bin", ".so", ".o", ".a", ".exe", ".dll", ".macho",
+                ".out", ".ko", ".axf", ".sys")
+_MOBILE_EXTS = (".apk", ".ipa", ".aab", ".dex")
+_FORENSICS_EXTS = (".pcap", ".pcapng", ".cap", ".mem", ".dmp", ".raw", ".vmem",
+                   ".e01", ".dd", ".lime", ".img")
+_CLOUD_MARKERS = ("arn:aws:", "amazonaws.com", "s3://", "gs://", "azure://",
+                  "blob.core.windows.net", "googleapis.com", ".azurewebsites.net")
+_IFACE_RE = re.compile(r"^(wlan|mon|wlp|ath|ra)\d")
 
 
 @dataclass
@@ -118,15 +132,56 @@ class Profiler:
 
     def new_profile(self, target: str) -> TargetProfile:
         profile = TargetProfile(target=target)
-        if target.startswith(("http://", "https://")):
-            profile.target_type = "web_application"
-        elif self._looks_like_ip(target):
-            profile.target_type = "host"
-        elif "/" in target:
-            profile.target_type = "network"
-        else:
-            profile.target_type = "domain"
+        profile.target_type = self._classify(target)
         return profile
+
+    @staticmethod
+    def _classify(target: str) -> str:
+        """Infer the target's modality, which decides what tooling applies."""
+        t = (target or "").strip()
+        low = t.lower()
+
+        if low.startswith(("http://", "https://")):
+            return "web_application"
+        if any(marker in low for marker in _CLOUD_MARKERS):
+            return "cloud"
+
+        kind = Profiler._file_kind(t, low)
+        if kind:
+            return kind
+        if Profiler._is_dir(t):
+            return "code"
+        if _IFACE_RE.match(low) or low.endswith("mon"):
+            return "wireless"
+        if Profiler._looks_like_ip(t):
+            return "host"
+        if "/" in t:
+            return "network"
+        return "domain"
+
+    @staticmethod
+    def _file_kind(target: str, low: str) -> Optional[str]:
+        """Classify a file target by extension, or by being a real file."""
+        if low.endswith(_MOBILE_EXTS):
+            return "mobile"
+        if low.endswith(_FORENSICS_EXTS):
+            return "forensics"
+        if low.endswith(_BINARY_EXTS):
+            return "binary"
+        # A real file with no telling extension is treated as a binary artifact.
+        try:
+            if os.path.isfile(os.path.expanduser(target)):
+                return "binary"
+        except (OSError, ValueError):
+            pass
+        return None
+
+    @staticmethod
+    def _is_dir(target: str) -> bool:
+        try:
+            return os.path.isdir(os.path.expanduser(target))
+        except (OSError, ValueError):
+            return False
 
     def observe(
         self,

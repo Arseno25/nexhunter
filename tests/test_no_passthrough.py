@@ -155,7 +155,11 @@ def test_no_shell_true_anywhere_in_execution_paths():
     offenders = []
 
     for path in root.rglob("*.py"):
-        if "test" in path.name or "__pycache__" in str(path):
+        parts = set(path.parts)
+        # Only our own source: skip tests, caches, and vendored dependencies
+        # (a virtualenv checked out inside the repo would otherwise flag
+        # third-party libraries that legitimately use shell=True).
+        if "test" in path.name or parts & {"__pycache__", ".venv", "venv", "site-packages"}:
             continue
         text = path.read_text(encoding="utf-8", errors="replace")
         for number, line in enumerate(text.splitlines(), start=1):

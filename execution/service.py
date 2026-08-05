@@ -9,6 +9,9 @@ Order of operations:
     validate params -> build argv -> run -> record
 """
 
+import logging
+import os
+import sys
 import threading
 from collections import OrderedDict
 from pathlib import Path
@@ -20,6 +23,34 @@ from nexhunter.execution.registry import ExecutionRegistry
 from nexhunter.execution.runner import ProcessRunner, RunResult
 from nexhunter.execution.workspace import Workspace, WorkspaceError
 from nexhunter.security.redaction import SecretRedactor
+
+log = logging.getLogger("nexhunter.execution")
+
+# Color the status token when writing to a real terminal (mirrors the server
+# banner). NO_COLOR disables it; FORCE_COLOR forces it on.
+_USE_COLOR = bool(os.environ.get("FORCE_COLOR")) or (
+    not os.environ.get("NO_COLOR")
+    and getattr(sys.stdout, "isatty", lambda: False)()
+)
+_STATUS_STYLE = {
+    "RUNNING": ("\033[38;5;51m", "▶"),
+    "COMPLETED": ("\033[38;5;46m", "✅"),
+    "FAILED": ("\033[38;5;196m", "❌"),
+    "TIMEOUT": ("\033[38;5;208m", "⏱"),
+    "TERMINATED": ("\033[38;5;208m", "🛑"),
+    "BLOCKED": ("\033[38;5;129m", "🚫"),
+}
+
+
+def _tool_line(status: str, tool: str, target: str = "", extra: str = "") -> str:
+    """One-line, hexstrike-style tool event for the logs."""
+    color, icon = _STATUS_STYLE.get(status, ("", "•"))
+    token = f"{icon} {status:<10}"
+    if _USE_COLOR and color:
+        token = f"{color}{token}\033[0m"
+    dest = f"  →  {target}" if target else ""
+    tail = f"  {extra}" if extra else ""
+    return f"{token} {tool}{dest}{tail}"
 
 
 class ExecutionService:
@@ -111,6 +142,10 @@ class ExecutionService:
     def _run_and_record(self, record: ExecutionRecord, cmd, timeout: int, workspace: Workspace) -> None:
         """Run the process and fold its outcome into the record."""
         record.transition(ExecutionStatus.RUNNING)
+        log.info(_tool_line(
+            "RUNNING", record.tool_name, record.target or "",
+            f"(risk={record.risk_level})",
+        ))
         cancel: Callable[[], bool] = lambda: self.registry.is_cancelled(record.id)
 
         result = self.runner.run(cmd, timeout=timeout, workdir=workspace.root, cancel=cancel)
@@ -135,7 +170,25 @@ class ExecutionService:
         else:
             record.transition(ExecutionStatus.COMPLETED)
 
+        self._log_outcome(record)
         self.registry.clear_cancel(record.id)
+
+    def _log_outcome(self, record: ExecutionRecord) -> None:
+        """Emit one terminal tool-event line for the logs."""
+        status_map = {
+            ExecutionStatus.COMPLETED: ("COMPLETED", log.info),
+            ExecutionStatus.FAILED: ("FAILED", log.warning),
+            ExecutionStatus.TIMED_OUT: ("TIMEOUT", log.warning),
+            ExecutionStatus.TERMINATED: ("TERMINATED", log.warning),
+        }
+        status, emit = status_map.get(record.status, ("FAILED", log.warning))
+        duration = record.duration_seconds
+        parts = [f"exit={record.exit_code}"] if record.exit_code is not None else []
+        if duration is not None:
+            parts.append(f"{duration:.2f}s")
+        if record.error_code:
+            parts.append(f"[{record.error_code}]")
+        emit(_tool_line(status, record.tool_name, record.target or "", "  ".join(parts)))
 
     def _store_output(self, execution_id: str, stdout: str, stderr: str) -> None:
         """Keep the most recent executions' output, dropping the oldest."""
@@ -190,6 +243,10 @@ class ExecutionService:
         record.error_code = code
         record.error_message = message
         record.transition(ExecutionStatus.BLOCKED if blocked else ExecutionStatus.FAILED)
+        log.warning(_tool_line(
+            "BLOCKED" if blocked else "FAILED",
+            record.tool_name, record.target or "", f"[{code}] {message}",
+        ))
         return self._result(record, include_output=False)
 
     def _result(self, record: ExecutionRecord, include_output: bool) -> Dict[str, Any]:

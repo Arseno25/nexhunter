@@ -58,6 +58,7 @@ Access:
 import argparse
 import dataclasses
 import json
+import logging
 import os
 import subprocess
 import sys
@@ -72,13 +73,16 @@ from nexhunter.core import tools as T
 from nexhunter.agents import AGENTS, run_agent
 from nexhunter.agents.enhanced import ENHANCED_AGENTS
 from nexhunter.core.engine import Engine
-from nexhunter.api.visual import VulnerabilityCard, DashboardMetrics
+from nexhunter.api.visual import VulnerabilityCard, DashboardMetrics, create_banner
 from nexhunter.execution.service import ExecutionService
 from nexhunter.api import mcp_profiles
 from nexhunter.findings import export as findings_export
 from nexhunter.findings.store import FindingStore
 from nexhunter.workflows.orchestrator import AutonomousOrchestrator
+from nexhunter.agents.param_optimizer import optimize_preview
 from nexhunter import config as nexhunter_config
+
+log = logging.getLogger("nexhunter.server")
 
 ENGINE = Engine()
 FINDINGS = FindingStore()
@@ -289,6 +293,8 @@ class Handler(BaseHTTPRequestHandler):
             max_steps=int(body.get("max_steps", 20)),
             run_async=bool(body.get("async", True)),
             steps=body.get("steps"),
+            strategy=body.get("strategy", "methodology"),
+            objective=body.get("objective", "standard"),
         )
         return {"ok": True, "run": run.to_dict()}
 
@@ -455,6 +461,16 @@ class Handler(BaseHTTPRequestHandler):
         elif path == "/api/plan/recommend":
             fn = lambda: {"ok": True, "plan": ORCHESTRATOR.recommend_plan(
                 body.get("target", ""), body.get("risk_ceiling", "active"))}
+        elif path == "/api/plan/select":
+            fn = lambda: {"ok": True, "selection": ORCHESTRATOR.select_plan(
+                body.get("target", ""),
+                body.get("objective", "standard"),
+                body.get("risk_ceiling", "active"))}
+        elif path == "/api/tools/optimize":
+            fn = lambda: optimize_preview(
+                body.get("target", ""),
+                body.get("tool", ""),
+                body.get("objective", "standard"))
         elif path.startswith("/api/executions/") and path.endswith("/terminate"):
             execution_id = path[len("/api/executions/"):-len("/terminate")].strip("/")
             fn = lambda: EXEC.terminate(execution_id)
@@ -523,7 +539,8 @@ class Handler(BaseHTTPRequestHandler):
             self._json(404, {"error": "not found"})
 
     def log_message(self, fmt, *args):
-        pass
+        # Access logs are quiet by default; enable with --verbose (DEBUG level).
+        log.debug("%s - %s", self.address_string(), fmt % args)
 
 
 def selftest():
@@ -563,16 +580,48 @@ def selftest():
     print(f"nexhunter selftest OK ({len(AGENTS)} agents, {len(T.TOOLS)} tools)")
 
 
+def _configure_logging(verbose: bool) -> None:
+    """Send tool-usage and server logs to stdout, with a file fallback."""
+    fmt = "%(asctime)s | %(levelname)-7s | %(name)s | %(message)s"
+    handlers = [logging.StreamHandler(sys.stdout)]
+    try:
+        handlers.append(logging.FileHandler("nexhunter.log"))
+    except OSError:
+        # Read-only or restricted cwd: stdout-only logging is enough.
+        pass
+    logging.basicConfig(
+        level=logging.DEBUG if verbose else logging.INFO,
+        format=fmt,
+        datefmt="%H:%M:%S",
+        handlers=handlers,
+    )
+
+
+def _server_mode() -> str:
+    """Best-effort degradation mode for the banner (mirrors /health)."""
+    try:
+        deg = run_agent(ENGINE, "degradation", {})
+        if deg.get("ok"):
+            return deg.get("data", {}).get("mode", "degraded")
+    except Exception:
+        pass
+    return "unknown"
+
+
 def main():
     parser = argparse.ArgumentParser(description="NexHunter API server")
     parser.add_argument("--port", type=int, default=None, help="override NEXHUNTER_BIND_PORT")
     parser.add_argument("--host", default=None, help="override NEXHUNTER_BIND_HOST")
+    parser.add_argument("--verbose", "-v", action="store_true", help="debug logging incl. HTTP access logs")
+    parser.add_argument("--no-banner", action="store_true", help="suppress the startup banner")
     parser.add_argument("--selftest", action="store_true")
     args = parser.parse_args()
 
     if args.selftest:
         selftest()
         return
+
+    _configure_logging(args.verbose)
 
     # Validate before binding. Starting with an unintended security posture is
     # worse than not starting, so configuration errors are fatal.
@@ -596,17 +645,29 @@ def main():
         return 1
 
     for warning in config.warnings():
-        print(f"[WARN] {warning}", file=sys.stderr)
+        log.warning(warning)
 
     if config.binds_externally:
-        print(
-            f"[WARN] Listening on {host}, which is reachable from other hosts. "
+        log.warning(
+            "Listening on %s, which is reachable from other hosts. "
             "Only do this on a network you control.",
-            file=sys.stderr,
+            host,
         )
 
-    print(f"NexHunter server on http://{host}:{port} (Ctrl+C to stop)")
-    ThreadingHTTPServer((host, port), Handler).serve_forever()
+    if not args.no_banner:
+        print(create_banner(
+            host=host,
+            port=port,
+            mode=_server_mode(),
+            agents=len(AGENTS),
+            tools=len(T.TOOLS),
+        ))
+
+    log.info("NexHunter server ready on http://%s:%s (Ctrl+C to stop)", host, port)
+    try:
+        ThreadingHTTPServer((host, port), Handler).serve_forever()
+    except KeyboardInterrupt:
+        log.info("Shutting down.")
     return 0
 
 

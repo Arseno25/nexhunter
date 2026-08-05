@@ -234,12 +234,12 @@ _tool_specs = {
     # ==================== RECONNAISSANCE (OSINT) ====================
     "nmap_scan": ToolSpec(
         name="nmap_scan", binary="nmap", description="Port/service discovery",
-        params={"target": None, "ports": ""}, timeout=300,
-        builder=lambda p: ["nmap", "-sV", "-T4", "-oX", "-"] + (["-p", p["ports"]] if p["ports"] else []) + [p["target"]]),
+        params={"target": None, "ports": "", "timing": "4"}, timeout=300,
+        builder=lambda p: ["nmap", "-sV", f"-T{p['timing']}", "-oX", "-"] + (["-p", p["ports"]] if p["ports"] else []) + [p["target"]]),
     "masscan": ToolSpec(
         name="masscan", binary="masscan", description="Fast port scanner",
-        params={"target": None, "ports": "1-65535"}, timeout=600,
-        builder=lambda p: ["masscan", p["target"], "-p", p["ports"], "-oG", "-"]),
+        params={"target": None, "ports": "1-65535", "rate": 1000}, timeout=600,
+        builder=lambda p: ["masscan", p["target"], "-p", p["ports"], "-oG", "-", "--rate", str(p["rate"])]),
     "rustscan": ToolSpec(
         name="rustscan", binary="rustscan", description="Fast port scanner in Rust",
         params={"target": None}, timeout=300,
@@ -276,20 +276,20 @@ _tool_specs = {
     # ==================== WEB SCANNING ====================
     "nuclei_scan": ToolSpec(
         name="nuclei_scan", binary="nuclei", description="Vulnerability scanner with templates",
-        params={"target": None}, timeout=300,
-        builder=lambda p: ["nuclei", "-u", p["target"], "-silent", "-jsonl"]),
+        params={"target": None, "severity": ""}, timeout=300,
+        builder=lambda p: ["nuclei", "-u", p["target"], "-silent", "-jsonl"] + (["-severity", p["severity"]] if p["severity"] else [])),
     "ffuf_scan": ToolSpec(
         name="ffuf_scan", binary="ffuf", description="Web content fuzzer",
-        params={"target": None, "wordlist": None, "filter_status": ""}, timeout=300,
-        builder=lambda p: ["ffuf", "-u", p["target"].rstrip("/") + "/FUZZ", "-w", p["wordlist"]] + (["-fs", p["filter_status"]] if p["filter_status"] else [])),
+        params={"target": None, "wordlist": None, "filter_status": "", "threads": 40}, timeout=300,
+        builder=lambda p: ["ffuf", "-u", p["target"].rstrip("/") + "/FUZZ", "-w", p["wordlist"], "-t", str(p["threads"])] + (["-fs", p["filter_status"]] if p["filter_status"] else [])),
     "gobuster_dir": ToolSpec(
         name="gobuster_dir", binary="gobuster", description="Directory brute force",
-        params={"target": None, "wordlist": None}, timeout=300,
-        builder=lambda p: ["gobuster", "dir", "-u", p["target"], "-w", p["wordlist"]]),
+        params={"target": None, "wordlist": None, "extensions": "", "threads": 40}, timeout=300,
+        builder=lambda p: ["gobuster", "dir", "-u", p["target"], "-w", p["wordlist"], "-t", str(p["threads"])] + (["-x", p["extensions"]] if p["extensions"] else [])),
     "gobuster_dns": ToolSpec(
         name="gobuster_dns", binary="gobuster", description="DNS subdomain brute force",
-        params={"domain": None, "wordlist": None}, timeout=300,
-        builder=lambda p: ["gobuster", "dns", "-d", p["domain"], "-w", p["wordlist"]]),
+        params={"domain": None, "wordlist": None, "threads": 40}, timeout=300,
+        builder=lambda p: ["gobuster", "dns", "-d", p["domain"], "-w", p["wordlist"], "-t", str(p["threads"])]),
     "nikto_scan": ToolSpec(
         name="nikto_scan", binary="nikto", description="Web server vulnerability scan",
         params={"target": None}, timeout=300,
@@ -1144,8 +1144,8 @@ _tool_specs = {
     # ==================== WEB: CRAWLING & CONTENT DISCOVERY ====================
     "katana_crawl": ToolSpec(
         name="katana_crawl", binary="katana", description="Web crawler with JS rendering",
-        params={"url": None}, timeout=300,
-        builder=lambda p: ["katana", "-u", p["url"], "-silent", "-jc"]),
+        params={"url": None, "depth": 3}, timeout=300,
+        builder=lambda p: ["katana", "-u", p["url"], "-silent", "-jc", "-d", str(p["depth"])]),
     "waybackurls": ToolSpec(
         name="waybackurls", binary="waybackurls", description="Historical URLs from the Wayback Machine",
         params={"domain": None}, timeout=60,
@@ -1164,12 +1164,12 @@ _tool_specs = {
         builder=lambda p: ["whatweb", p["url"]]),
     "feroxbuster": ToolSpec(
         name="feroxbuster", binary="feroxbuster", description="Recursive content discovery",
-        params={"url": None, "wordlist": None}, timeout=600,
-        builder=lambda p: ["feroxbuster", "-u", p["url"], "-w", p["wordlist"], "-q"]),
+        params={"url": None, "wordlist": None, "extensions": "", "threads": 40}, timeout=600,
+        builder=lambda p: ["feroxbuster", "-u", p["url"], "-w", p["wordlist"], "-q", "-t", str(p["threads"])] + (["-x", p["extensions"]] if p["extensions"] else [])),
     "dirsearch": ToolSpec(
         name="dirsearch", binary="dirsearch", description="Directory/file discovery",
-        params={"url": None, "extensions": "php,asp,aspx,jsp,html,js"}, timeout=300,
-        builder=lambda p: ["dirsearch", "-u", p["url"], "-e", p["extensions"], "--format", "plain"]),
+        params={"url": None, "extensions": "php,asp,aspx,jsp,html,js", "threads": 40}, timeout=300,
+        builder=lambda p: ["dirsearch", "-u", p["url"], "-e", p["extensions"], "--format", "plain", "-t", str(p["threads"])]),
     "linkfinder": ToolSpec(
         name="linkfinder", binary="linkfinder.py", description="Extract endpoints from JavaScript files",
         params={"url": None}, timeout=60,
@@ -1202,8 +1202,8 @@ _tool_specs = {
         builder=lambda p: ["nosqlmap", "-u", p["url"], "--batch"]),
     "wfuzz": ToolSpec(
         name="wfuzz", binary="wfuzz", description="Web fuzzer",
-        params={"url": None, "wordlist": None}, timeout=600,
-        builder=lambda p: ["wfuzz", "-u", p["url"].rstrip("/") + "/FUZZ", "-w", p["wordlist"], "--hc", "404"]),
+        params={"url": None, "wordlist": None, "threads": 40}, timeout=600,
+        builder=lambda p: ["wfuzz", "-u", p["url"].rstrip("/") + "/FUZZ", "-w", p["wordlist"], "--hc", "404", "-t", str(p["threads"])]),
 
     # ==================== NETWORK: CAPTURE & ENUMERATION ====================
     "tcpdump_capture": ToolSpec(
@@ -1234,8 +1234,8 @@ _tool_specs = {
         builder=lambda p: ["dnsx", "-d", p["domain"], "-a", "-resp", "-silent"]),
     "naabu": ToolSpec(
         name="naabu", binary="naabu", description="Fast port scanner",
-        params={"host": None}, timeout=300,
-        builder=lambda p: ["naabu", "-host", p["host"], "-silent"]),
+        params={"host": None, "rate": 1000}, timeout=300,
+        builder=lambda p: ["naabu", "-host", p["host"], "-silent", "-rate", str(p["rate"])]),
     "dig_axfr": ToolSpec(
         name="dig_axfr", binary="dig", description="DNS zone transfer attempt",
         params={"domain": None}, timeout=30,

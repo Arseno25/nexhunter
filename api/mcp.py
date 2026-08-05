@@ -132,9 +132,9 @@ def _trim_json(data, max_field=None, max_items=MAX_ITEMS):
     return data
 
 
-def _render(data) -> str:
+def _render(data, indent: int = 1) -> str:
     """Serialize an API response with token-economy trimming applied."""
-    return json.dumps(_trim_json(data), indent=1)
+    return json.dumps(_trim_json(data), indent=indent)
 
 
 @mcp.tool()
@@ -454,21 +454,71 @@ def recommend_plan(target: str, risk_ceiling: str = "active") -> str:
 
 
 @mcp.tool()
+def plan_assessment(
+    target: str, objective: str = "standard", risk_ceiling: str = "active"
+) -> str:
+    """Get a SCORED shortlist of the tools worth running against a target, WITHOUT running anything.
+
+    This is the plan-first step: instead of considering all 252 registered
+    tools, the selector scores every tool against the target profile (its type,
+    technologies, web/TLS surface), its category relevance, maturity, and
+    whether the binary is installed -- then returns only the high-value few,
+    ranked, each with the reasons behind the pick.
+
+    objective controls breadth:
+      quick          top ~5, highest-value only
+      standard       top ~12 (default)
+      comprehensive  up to ~30, everything above a low threshold
+      stealth        passive tools only
+
+    Returns 'selected' (recommended, within the ceiling), grouped into phases,
+    plus 'withheld' (above the ceiling, needs human approval) and 'considered'
+    (how many tools were weighed). Review this, choose the subset you actually
+    want, then pass those to propose_plan / autonomous_assess. This is how you
+    ensure only the necessary tools run, not the whole registry.
+    """
+    payload = {"target": target, "objective": objective, "risk_ceiling": risk_ceiling}
+    return _render(api("/api/plan/select", payload), indent=1)
+
+
+@mcp.tool()
+def optimize_tool(tool: str, target: str, objective: str = "standard") -> str:
+    """Show how one tool would be invoked against a target, WITHOUT running it.
+
+    Derives the parameters the tool should run with -- the right target form
+    (bare hostname vs full URL vs host/IP), an installed wordlist where one is
+    required, web ports for a web target -- and returns them together with the
+    exact command line they build and whether it is runnable. Use this to check
+    that a selected tool is actually going to work before executing it, or to
+    see the tuned parameters to hand to propose_plan / autonomous_assess.
+    """
+    payload = {"tool": tool, "target": target, "objective": objective}
+    return _render(api("/api/tools/optimize", payload), indent=1)
+
+
+@mcp.tool()
 def autonomous_assess(
     target: str,
     risk_ceiling: str = "active",
     max_steps: int = 20,
     steps: list = None,
+    strategy: str = "methodology",
+    objective: str = "standard",
 ) -> str:
     """Run an autonomous assessment of a target.
 
     Without steps, the orchestrator plans tools from what it observes, runs
     them, folds the results back into a target profile, and re-plans -- adapting
-    in real time.
+    in real time. `strategy` chooses how it plans:
+      methodology  fixed, reviewed phase walk (default, deterministic)
+      select       scoring-driven selection over the whole registry, capped by
+                   `objective` (quick|standard|comprehensive|stealth) so only
+                   high-value tools for the observed profile run
 
-    With steps (the AI's own plan, e.g. the 'approved' list from propose_plan),
-    exactly those steps are executed: each is typed-validated and ceiling-
-    filtered again before it runs; anything above the ceiling is withheld.
+    With steps (the AI's own plan, e.g. the 'approved' list from propose_plan,
+    or a subset chosen from plan_assessment), exactly those steps are executed:
+    each is typed-validated and ceiling-filtered again before it runs; anything
+    above the ceiling is withheld.
 
     risk_ceiling caps what runs automatically (passive or active) and is
     clamped regardless of what is asked. Intrusive and destructive tools are
@@ -477,7 +527,7 @@ def autonomous_assess(
     """
     payload = {
         "target": target, "risk_ceiling": risk_ceiling, "max_steps": max_steps,
-        "async": True,
+        "async": True, "strategy": strategy, "objective": objective,
     }
     if steps is not None:
         payload["steps"] = steps
