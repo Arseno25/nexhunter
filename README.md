@@ -7,7 +7,7 @@
 
   <p>Safe orchestration of security tools for <em>authorized</em> assessments.</p>
 
-![Version](https://img.shields.io/badge/version-1.0.0-blue) ![Python](https://img.shields.io/badge/python-3.10%2B-green) ![Tests](https://img.shields.io/badge/tests-260%20passing-green)
+![Version](https://img.shields.io/badge/version-1.0.0-blue) ![Python](https://img.shields.io/badge/python-3.10%2B-green) ![Tests](https://img.shields.io/badge/tests-277%20passing-green)
 </div>
 
 ---
@@ -24,8 +24,23 @@ does not implement scanners — it validates a request, runs it safely in an
 isolated workspace, and records what happened.
 
 The distinguishing property: **an AI client is a caller like any other.** It can
-propose a tool and parameters. It cannot propose a command line, and the
+propose a tool and its parameters. It cannot propose a command line, and the
 autonomous loop cannot escalate its own risk ceiling.
+
+## Highlights
+
+- **One execution path.** REST, MCP, CLI, and the autonomous loop all walk the
+  same code: lookup → typed validation → build argv → isolated run → record.
+- **No arbitrary commands.** No tool takes a command parameter; argv is built
+  from the registry; no path uses a shell. A regression suite enforces it.
+- **Bounded autonomy.** The orchestrator's risk ceiling is clamped to `active`;
+  intrusive and destructive tools are withheld for human approval.
+- **Honest registry.** 252 tools, each tagged with a maturity level that is
+  asserted, never guessed — stub tools are labelled `experimental`, not sold as
+  working capability.
+- **Fast when you want it.** An LRU+TTL result cache and an optional in-process
+  `direct` mode cut repeat work; process management lets you watch and stop runs.
+- **Secrets redacted** from parameters, commands, logs, and output.
 
 ## How it works
 
@@ -41,14 +56,14 @@ flowchart LR
     style E fill:#0e7490,stroke:#06b6d4,stroke-width:3px,color:#f8fafc
 ```
 
-1. **One execution path** — every caller (REST, MCP, CLI, autonomous loop) walks
-   the same code: lookup → typed validation → build argv → isolated run → record.
-2. **The registry** — 252 `ToolSpec`s with typed params, risk, category,
-   maturity; profiles slice it per client.
+1. **One execution path** — every caller walks the same code: lookup → typed
+   validation → build argv → isolated run → record.
+2. **The registry** — 252 `ToolSpec`s with typed params, risk, category, and
+   maturity; MCP profiles slice it per client.
 3. **The loop** — autonomous assessment: profiler evidence → planner → bounded
    by a clamped risk ceiling and a step budget.
-4. **The ledger** — observations, inferences, and findings kept separate;
-   deduplicated, exported as JSON/MD/HTML/SARIF.
+4. **The ledger** — observations, inferences, and findings kept separate,
+   deduplicated, exported as JSON / MD / HTML / SARIF.
 5. **The boundary** — the AI can propose tools and parameters, never a command
    line; no path to the OS except `ExecutionService`.
 
@@ -108,15 +123,15 @@ Roo Code, OpenCode — see [docs/mcp/](docs/mcp/)):
 
 ### Profiles
 
-Listing ~252 tools to every client makes for a large payload, a large token
+Listing all 252 tools to every client makes for a large payload, a large token
 cost, and a model choosing blindly between near-identical tools. A profile
-narrows that to one job.
+narrows the registry to one job.
 
 | Profile | Tools | Purpose |
 |---|---:|---|
 | `nexhunter-core` | 12 | Status, findings, executions, passive stable checks only |
 | `nexhunter-recon` | 23 | Host discovery, DNS, subdomains, service identification |
-| `nexhunter-web` | 37 | Content discovery, injection testing, template scanning, TLS, browser crawl (incl. sqlmap/ffuf/nikto) |
+| `nexhunter-web` | 37 | Content discovery, injection testing, template scanning, TLS, browser crawl |
 | `nexhunter-api` | 7 | Schema and parameter discovery (arjun), JWT, GraphQL |
 | `nexhunter-code` | 16 | Static analysis, secret scanning, dependency review |
 | `nexhunter-cloud` | 8 | Read-only cloud posture |
@@ -129,7 +144,7 @@ narrows that to one job.
 | `nexhunter-vulnscan` | 8 | Vulnerability scanners and IDS tooling |
 | `nexhunter-mobile` | 6 | APK inspection, decompilation, runtime exploration |
 | `nexhunter-ctf` | 86 | All CTF domains: web, crypto, RE/pwn, forensics, OSINT |
-| `nexhunter-full` | 250 | **Default (no `--profile`).** Everything non-destructive (incl. experimental). Large payload |
+| `nexhunter-full` | 250 | **Default (no `--profile`).** Everything non-destructive, incl. experimental |
 
 ```bash
 nexhunter profiles                          # list them
@@ -137,30 +152,29 @@ nexhunter profiles --name nexhunter-web     # see what one exposes
 ```
 
 No profile lists a destructive tool. Without `--profile`, the bridge exposes
-`nexhunter-full` (250 tools); pass a profile to narrow the payload. Profiles
-are a usability control, not a security control — every execution goes through
-the same typed validation regardless of which profile surfaced the tool.
+`nexhunter-full`; pass a profile to narrow the payload. Profiles are a usability
+control, not a security control — every execution goes through the same typed
+validation regardless of which profile surfaced the tool.
 
 ### Tool limits
 
-AI clients (Claude Desktop, Cursor, etc.) cap how many MCP tools they load.
-Rather than bypassing that limit, nexhunter lets you pick which slice of the
-registry fits your client — `--tool-limit N` keeps the most useful tools
-(stable maturity first, installed binaries second) and drops the rest:
+AI clients cap how many MCP tools they load. Rather than bypassing that limit,
+NexHunter lets you pick which slice of the registry fits — `--tool-limit N` keeps
+the most useful tools (stable maturity first, installed binaries second) and
+drops the rest:
 
 ```bash
 python -m nexhunter.api.mcp --profile nexhunter-full --tool-limit 100
 ```
 
 The same cap is available via `NEXHUNTER_MCP_TOOL_LIMIT`. A tool that is not
-listed to a client is still callable from the server; it just does not
-consume the client's tool budget.
+listed to a client is still callable from the server; it just does not consume
+the client's tool budget.
 
 ## Autonomous assessment
 
 Hand a whole assessment to the orchestrator and it plans, runs, and re-plans as
-results arrive — the autonomous, adaptive flow, but bounded so the AI drives the
-loop, never the operating system.
+results arrive — adaptive, but bounded so the AI drives the loop, never the OS.
 
 ```bash
 curl -X POST http://127.0.0.1:8888/api/autonomous \
@@ -177,23 +191,42 @@ curl -X POST http://127.0.0.1:8888/api/plan \
           "steps":[{"tool":"nmap_scan","params":{"target":"example.com"}}]}'
 ```
 
-`propose_plan` validates the AI's steps *without executing anything* and
-returns `approved`, `withheld`, and `invalid` lists; the approved list is then
-passed back via `autonomous_assess(steps=...)`, where every step is
-re-validated a second time before it runs. The AI writes the plan; the registry
-and the ceiling filter it.
+`propose_plan` validates the AI's steps *without executing anything* and returns
+`approved`, `withheld`, and `invalid` lists; the approved list is passed back via
+`autonomous_assess(steps=...)`, where every step is re-validated before it runs.
+The AI writes the plan; the registry and the ceiling filter it.
 
 Two bounds the AI cannot lift:
 
 - **Risk ceiling.** It runs passive and active tools. Intrusive and destructive
-  tools are never auto-run — they are surfaced with a reason for human
-  approval. A higher ceiling requested is clamped to `active`, not granted.
+  tools are never auto-run — they are surfaced with a reason for human approval.
+  A higher ceiling requested is clamped to `active`, not granted.
 - **Step budget.** It stops after a set number of steps.
 
-Every step also goes through the same `ExecutionService` as a manual call, so
-the loop cannot reach the operating system any other way.
+Every step goes through the same `ExecutionService` as a manual call, so the loop
+cannot reach the OS any other way.
 
-Full walkthrough with diagrams: [docs/how-it-works.md](docs/how-it-works.md).
+## Execution modes
+
+Both modes share the registry, typed validation, redaction, and the risk
+ceiling — they differ only in what they leave behind.
+
+| Mode | Record & workspace | Cache | Use for |
+|---|---|---|---|
+| **recorded** (default) | Full `ExecutionRecord`, isolated workspace, history, terminable | ✓ | Assessments you want to audit and revisit |
+| **direct** (`direct: true`) | None — validate → build → run → return, in-process | ✓ | Fast, throwaway calls where a history entry is noise |
+
+Both cache deterministic terminal results (`completed`/`failed`); a timeout or
+termination is never cached. Set `no_cache: true` to force a fresh run.
+
+### Caching & process management
+
+- `GET /api/cache/stats` — hits, misses, evictions, hit rate.
+- `POST /api/cache/clear` — drop every cached result.
+- `GET /api/processes/list` — executions currently running, with live pid.
+- `GET /api/processes/status/{pid}` — status of one running process.
+- `POST /api/processes/terminate/{pid}` — stop it through the same cancel path
+  that `terminate` uses (ends in `terminated`, never a raw kill).
 
 ## Security model
 
@@ -206,8 +239,11 @@ Enforced and covered by tests:
   validation rule; a value that is not a valid target, port, or enum is refused
   before a command is ever built.
 - **Bounded autonomy.** The orchestrator's ceiling is clamped to `active`;
-  intrusive and destructive tools are withheld for human approval, and
-  destructive tools additionally require a feature flag.
+  intrusive and destructive tools are withheld, and destructive tools
+  additionally require a feature flag.
+- **Offensive agents are opt-in.** Agents that would reach the network outside
+  the execution gate are refused by the API unless
+  `NEXHUNTER_INTRUSIVE_TOOLS_ENABLED` is set — consistent with the tool ceiling.
 - **Contained execution.** Isolated workspace per run, timeouts that kill the
   whole process tree, output caps, no path traversal or symlink escape.
 - **Secrets redacted** from parameters, commands, logs, and output.
@@ -235,6 +271,7 @@ Core
   [OK] Python 3.13.7
   [OK] Data directory writable
   [OK] Server binds to loopback (127.0.0.1)
+  [OK] Browser engine ready (selenium + google-chrome)
   [OK] Process execution works
 
 Security
@@ -242,19 +279,19 @@ Security
   [OK] No execution path uses a shell
   [OK] Destructive tools disabled
 
-Stable tools (8/24 installed)
+Stable tools (9/29 installed)
   [OK] nmap_scan (nmap 7.80)
   [OK] curl_headers (curl 8.12.1)
-  [MISSING] 16 other stable tools not installed
+  [MISSING] 20 other stable tools not installed
 
-Registry availability (23/252 tools on PATH)
-  [OK] web: 5/37 available
+Registry availability (115/252 tools on PATH)
+  [OK] web: 20/37 available
   [MISSING] wireless: 0/9 available
 ```
 
 NexHunter never installs binaries for you.
 
-## API
+## REST API
 
 ```bash
 curl -X POST http://127.0.0.1:8888/api/command \
@@ -267,37 +304,34 @@ curl -X POST http://127.0.0.1:8888/api/command \
 | `GET /api/tools` | Registry, filterable by category, risk, maturity, availability |
 | `GET /api/tools/{name}` | One tool's metadata |
 | `GET /api/tools/status` | What is installed |
-| `POST /api/command` | Run a registered tool |
+| `POST /api/command` | Run a registered tool (`async`, `no_cache`, `direct` supported) |
 | `GET /api/executions` | Execution history with status |
 | `GET /api/executions/{id}/output` | Captured output, redacted |
 | `GET /api/executions/{id}/artifacts` | Artifacts in that execution's workspace |
 | `POST /api/executions/{id}/terminate` | Stop a running execution and its children |
-| `POST /api/autonomous` | Start an adaptive autonomous assessment |
-| `GET /api/autonomous[/{id}]` | Run status and result |
+| `POST /api/autonomous` · `GET /api/autonomous[/{id}]` | Start / poll an adaptive run |
 | `GET /api/findings` | Findings |
 | `GET /api/mcp/profiles` | Profile definitions |
-| `GET /api/cache/stats` | Result-cache telemetry (hits, misses, evictions, hit rate) |
-| `POST /api/cache/clear` | Drop every cached result |
-| `GET /api/processes/list` | Executions currently running, with live pid |
-| `GET /api/processes/status/{pid}` | Live status of one running process (by pid or execution id) |
-| `POST /api/processes/terminate/{pid}` | Terminate a running process through the same cancel path |
+| `GET /api/cache/stats` · `POST /api/cache/clear` | Result-cache telemetry / reset |
+| `GET /api/processes/list` · `/status/{pid}` · `POST /terminate/{pid}` | Live process management |
 
 The server binds to `127.0.0.1` by default and `doctor` fails loudly on any
 other binding unless `NEXHUNTER_EXTERNAL_BIND_ALLOWED` is set.
 
-## Tool maturity
+## Tool registry & maturity
 
-Maturity is asserted per tool, never guessed.
+252 tools across 20 categories. Maturity is asserted per tool, never guessed.
 
 | Level | Meaning | Count |
-|---|---:|---:|
-| **stable** | Command builder, availability check, tests | 24 |
-| **beta** | Registered and validated, less exercised | 206 |
+|---|---|---:|
+| **stable** | Command builder, availability check, parser (where applicable), tests | 29 |
+| **beta** | Registered and validated, less exercised | 201 |
 | **experimental** | Registered but not honestly usable as written (placeholder binary or hardcoded stand-in args); kept out of the focused profiles | 22 |
 
-Cloud, container, and orchestration access is exposed as fixed read-only
-actions (`aws_get_caller_identity`, `kubectl_get_pods`,
-`docker_list_containers`), never as a CLI passthrough.
+Risk levels: 56 passive · 163 active · 31 intrusive · 2 destructive. Cloud,
+container, and orchestration access is exposed as fixed read-only actions
+(`aws_get_caller_identity`, `kubectl_get_pods`, `docker_list_containers`), never
+as a CLI passthrough.
 
 ## Configuration
 
@@ -309,7 +343,7 @@ NEXHUNTER_EXTERNAL_BIND_ALLOWED=false
 NEXHUNTER_DATA_DIR=./nexhunter_data
 NEXHUNTER_MCP_PROFILE=nexhunter-full
 NEXHUNTER_DESTRUCTIVE_TOOLS_ENABLED=false
-NEXHUNTER_INTRUSIVE_TOOLS_ENABLED=false
+NEXHUNTER_INTRUSIVE_TOOLS_ENABLED=false      # also gates offensive agents
 NEXHUNTER_CACHE_ENABLED=true                 # cache deterministic tool results
 NEXHUNTER_CACHE_TTL=300                       # seconds; 0 disables expiry
 NEXHUNTER_CACHE_MAX_ENTRIES=256
@@ -320,7 +354,7 @@ See [.env.example](.env.example).
 ## Testing
 
 ```bash
-pytest                                                    # 260 tests
+pytest                                                    # 277 tests
 pytest --cov=nexhunter --cov-report=term-missing          # coverage
 ```
 
@@ -336,9 +370,9 @@ best covered; legacy agent and engine code is thinner.
 
 ## Roadmap
 
-- Migrate legacy workflow definitions onto `ExecutionService`
-- Raise coverage on `api/server.py`, `core/engine.py`, and `agents/`
-- Replace deprecated `datetime.utcnow()` usage
+- Mature more beta tools to stable (parser + fixture + test), category by category.
+- Migrate legacy `Engine` flows (`/api/probe`, `/api/portscan`) onto `ExecutionService`.
+- Raise coverage on `api/server.py`, `core/engine.py`, and `agents/`.
 
 ## Documentation
 
@@ -346,15 +380,15 @@ best covered; legacy agent and engine code is thinner.
 |---|---|
 | [docs/architecture.md](docs/architecture.md) | Layers, execution flow, state machine, diagrams |
 | [docs/security-model.md](docs/security-model.md) | Threat model, guarantees, non-guarantees |
-| [docs/how-it-works.md](docs/how-it-works.md) | One execution path, call trace, the loop, and the can/cannot boundary |
+| [docs/how-it-works.md](docs/how-it-works.md) | One execution path, call trace, the loop, the can/cannot boundary |
 | [docs/mcp/](docs/mcp/) | MCP setup per client |
 
 ## Contributing
 
 Adding a tool means adding a `ToolSpec` with a command builder that takes
-discrete values — never a command string. See
-[docs/architecture.md](docs/architecture.md). The regression suite in
-`tests/test_no_passthrough.py` will reject a passthrough.
+discrete values — never a command string. Maturing one to `stable` means giving
+it a parser and a test. See [docs/architecture.md](docs/architecture.md); the
+regression suite in `tests/test_no_passthrough.py` will reject a passthrough.
 
 ---
 

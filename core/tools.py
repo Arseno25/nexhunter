@@ -143,6 +143,8 @@ STABLE_TOOLS = frozenset({
     "wpscan_scan", "semgrep", "trivy", "testssl",
     "aws_get_caller_identity", "aws_list_s3_buckets", "kubectl_get_pods",
     "kubectl_get_namespaces", "docker_list_containers",
+    # Line/JSON output tools with parsers and tests (see tests/test_tool_parsers.py).
+    "katana_crawl", "gau", "waybackurls", "naabu", "dnsx",
 })
 
 # Registered but not honestly usable as written, so they are not counted as a
@@ -313,15 +315,15 @@ _tool_specs = {
         builder=lambda p: ["rustscan", "-a", p["target"], "--", "-sV", "-T4"]),
     "subfinder_enum": ToolSpec(
         name="subfinder_enum", binary="subfinder", description="Passive subdomain enumeration",
-        params={"domain": None}, timeout=60,
+        params={"domain": None}, timeout=60, parser="hosts",
         builder=lambda p: ["subfinder", "-d", p["domain"], "-silent"]),
     "amass_enum": ToolSpec(
         name="amass_enum", binary="amass", description="Passive subdomain enumeration",
-        params={"domain": None}, timeout=120,
+        params={"domain": None}, timeout=120, parser="hosts",
         builder=lambda p: ["amass", "enum", "-passive", "-d", p["domain"]]),
     "assetfinder": ToolSpec(
         name="assetfinder", binary="assetfinder", description="Find subdomains from certificate transparency",
-        params={"domain": None}, timeout=60,
+        params={"domain": None}, timeout=60, parser="hosts",
         builder=lambda p: ["assetfinder", p["domain"]]),
     "dns_lookup": ToolSpec(
         name="dns_lookup", binary="dig", description="DNS query/enumeration",
@@ -1211,15 +1213,15 @@ _tool_specs = {
     # ==================== WEB: CRAWLING & CONTENT DISCOVERY ====================
     "katana_crawl": ToolSpec(
         name="katana_crawl", binary="katana", description="Web crawler with JS rendering",
-        params={"url": None, "depth": 3}, timeout=300,
+        params={"url": None, "depth": 3}, timeout=300, parser="urls",
         builder=lambda p: ["katana", "-u", p["url"], "-silent", "-jc", "-d", str(p["depth"])]),
     "waybackurls": ToolSpec(
         name="waybackurls", binary="waybackurls", description="Historical URLs from the Wayback Machine",
-        params={"domain": None}, timeout=60,
+        params={"domain": None}, timeout=60, parser="urls",
         builder=lambda p: ["waybackurls", p["domain"]]),
     "gau": ToolSpec(
         name="gau", binary="gau", description="Get all URLs from many archives",
-        params={"domain": None}, timeout=120,
+        params={"domain": None}, timeout=120, parser="urls",
         builder=lambda p: ["gau", p["domain"]]),
     "paramspider": ToolSpec(
         name="paramspider", binary="paramspider", description="Parameter mining from web archives",
@@ -1299,11 +1301,11 @@ _tool_specs = {
         builder=lambda p: ["snmp-check", p["host"]]),
     "dnsx": ToolSpec(
         name="dnsx", binary="dnsx", description="DNS resolver and probe",
-        params={"domain": None}, timeout=60,
+        params={"domain": None}, timeout=60, parser="dnsx_resp",
         builder=lambda p: ["dnsx", "-d", p["domain"], "-a", "-resp", "-silent"]),
     "naabu": ToolSpec(
         name="naabu", binary="naabu", description="Fast port scanner",
-        params={"host": None, "rate": 1000}, timeout=300,
+        params={"host": None, "rate": 1000}, timeout=300, parser="host_port",
         builder=lambda p: ["naabu", "-host", p["host"], "-silent", "-rate", str(p["rate"])]),
     "dig_axfr": ToolSpec(
         name="dig_axfr", binary="dig", description="DNS zone transfer attempt",
@@ -1519,11 +1521,64 @@ def _parse_browser_json(text):
         return []
 
 
+def _parse_urls(text):
+    """One URL per line (katana, gau, waybackurls). Deduplicated, order kept."""
+    seen, out = set(), []
+    for line in text.splitlines():
+        url = line.strip()
+        if url and url not in seen:
+            seen.add(url)
+            out.append({"url": url})
+    return out
+
+
+def _parse_hosts(text):
+    """One hostname per line (subfinder, assetfinder, amass). Deduplicated."""
+    seen, out = set(), []
+    for line in text.splitlines():
+        host = line.strip().lower()
+        if host and host not in seen:
+            seen.add(host)
+            out.append({"host": host})
+    return out
+
+
+def _parse_host_port(text):
+    """host:port per line (naabu). IPv4/hostname targets."""
+    out = []
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or ":" not in line:
+            continue
+        host, _, port = line.rpartition(":")
+        if host and port.isdigit():
+            out.append({"host": host, "port": port})
+    return out
+
+
+def _parse_dnsx(text):
+    """dnsx -a -resp lines: "host [1.2.3.4]" -> {host, a:[ips]}."""
+    import re
+    out = []
+    for line in text.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        host = line.split()[0]
+        ips = re.findall(r"\[([0-9A-Fa-f:.]+)\]", line)
+        out.append({"host": host, "a": ips})
+    return out
+
+
 PARSERS = {
     "nmap_xml": _parse_nmap_xml,
     "httpx": _parse_httpx,
     "nuclei": _parse_nuclei,
     "browser_json": _parse_browser_json,
+    "urls": _parse_urls,
+    "hosts": _parse_hosts,
+    "host_port": _parse_host_port,
+    "dnsx_resp": _parse_dnsx,
 }
 
 TOOLS = _tool_specs

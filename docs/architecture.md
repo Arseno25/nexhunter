@@ -197,14 +197,14 @@ The bridge decides what a client is *shown*. The service decides what is
 flowchart LR
     REG[(Tool registry<br/>~252 tools)] --> F{Profile filter<br/>category · risk · maturity}
     F --> C[core · 12]
-    F --> RC[recon · 24]
+    F --> RC[recon · 23]
     F --> W[web · 37]
     F --> AP[api · 7]
     F --> CD[code · 16]
     F --> CL[cloud · 8]
     F --> CT[container · 14]
     F --> FR[forensics · 28]
-    F --> CTF[ctf · 91]
+    F --> CTF[ctf · 86]
     F --> FU[full · 250]
 
     C --> CLIENT[AI client]
