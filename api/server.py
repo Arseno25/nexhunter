@@ -56,6 +56,7 @@ Access:
 """
 
 import argparse
+import dataclasses
 import json
 import os
 import subprocess
@@ -83,6 +84,7 @@ from nexhunter.engagements.store import (
 )
 from nexhunter.findings import export as findings_export
 from nexhunter.findings.store import FindingStore
+from nexhunter import config as nexhunter_config
 
 ENGINE = Engine()
 TOKEN_VALIDATOR = TokenValidator()
@@ -570,16 +572,51 @@ def selftest():
 
 
 def main():
-    parser = argparse.ArgumentParser(description="nexhunter server (13 agents, 24 tools, process mgmt)")
-    parser.add_argument("--port", type=int, default=8888)
+    parser = argparse.ArgumentParser(description="NexHunter API server")
+    parser.add_argument("--port", type=int, default=None, help="override NEXHUNTER_BIND_PORT")
+    parser.add_argument("--host", default=None, help="override NEXHUNTER_BIND_HOST")
     parser.add_argument("--selftest", action="store_true")
     args = parser.parse_args()
+
     if args.selftest:
         selftest()
         return
-    print(f"NexHunter server on http://127.0.0.1:{args.port} (Ctrl+C to stop)")
-    ThreadingHTTPServer(("127.0.0.1", args.port), Handler).serve_forever()
+
+    # Validate before binding. Starting with an unintended security posture is
+    # worse than not starting, so configuration errors are fatal.
+    try:
+        config = nexhunter_config.load(refresh=True)
+    except nexhunter_config.ConfigError as exc:
+        print(f"[FAIL] {exc}", file=sys.stderr)
+        return 1
+
+    host = args.host or config.bind_host
+    port = args.port or config.bind_port
+
+    if args.host or args.port:
+        config = dataclasses.replace(config, bind_host=host, bind_port=port)
+
+    errors = config.validate()
+    if errors:
+        print("[FAIL] invalid configuration:", file=sys.stderr)
+        for error in errors:
+            print(f"  - {error}", file=sys.stderr)
+        return 1
+
+    for warning in config.warnings():
+        print(f"[WARN] {warning}", file=sys.stderr)
+
+    if config.binds_externally:
+        print(
+            f"[WARN] Listening on {host}, which is reachable from other hosts. "
+            "Only do this on a network you control.",
+            file=sys.stderr,
+        )
+
+    print(f"NexHunter server on http://{host}:{port} (Ctrl+C to stop)")
+    ThreadingHTTPServer((host, port), Handler).serve_forever()
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main() or 0)
