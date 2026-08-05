@@ -101,6 +101,14 @@ Or run the server in Docker:
 docker compose up --build        # http://localhost:8888
 ```
 
+NexHunter never installs binaries for you. To pull in the common **defensive**
+recon/analysis tools (never offensive ones), review and run the optional helper:
+
+```bash
+./scripts/install-defensive-tools.sh --dry-run   # see what it would do
+./scripts/install-defensive-tools.sh             # then install
+```
+
 ## MCP setup
 
 Add to your AI client's config (Claude Desktop, Claude Code, Cursor, VS Code,
