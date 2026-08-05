@@ -1,4 +1,4 @@
-"""nexhunter.execution - Isolated, auditable tool execution."""
+"""nexhunter.execution - Isolated tool execution."""
 
 from nexhunter.execution.models import ExecutionRecord, ExecutionStatus
 from nexhunter.execution.workspace import Workspace, WorkspaceError

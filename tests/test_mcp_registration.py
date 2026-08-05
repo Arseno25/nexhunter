@@ -59,34 +59,8 @@ def test_no_raw_command_tool():
     print("  [OK] run_command removed")
 
 
-def test_token_forwarded(monkeypatch=None):
-    """Test the Authorization header is attached when a token is set."""
-    print("[TEST] MCP forwards bearer token...")
-    captured = {}
-
-    def fake_urlopen(req, timeout=None):
-        captured["auth"] = req.headers.get("Authorization")
-        raise RuntimeError("stop after header capture")
-
-    import urllib.request
-
-    old_token = M.API_TOKEN
-    old_urlopen = urllib.request.urlopen
-    M.API_TOKEN = "secret123"
-    urllib.request.urlopen = fake_urlopen
-    try:
-        M.api("/health")
-    finally:
-        urllib.request.urlopen = old_urlopen
-        M.API_TOKEN = old_token
-
-    assert captured.get("auth") == "Bearer secret123"
-    print("  [OK] Bearer token forwarded")
-
-
 if __name__ == "__main__":
     test_active_profile_tools_exposed()
     test_registration_generated_from_registry()
     test_no_raw_command_tool()
-    test_token_forwarded()
     print("\nAll MCP registration tests passed")

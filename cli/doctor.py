@@ -2,7 +2,7 @@
 
 Reports what is true about the current environment. It never changes anything
 and never installs a binary: the point is to tell an operator what will and
-will not work before an engagement, not to fix it for them.
+will not work, not to fix it for them.
 """
 
 import os
@@ -49,12 +49,6 @@ def _check_data_dir() -> Tuple[str, str]:
         return FAIL, f"Data directory not writable: {directory} ({exc})"
 
 
-def _check_token() -> Tuple[str, str]:
-    if os.environ.get("NEXHUNTER_API_TOKEN", "").strip():
-        return OK, "API token configured"
-    return WARN, "API token not configured (NEXHUNTER_API_TOKEN unset; the API will accept any caller)"
-
-
 def _check_binding() -> Tuple[str, str]:
     host = os.environ.get("NEXHUNTER_BIND_HOST", "127.0.0.1").strip()
     external_allowed = os.environ.get("NEXHUNTER_EXTERNAL_BIND_ALLOWED", "").lower() in {"1", "true", "yes", "on"}
@@ -64,49 +58,6 @@ def _check_binding() -> Tuple[str, str]:
     if external_allowed:
         return WARN, f"Server binds to {host} with external binding explicitly allowed"
     return FAIL, f"Server binds to {host} but NEXHUNTER_EXTERNAL_BIND_ALLOWED is not set"
-
-
-def _check_enforcement() -> List[Tuple[str, str]]:
-    """Report the enforcement posture and whether any scope is actually usable."""
-    from nexhunter.engagements.store import EngagementStore
-    from nexhunter.security.enforcement import _default_enforce
-
-    results: List[Tuple[str, str]] = []
-    enforcing = _default_enforce()
-    engagement_file = os.environ.get("NEXHUNTER_ENGAGEMENT", "").strip()
-
-    if not enforcing:
-        results.append((WARN, "Scope enforcement OFF (NEXHUNTER_ENFORCE=false; no scope is applied)"))
-    else:
-        results.append((OK, "Scope enforcement on"))
-
-    if engagement_file:
-        if Path(engagement_file).is_file():
-            results.append((OK, f"Engagement file: {engagement_file}"))
-        else:
-            results.append((FAIL, f"NEXHUNTER_ENGAGEMENT points at a missing file: {engagement_file}"))
-        return results
-
-    try:
-        active = [e for e in EngagementStore().list() if e.is_active()]
-    except OSError as exc:
-        results.append((FAIL, f"Could not read engagements: {exc}"))
-        return results
-
-    if active:
-        names = ", ".join(e.id for e in active)
-        if len(active) > 1:
-            results.append((WARN, f"{len(active)} active engagements ({names}); "
-                                  "requests must name one with engagement_id"))
-        else:
-            results.append((OK, f"Active engagement: {names}"))
-    elif enforcing:
-        results.append((FAIL, "No active engagement; every execution will be denied. "
-                              "Create one: nexhunter engagement create --id ENG-001 --target <host>"))
-    else:
-        results.append((WARN, "No active engagement (enforcement is off, so nothing is checked)"))
-
-    return results
 
 
 def _check_destructive_flags() -> List[Tuple[str, str]]:
@@ -158,10 +109,8 @@ def run(check_versions: bool = True, show_all_tools: bool = False) -> int:
         _check_python(),
         _check_platform(),
         _check_data_dir(),
-        _check_token(),
         _check_binding(),
     ]
-    core.extend(_check_enforcement())
     core.extend(_check_dependencies())
     core.append(_check_execution())
     sections.append(("Core", core))
@@ -189,6 +138,19 @@ def run(check_versions: bool = True, show_all_tools: bool = False) -> int:
         if missing:
             tool_rows.append((MISSING, f"{missing} other stable tools not installed (--all to list)"))
     sections.append((f"Stable tools ({installed_count}/{len(stable_specs)} installed)", tool_rows))
+
+    per_category = {}
+    for spec in T.TOOLS.values():
+        bucket = per_category.setdefault(spec.category, [0, 0])
+        bucket[1] += 1
+        if spec.available:
+            bucket[0] += 1
+    registry_rows = []
+    installed_total = sum(c[0] for c in per_category.values())
+    for category, (installed, total) in sorted(per_category.items()):
+        marker = OK if installed else MISSING
+        registry_rows.append((marker, f"{category}: {installed}/{total} available"))
+    sections.append((f"Registry availability ({installed_total}/{len(T.TOOLS)} tools on PATH)", registry_rows))
 
     print("\nNexHunter Doctor\n")
     failures = 0

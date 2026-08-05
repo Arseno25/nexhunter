@@ -45,12 +45,10 @@ class ExecutionRegistry:
         with self._lock:
             return self._records.get(execution_id)
 
-    def list(self, engagement_id: Optional[str] = None, status: Optional[ExecutionStatus] = None) -> List[ExecutionRecord]:
-        """Newest first, optionally filtered by engagement or status."""
+    def list(self, status: Optional[ExecutionStatus] = None) -> List[ExecutionRecord]:
+        """Newest first, optionally filtered by status."""
         with self._lock:
             records = list(self._records.values())
-        if engagement_id:
-            records = [r for r in records if r.engagement_id == engagement_id]
         if status:
             records = [r for r in records if r.status is status]
         return sorted(records, key=lambda r: r.created_at, reverse=True)

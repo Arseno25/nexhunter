@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "nexhunter"
 version = "2.0.0"
-description = "Policy-driven, secure-by-default AI security orchestration for authorized assessments"
+description = "Tool-driven AI security orchestration for authorized assessments"
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
@@ -21,8 +21,8 @@ classifiers = [
     "Topic :: Security",
 ]
 
-# The minimal install runs the CLI, the registry, the policy engine, and the
-# execution layer. Anything heavier is opt-in.
+# The minimal install runs the CLI, the registry, and the execution layer.
+# Anything heavier is opt-in.
 dependencies = [
     "defusedxml>=0.7",
 ]
@@ -58,7 +58,6 @@ packages = [
     "nexhunter.api",
     "nexhunter.cli",
     "nexhunter.core",
-    "nexhunter.engagements",
     "nexhunter.execution",
     "nexhunter.findings",
     "nexhunter.security",

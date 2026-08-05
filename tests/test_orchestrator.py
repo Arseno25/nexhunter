@@ -2,7 +2,7 @@
 
 Uses a fake execution service so the loop can be exercised without installed
 security binaries, and so a test can assert exactly which tools the planner
-chose and that none escaped the gate.
+chose and that none exceeded the risk ceiling.
 """
 
 import sys
@@ -13,8 +13,8 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from nexhunter.agents.profiler import Profiler
 from nexhunter.core import tools as T
+from nexhunter.core.risk import RiskLevel
 from nexhunter.findings.store import FindingStore
-from nexhunter.security.engagement import RiskLevel
 from nexhunter.workflows.orchestrator import (
     AdaptivePlanner,
     AutonomousOrchestrator,
@@ -27,7 +27,7 @@ class FakeExecutionService:
 
     Records every call, so a test can prove which tools ran and that a tool
     the fake refuses is treated as a non-fatal skip. `denied` names tools this
-    fake reports as blocked, standing in for a policy denial.
+    fake reports as failing, standing in for a tool error.
     """
 
     def __init__(self, outputs=None, denied=None):
@@ -35,10 +35,10 @@ class FakeExecutionService:
         self.outputs = outputs or {}
         self.denied = set(denied or [])
 
-    def execute(self, tool_name, params, auth_header=None, source_ip="unknown", engagement_id=None, **kwargs):
-        self.calls.append({"tool": tool_name, "params": params, "engagement_id": engagement_id})
+    def execute(self, tool_name, params, **kwargs):
+        self.calls.append({"tool": tool_name, "params": params})
         if tool_name in self.denied:
-            return {"ok": False, "code": "SCOPE_VIOLATION", "error": "out of scope",
+            return {"ok": False, "code": "TOOL_ERROR", "error": "tool refused",
                     "execution_id": f"exec-{len(self.calls)}"}
         return {
             "ok": True,
@@ -234,8 +234,8 @@ def test_ceiling_is_clamped_even_if_intrusive_requested():
 
 
 def test_denied_step_is_recorded_not_fatal():
-    """A gate denial mid-run is recorded and the run continues."""
-    print("[TEST] Denied step does not abort the run...")
+    """A failing tool mid-run is recorded and the run continues."""
+    print("[TEST] Failed step does not abort the run...")
     fake = FakeExecutionService(denied={"nuclei_scan"})
     orchestrator = AutonomousOrchestrator(execution_service=fake, finding_store=FindingStore())
 
@@ -243,13 +243,13 @@ def test_denied_step_is_recorded_not_fatal():
         target="https://example.com", risk_ceiling="active", max_steps=15, run_async=False,
     )
 
-    assert run.status is RunStatus.COMPLETED, "a denial should not fail the whole run"
+    assert run.status is RunStatus.COMPLETED, "a failure should not fail the whole run"
     if "nuclei_scan" in fake.tools_called():
         assert any(e.get("tool") == "nuclei_scan" for e in run.errors), (
-            "the denial should be recorded"
+            "the failure should be recorded"
         )
 
-    print("  [OK] Denial recorded, run continued")
+    print("  [OK] Failure recorded, run continued")
 
 
 def test_step_budget_is_honored():
@@ -266,29 +266,6 @@ def test_step_budget_is_honored():
     assert len(fake.calls) <= 2
 
     print(f"  [OK] Stopped at {run.steps_taken} steps")
-
-
-def test_every_execution_carries_the_engagement():
-    """Autonomous executions are scoped to the run's engagement."""
-    print("[TEST] Autonomous executions carry the engagement...")
-    fake = FakeExecutionService()
-    orchestrator = AutonomousOrchestrator(execution_service=fake, finding_store=FindingStore())
-
-    orchestrator.start(
-        target="https://example.com",
-        engagement_id="ENG-2026-001",
-        risk_ceiling="active",
-        max_steps=10,
-        run_async=False,
-    )
-
-    assert fake.calls, "expected at least one execution"
-    for call in fake.calls:
-        assert call["engagement_id"] == "ENG-2026-001", (
-            "every autonomous execution must name the run's engagement"
-        )
-
-    print("  [OK] Engagement threaded through every step")
 
 
 def test_async_run_is_pollable():
@@ -326,6 +303,5 @@ if __name__ == "__main__":
     test_ceiling_is_clamped_even_if_intrusive_requested()
     test_denied_step_is_recorded_not_fatal()
     test_step_budget_is_honored()
-    test_every_execution_carries_the_engagement()
     test_async_run_is_pollable()
     print("\n=== All Autonomous Orchestration Tests Passed ===\n")

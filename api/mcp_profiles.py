@@ -5,9 +5,10 @@ integration expensive and error-prone -- a large initialization payload, a
 large token cost on every session, and a model choosing between near-identical
 tools it has no basis to pick between. A profile narrows that to one job.
 
-Profiles are a usability and blast-radius control, not a security control. The
-policy engine still authorizes every execution regardless of which profile
-surfaced the tool; hiding a tool is not the same as forbidding it.
+Profiles are a usability and blast-radius control, not a security control. Every
+execution goes through the same typed validation and execution path regardless
+of which profile surfaced the tool; hiding a tool is not the same as
+forbidding it.
 """
 
 from dataclasses import dataclass
@@ -59,14 +60,18 @@ PROFILES: Dict[str, Profile] = {
     ),
     "nexhunter-web": Profile(
         name="nexhunter-web",
-        description="Web application scanning: content discovery, template scanning, "
-                    "technology identification, TLS checks.",
-        categories=("web", "crypto"),
+        description="Web application security: content discovery, template scanning, "
+                    "injection testing, technology identification, TLS checks. "
+                    "Intrusive scanners (sqlmap, ffuf, nikto) included - the autonomy "
+                    "ceiling still clamps them in autonomous runs.",
+        categories=("web",),
+        risk_levels=("passive", "active", "intrusive"),
     ),
     "nexhunter-api": Profile(
         name="nexhunter-api",
         description="API surface testing: schema discovery, parameter discovery, GraphQL.",
-        categories=("api", "web"),
+        categories=("api",),
+        risk_levels=("passive", "active", "intrusive"),
     ),
     "nexhunter-code": Profile(
         name="nexhunter-code",
@@ -88,6 +93,52 @@ PROFILES: Dict[str, Profile] = {
         name="nexhunter-forensics",
         description="Offline artifact and binary analysis. Operates on files, not live targets.",
         categories=("forensics", "binary"),
+    ),
+    "nexhunter-osint": Profile(
+        name="nexhunter-osint",
+        description="Open-source intelligence: usernames, emails, services, CVE lookup. "
+                    "Includes active footprinting tools (maltego, spiderfoot).",
+        categories=("osint",),
+    ),
+    "nexhunter-wireless": Profile(
+        name="nexhunter-wireless",
+        description="Wireless reconnaissance and assessment. Intrusive attacks included; "
+                    "destructive tooling (mdk4) is withheld.",
+        categories=("wireless",),
+        risk_levels=("passive", "active", "intrusive"),
+    ),
+    "nexhunter-privesc": Profile(
+        name="nexhunter-privesc",
+        description="Local privilege escalation discovery: suggesters and privilege audit scripts.",
+        categories=("privesc",),
+    ),
+    "nexhunter-payloads": Profile(
+        name="nexhunter-payloads",
+        description="Payload generation and C2 framework integration. Intrusive tools "
+                    "(mimikatz, hoaxshell, msfvenom) included; never auto-executed in "
+                    "autonomous runs.",
+        categories=("payloads",),
+        risk_levels=("passive", "active", "intrusive"),
+    ),
+    "nexhunter-vulnscan": Profile(
+        name="nexhunter-vulnscan",
+        description="Vulnerability scanners and network IDS tooling.",
+        categories=("vuln_scan", "ids"),
+    ),
+    "nexhunter-mobile": Profile(
+        name="nexhunter-mobile",
+        description="Mobile application analysis: APK inspection, decompilation, "
+                    "runtime exploration.",
+        categories=("mobile",),
+    ),
+    "nexhunter-ctf": Profile(
+        name="nexhunter-ctf",
+        description="Capture-the-flag one-stop profile: Web Exploitation (web, api), "
+                    "Cryptography (crypto), Reverse Engineering & Pwn (binary), "
+                    "Forensics (forensics), and OSINT (osint). Intrusive web scanners "
+                    "included; the autonomy ceiling still clamps them.",
+        categories=("ctf", "crypto", "binary", "forensics", "osint", "web", "api"),
+        risk_levels=("passive", "active", "intrusive"),
     ),
     "nexhunter-full": Profile(
         name="nexhunter-full",

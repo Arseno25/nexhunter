@@ -73,30 +73,20 @@ from nexhunter.agents import AGENTS, run_agent
 from nexhunter.agents.enhanced import ENHANCED_AGENTS
 from nexhunter.core.engine import Engine
 from nexhunter.api.visual import VulnerabilityCard, ProgressTracker, DashboardMetrics
-from nexhunter.security.authentication import TokenValidator, AuthenticationError
-from nexhunter.security.enforcement import SecurityGate, risk_level_from_str
 from nexhunter.execution.service import ExecutionService
 from nexhunter.api import mcp_profiles
-from nexhunter.engagements.store import (
-    EngagementError,
-    EngagementStore,
-    engagement_to_dict,
-)
 from nexhunter.findings import export as findings_export
 from nexhunter.findings.store import FindingStore
 from nexhunter.workflows.orchestrator import AutonomousOrchestrator
 from nexhunter import config as nexhunter_config
 
 ENGINE = Engine()
-TOKEN_VALIDATOR = TokenValidator()
-STORE = EngagementStore()
 FINDINGS = FindingStore()
-GATE = SecurityGate(token_validator=TOKEN_VALIDATOR, engagement_store=STORE)
-# Single execution path shared with the MCP server: validate, authorize, run,
+# Single execution path shared with the MCP server: validate, build, run,
 # record. Nothing else in this module spawns a process.
-EXEC = ExecutionService(gate=GATE)
-# Autonomous, adaptive assessment. Drives EXEC, so every step it takes is gated
-# and audited exactly as a manual call would be.
+EXEC = ExecutionService()
+# Autonomous, adaptive assessment. Drives EXEC, so every step it takes runs on
+# exactly the same terms as a manual call.
 ORCHESTRATOR = AutonomousOrchestrator(execution_service=EXEC, finding_store=FINDINGS)
 
 
@@ -211,21 +201,6 @@ def _analyze_target(target):
 
 
 class Handler(BaseHTTPRequestHandler):
-    # Public endpoints that don't require authentication
-    PUBLIC_ENDPOINTS = {"/health", "/version", "/ready"}
-
-    def _check_auth(self, path: str) -> bool:
-        """Check authentication for protected endpoints. Return True if authenticated."""
-        if path in self.PUBLIC_ENDPOINTS:
-            return True
-
-        auth_header = self.headers.get("Authorization")
-        is_valid, error = TOKEN_VALIDATOR.validate(auth_header)
-        if not is_valid:
-            self._json(401, {"ok": False, "error": error or "Unauthorized", "code": "UNAUTHORIZED"})
-            return False
-        return True
-
     def _json(self, code, data):
         body = json.dumps(data).encode()
         self.send_response(code)
@@ -256,9 +231,6 @@ class Handler(BaseHTTPRequestHandler):
             return json.loads(self.rfile.read(n) or b"{}")
         except json.JSONDecodeError:
             return {}
-
-    def _source_ip(self):
-        return self.client_address[0] if self.client_address else "unknown"
 
     def _execution_get(self, path):
         """Route /api/executions/<id>[/output|/artifacts]. Returns (code, body)."""
@@ -293,49 +265,26 @@ class Handler(BaseHTTPRequestHandler):
         return EXEC.execute(
             tool_name=tool_name,
             params=body.get("params", {}),
-            auth_header=self.headers.get("Authorization"),
-            source_ip=self._source_ip(),
             run_async=bool(body.get("async")),
-            engagement_id=body.get("engagement_id") or None,
         )
 
     def _start_autonomous(self, body):
-        """Kick off an adaptive autonomous run. Every step it takes is gated."""
+        """Kick off an adaptive autonomous run."""
         target = body.get("target")
         if not target:
             return {"ok": False, "error": "target is required", "code": "TARGET_REQUIRED"}
         run = ORCHESTRATOR.start(
             target=target,
-            auth_header=self.headers.get("Authorization"),
-            source_ip=self._source_ip(),
-            engagement_id=body.get("engagement_id") or None,
             risk_ceiling=body.get("risk_ceiling", "active"),
             max_steps=int(body.get("max_steps", 20)),
             run_async=bool(body.get("async", True)),
         )
         return {"ok": True, "run": run.to_dict()}
 
-    def _create_engagement(self, body):
-        """Create an engagement. Validation failures are reported, not raised."""
-        try:
-            engagement = STORE.create(body)
-        except EngagementError as exc:
-            return {"ok": False, "error": str(exc), "code": "INVALID_ENGAGEMENT"}
-        return {"ok": True, "engagement": engagement_to_dict(engagement)}
-
-    def _set_engagement_status(self, engagement_id, body):
-        try:
-            engagement = STORE.set_status(engagement_id, str(body.get("status", "")))
-        except EngagementError as exc:
-            return {"ok": False, "error": str(exc), "code": "INVALID_ENGAGEMENT"}
-        return {"ok": True, "engagement": engagement_to_dict(engagement)}
-
     def do_GET(self):
         t0 = time.time()
         try:
             path = urllib.parse.urlparse(self.path).path
-            if not self._check_auth(path):
-                return
             if path == "/health":
                 deg = run_agent(ENGINE, "degradation", {})
                 mode = "degraded"
@@ -405,10 +354,9 @@ class Handler(BaseHTTPRequestHandler):
             elif path == "/api/findings/export":
                 query = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
                 fmt = (query.get("format") or ["json"])[0]
-                engagement = (query.get("engagement_id") or [None])[0]
                 try:
                     rendered = findings_export.export(
-                        FINDINGS.list(engagement_id=engagement), fmt
+                        FINDINGS.list(), fmt
                     )
                 except ValueError as exc:
                     self._json(400, {"ok": False, "error": str(exc), "code": "UNKNOWN_FORMAT"})
@@ -421,24 +369,6 @@ class Handler(BaseHTTPRequestHandler):
                         self._text(200, rendered, "application/x-ndjson")
                     else:
                         self._text(200, rendered, "application/json")
-            elif path == "/api/engagements":
-                query = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
-                active_only = (query.get("active") or [None])[0] == "true"
-                engagements = STORE.list(active_only=active_only)
-                self._json(200, {
-                    "ok": True,
-                    "count": len(engagements),
-                    "enforcing": GATE.enforce,
-                    "engagements": [engagement_to_dict(e) for e in engagements],
-                })
-            elif path.startswith("/api/engagements/"):
-                engagement_id = path[len("/api/engagements/"):].strip("/")
-                engagement = STORE.get(engagement_id)
-                if engagement is None:
-                    self._json(404, {"ok": False, "error": f"no such engagement: {engagement_id}",
-                                     "code": "NOT_FOUND"})
-                else:
-                    self._json(200, {"ok": True, "engagement": engagement_to_dict(engagement)})
             elif path == "/api/mcp/profiles":
                 self._json(200, {"ok": True, "profiles": mcp_profiles.summarize()})
             elif path.startswith("/api/tools/"):
@@ -449,9 +379,7 @@ class Handler(BaseHTTPRequestHandler):
                 else:
                     self._json(200, {"ok": True, "tool": spec.describe()})
             elif path == "/api/executions":
-                query = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
-                engagement = (query.get("engagement_id") or [None])[0]
-                records = EXEC.registry.list(engagement_id=engagement)
+                records = EXEC.registry.list()
                 self._json(200, {
                     "ok": True,
                     "executions": [r.to_dict() for r in records],
@@ -480,19 +408,12 @@ class Handler(BaseHTTPRequestHandler):
         t0 = time.time()
         try:
             path = urllib.parse.urlparse(self.path).path
-            if not self._check_auth(path):
-                return
             body = self._body()
             fn = None
             if path == "/api/command":
                 fn = lambda: self._command(body)
             elif path == "/api/autonomous":
                 fn = lambda: self._start_autonomous(body)
-            elif path == "/api/engagements":
-                fn = lambda: self._create_engagement(body)
-            elif path.startswith("/api/engagements/") and path.endswith("/status"):
-                engagement_id = path[len("/api/engagements/"):-len("/status")].strip("/")
-                fn = lambda: self._set_engagement_status(engagement_id, body)
             elif path.startswith("/api/executions/") and path.endswith("/terminate"):
                 execution_id = path[len("/api/executions/"):-len("/terminate")].strip("/")
                 fn = lambda: EXEC.terminate(execution_id)

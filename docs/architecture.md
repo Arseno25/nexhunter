@@ -1,15 +1,15 @@
 # Architecture
 
-NexHunter is a policy-driven orchestration layer over external security tools.
-It does not implement scanners; it decides whether a scan may run, runs it
-safely, and records what happened.
+NexHunter is an orchestration layer over external security tools. It does not
+implement scanners; it validates what a scan may run, runs it safely in an
+isolated workspace, and records what happened.
 
 > Only use NexHunter against systems you own or are explicitly authorized to assess.
 
 ## The one rule
 
 Every execution — from the REST API, from an AI client over MCP, from the CLI —
-goes through the same gate. There is no second path.
+goes through the same service. There is no second path.
 
 ```mermaid
 flowchart LR
@@ -25,20 +25,17 @@ flowchart LR
     MCP --> SVC
     CLI --> SVC
 
-    SVC --> GATE{SecurityGate}
-    GATE -->|denied| AUDIT[(Audit log)]
-    GATE -->|allowed| RUN[ProcessRunner]
-    RUN --> AUDIT
+    SVC --> RUN[ProcessRunner]
     RUN --> WS[(Per-execution<br/>workspace)]
+    RUN --> REG[(Execution registry<br/>in-memory records)]
 
-    classDef deny fill:#7f1d1d,stroke:#dc2626,color:#fff
     classDef allow fill:#14532d,stroke:#16a34a,color:#fff
-    class GATE deny
     class RUN allow
 ```
 
 An AI client is a caller like any other. It can propose a tool and parameters;
-it cannot propose a command, widen its own scope, or overrule the policy engine.
+it cannot propose a command line. The autonomous orchestrator sits on top of
+the same service and may only execute what its risk ceiling permits.
 
 ## Layers
 
@@ -54,14 +51,11 @@ flowchart TB
         B1[execution/service.py]
     end
 
-    subgraph policy [Security]
-        C1[security/enforcement.py<br/>SecurityGate]
-        C2[security/authentication.py]
-        C3[security/authorization.py]
-        C4[security/engagement.py<br/>scope]
-        C5[security/policy.py<br/>decisions]
-        C6[security/redaction.py]
-        C7[security/audit.py]
+    subgraph safety [Safety]
+        C1[core/params.py<br/>typed validation]
+        C2[security/redaction.py]
+        C3[core/risk.py<br/>risk levels]
+        C4[workflows/orchestrator.py<br/>autonomy ceiling]
     end
 
     subgraph exec [Execution]
@@ -78,20 +72,17 @@ flowchart TB
     end
 
     interface --> service
-    service --> policy
     service --> exec
     service --> registry
-    C1 --> C2 & C3 & C5
-    C5 --> C4
-    C1 --> C7
-    C7 --> C6
+    C1 --> B1
+    C4 --> B1
 ```
 
 | Layer | Responsibility | Must not |
 |---|---|---|
-| Interface | Parse requests, shape responses | Build commands, spawn processes, decide policy |
-| Service | Sequence validate → authorize → run → record | Contain tool-specific logic |
-| Security | Decide who may run what, against which targets | Be bypassable by any caller |
+| Interface | Parse requests, shape responses | Build commands, spawn processes |
+| Service | Validate → run → record, redacted | Contain tool-specific logic |
+| Safety | Validate input shape, redact secrets, set autonomy ceilings | Be bypassable by any caller |
 | Execution | Run a process safely and contain its output | Decide whether it should run |
 | Registry | Describe tools and their parameters | Execute anything |
 
@@ -101,55 +92,38 @@ flowchart TB
 sequenceDiagram
     participant C as Caller
     participant S as ExecutionService
-    participant G as SecurityGate
-    participant P as PolicyEngine
     participant R as ProcessRunner
-    participant A as Audit log
+    participant W as Workspace
 
     C->>S: tool name + parameters
     S->>S: look up ToolSpec (unknown tool → reject)
-    S->>S: validate parameters
+    S->>S: validate parameters (typed, secret-aware)
     Note over S: record created: QUEUED → VALIDATING
 
-    S->>G: authorize(tool, target, risk)
-    G->>G: authenticate bearer token
-    G->>P: evaluate policy
-    P->>P: permission for this risk level?
-    P->>P: engagement active?
-    P->>P: target in scope? (denied beats allowed)
-    P->>P: dangerous tool needs approval?
-    P-->>G: PolicyDecision
-    G->>A: write decision (allowed or denied)
-    G-->>S: GateResult
-
-    alt denied
-        S-->>C: BLOCKED + policy code
-    else allowed
-        Note over S: AUTHORIZED
-        S->>S: build argv from ToolSpec
-        S->>S: create isolated workspace
-        Note over S: RUNNING
-        S->>R: run(argv, timeout, workspace)
-        R->>R: spawn in its own process group
-        R->>R: enforce timeout and output cap
-        R-->>S: exit code, stdout, stderr
-        Note over S: COMPLETED / FAILED / TIMED_OUT / TERMINATED
-        S-->>C: result with secrets redacted
-    end
+    S->>S: build argv from ToolSpec (no shell)
+    S->>S: redact secrets from params and command
+    S->>S: create isolated workspace
+    Note over S: AUTHORIZED → RUNNING
+    S->>R: run(argv, timeout, workdir)
+    R->>R: spawn in its own process group
+    R->>R: enforce timeout and output cap
+    R-->>S: exit code, stdout, stderr
+    Note over S: COMPLETED / FAILED / TIMED_OUT / TERMINATED
+    S-->>C: result with secrets redacted
 ```
 
 ## Execution states
 
 A record moves through an explicit state machine. Illegal transitions raise
-rather than silently corrupting the record, so a blocked execution can never
+rather than silently corrupting the record, so a failed execution can never
 appear to have run.
 
 ```mermaid
 stateDiagram-v2
     [*] --> queued
     queued --> validating
-    validating --> authorized: policy allows
-    validating --> blocked: policy denies
+    validating --> authorized
+    validating --> blocked: invalid params
     authorized --> running
     authorized --> blocked
     running --> completed: exit 0
@@ -164,46 +138,29 @@ stateDiagram-v2
     blocked --> [*]
 ```
 
-## Scope enforcement
+## Input safety
 
-Target validation is the part most worth understanding, because it is where an
-authorized assessment stops being authorized. It fails closed at every step.
+Execution safety lives in the parameter contract, not in a policy layer:
 
-```mermaid
-flowchart TD
-    T[Target] --> E{Engagement<br/>present?}
-    E -->|no| D1[DENY<br/>scope unverifiable]
-    E -->|yes| ACT{Engagement<br/>active?}
-    ACT -->|no| D2[DENY]
-    ACT -->|yes| EMPTY{Allow-list<br/>empty?}
-    EMPTY -->|yes| D3[DENY<br/>empty allows nothing]
-    EMPTY -->|no| HOST[Reduce URL / host:port<br/>to bare host]
+- **Typed validation.** Every parameter declares a type, a default, and a
+  validation rule (`core/params.py`). A value that is not a valid target, port,
+  or enum is refused before a command is ever built.
+- **No passthrough.** No parameter carries a command line, no builder splits a
+  string into argv, and no execution path uses a shell. A free-form command
+  parameter is an arbitrary-command API and is a regression test failure.
+- **Secret redaction.** Parameters whose names match secret patterns are
+  redacted in records, logs, and responses (`security/redaction.py`).
+- **Artifact containment.** Workspaces live under `NEXHUNTER_DATA_DIR/executions/
+  <execution_id>/`. Identifiers and artifact names are validated against a
+  strict pattern, paths are canonicalized, and symlinks are resolved before the
+  containment check. There is no general file-manager API: artifacts are
+  reachable only by name, only within one execution's workspace.
 
-    HOST --> DEN{In denied list?}
-    DEN -->|yes| D4[DENY<br/>denied beats allowed]
-    DEN -->|no| ALW{In allowed list?}
-    ALW -->|no| D5[DENY]
-    ALW -->|yes| RES[Resolve every address<br/>the name points at]
+## Risk ceiling for autonomy
 
-    RES -->|resolution fails| D6[DENY]
-    RES --> META{Metadata IP?}
-    META -->|yes| D7[DENY<br/>always, even if allowed]
-    META -->|no| RSV{Reserved / private?}
-    RSV -->|no| OK[ALLOW]
-    RSV -->|yes| EXP{Named literally, or<br/>covered by an IP/CIDR entry?}
-    EXP -->|yes| OK
-    EXP -->|no| D8[DENY<br/>a wildcard must not<br/>reach internal space]
-
-    classDef deny fill:#7f1d1d,stroke:#dc2626,color:#fff
-    classDef allow fill:#14532d,stroke:#16a34a,color:#fff
-    class D1,D2,D3,D4,D5,D6,D7,D8 deny
-    class OK allow
-```
-
-Resolving the name is what stops DNS rebinding: a host that passes the
-name-based check but points at `169.254.169.254` or `10.0.0.5` is still denied.
-
-## Policy decisions
+The autonomous orchestrator (`workflows/orchestrator.py`) plans steps from the
+target profile and executes them through the same `ExecutionService`. It is
+bounded by a risk ceiling:
 
 ```mermaid
 flowchart LR
@@ -212,10 +169,10 @@ flowchart LR
     R --> I[intrusive]
     R --> X[destructive]
 
-    P --> P1[authenticated<br/>+ in scope]
-    A --> A1[+ scan:active<br/>+ risk allowed by engagement]
-    I --> I1[+ scan:intrusive<br/>+ approval record]
-    X --> X1[admin permission<br/>+ feature flag<br/>+ approval<br/>disabled by default]
+    P --> P1[auto-executed]
+    A --> A1[auto-executed]
+    I --> I1[withheld: human approval]
+    X --> X1[withheld: human approval<br/>+ feature flag]
 
     classDef low fill:#14532d,stroke:#16a34a,color:#fff
     classDef mid fill:#78350f,stroke:#d97706,color:#fff
@@ -225,18 +182,20 @@ flowchart LR
     class I1,X1 high
 ```
 
-Credential attacks, brute force, payload generation, exploitation, persistence,
-data modification, denial of service, wireless deauthentication, and destructive
-cloud actions never run automatically. They require an explicit approval record.
+The ceiling is clamped to `active` regardless of what a caller requests:
+intrusive and destructive tools are never auto-executed. Credential attacks,
+brute force, exploitation, persistence, and destructive actions are always
+withheld and require an explicit decision to run them as a standalone,
+approved step.
 
 ## MCP profiles
 
-The bridge decides what a client is *shown*. The server decides what is
-*allowed*. Hiding a tool is a usability choice, not a security control.
+The bridge decides what a client is *shown*. The service decides what is
+*valid*. Hiding a tool is a usability choice, not a security control.
 
 ```mermaid
 flowchart LR
-    REG[(Tool registry<br/>~170 tools)] --> F{Profile filter<br/>category · risk · maturity}
+    REG[(Tool registry<br/>~204 tools)] --> F{Profile filter<br/>category · risk · maturity}
     F --> C[core · 7]
     F --> RC[recon · 15]
     F --> W[web · 13]
@@ -245,16 +204,13 @@ flowchart LR
     F --> CL[cloud · 8]
     F --> CT[container · 10]
     F --> FR[forensics · 17]
-    F --> FU[full · 172]
+    F --> FU[full · 202]
 
     C --> CLIENT[AI client]
-    CLIENT -.->|every call still| GATE{SecurityGate}
-
-    classDef gate fill:#7f1d1d,stroke:#dc2626,color:#fff
-    class GATE gate
+    CLIENT -.->|every call still| SVC[ExecutionService]
 ```
 
-The default profile exposes 7 tools rather than 172, which cuts initialization
+The default profile exposes 12 tools rather than 202, which cuts initialization
 payload and token cost and stops a model choosing blindly between near-identical
 tools.
 
@@ -262,24 +218,18 @@ tools.
 
 ```
 NEXHUNTER_DATA_DIR/
-└── engagements/
-    └── <engagement_id>/
-        └── executions/
-            └── <execution_id>/
-                ├── stdout.log
-                ├── stderr.log
-                └── <tool artifacts>
+└── executions/
+    └── <execution_id>/
+        ├── stdout.log
+        ├── stderr.log
+        └── <tool artifacts>
 ```
-
-Identifiers and artifact names are validated against a strict pattern, paths are
-canonicalized, and symlinks are resolved before the containment check. There is
-no general file-manager API: artifacts are reachable only by name, only within
-one execution's workspace.
 
 ## Deliberate non-goals
 
-- **No autonomy.** NexHunter does not decide to attack anything. A model
-  proposes; the policy engine disposes.
+- **No autonomous attack decisions.** Intrusive and destructive actions are
+  withheld by the orchestrator's risk ceiling; autonomy is bounded to passive
+  and active steps.
 - **No arbitrary command execution.** No parameter carries a command line, no
   builder splits a string into argv, no path uses a shell.
 - **No binary installation.** Missing tools are reported, never fetched.
@@ -290,20 +240,17 @@ one execution's workspace.
 
 | Path | Contents |
 |---|---|
-| `security/authentication.py` | Bearer tokens, constant-time comparison |
-| `security/authorization.py` | Permissions and roles |
-| `security/engagement.py` | Engagement model, target validation, DNS checks |
-| `security/policy.py` | Deterministic execution decisions |
-| `security/redaction.py` | Secret detection for logs, records, output |
-| `security/audit.py` | Structured JSON audit log |
-| `security/enforcement.py` | SecurityGate: ties the above together |
 | `execution/models.py` | ExecutionRecord and its state machine |
 | `execution/workspace.py` | Per-execution isolated directories |
 | `execution/runner.py` | Process spawning, tree termination, output caps |
 | `execution/registry.py` | Concurrency-safe, bounded record store |
 | `execution/service.py` | The single execution path |
+| `core/params.py` | Typed parameter validation and secret naming |
+| `core/risk.py` | Risk levels shared by registry and orchestrator |
 | `core/tools.py` | ToolSpec registry and command builders |
 | `core/availability.py` | Binary presence and version detection |
+| `security/redaction.py` | Secret detection for logs, records, output |
+| `workflows/orchestrator.py` | Adaptive planner and bounded autonomy loop |
 | `api/mcp_profiles.py` | Profile definitions and filtering |
 | `cli/doctor.py` | Environment health check |
 
@@ -311,4 +258,4 @@ one execution's workspace.
 
 - [security-model.md](security-model.md) — threat model and guarantees
 - [mcp/README.md](mcp/README.md) — MCP setup and client configuration
-- [HEXSTRIKE_COMPARISON.md](HEXSTRIKE_COMPARISON.md) — comparison with HexStrike AI
+- [how-it-works.md](how-it-works.md) — five-stage flow with diagrams

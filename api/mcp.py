@@ -1,13 +1,11 @@
 """mcp.py - FastMCP bridge to the nexhunter HTTP server.
 
 A thin MCP layer that proxies every call to the server's REST API, so MCP and
-REST share one execution path, one policy engine, and one audit log. The bridge
-holds no tool logic of its own: anything the policy engine would refuse over
-REST it also refuses here.
+REST share one execution path. The bridge holds no tool logic of its own.
 
 Tools are generated from the central registry rather than hand-written, and
 filtered by profile so a client is shown only the tools for its job. Listing a
-tool is a usability decision; authorizing it remains the server's.
+tool is a usability decision; execution remains the server's.
 
 Usage:
     python -m nexhunter.api.server --port 8888          # start the server first
@@ -35,9 +33,6 @@ SERVER = "http://127.0.0.1:8888"
 # Which slice of the registry this bridge exposes. Overridden by --profile or
 # NEXHUNTER_MCP_PROFILE before tools are registered.
 PROFILE_NAME = os.environ.get("NEXHUNTER_MCP_PROFILE", mcp_profiles.DEFAULT_PROFILE)
-# Bearer token forwarded to the server. Read from env so the MCP bridge works
-# against a token-protected (enforced) server without code changes.
-API_TOKEN = os.environ.get("NEXHUNTER_API_TOKEN", "")
 
 mcp = FastMCP(
     "nexhunter",
@@ -52,8 +47,7 @@ mcp = FastMCP(
         "  - assess(target) - quick assessment\n"
         "  - probe(target) - HTTP probe\n"
         "  - select_tools(target) - get recommended tools\n"
-        "  - run_agent(name, params) - run specific agent\n\n"
-        "IMPORTANT: Only test targets you have explicit authorization to assess."
+        "  - run_agent(name, params) - run specific agent"
     ),
 )
 
@@ -61,8 +55,6 @@ mcp = FastMCP(
 def api(path, payload=None, timeout=600):
     url = SERVER + path
     headers = {"Content-Type": "application/json"}
-    if API_TOKEN:
-        headers["Authorization"] = f"Bearer {API_TOKEN}"
     req = urllib.request.Request(
         url,
         data=json.dumps(payload or {}).encode() if payload is not None else None,
@@ -131,7 +123,7 @@ def run_tool(tool: str, params: str = "{}", async_run: bool = False) -> str:
     """Run a registered tool by name with JSON params (async_run=True returns pid immediately).
 
     Raw shell command execution is not supported; only tools in the registry
-    may run, subject to the server's policy engine.
+    may run.
     """
     parsed = json.loads(params) if params else {}
     return json.dumps(api("/api/command", {"tool": tool, "params": parsed, "async": async_run}), indent=1)
@@ -233,9 +225,7 @@ def _register(name, spec):
     fn.__doc__ = (
         f"{spec.description}\n"
         f"Risk: {spec.risk_level} | Binary: {spec.binary}\n"
-        f"Params: {', '.join(spec.params)}\n"
-        "Subject to the server's policy engine; intrusive/destructive tools may "
-        "require an in-scope engagement and approval."
+        f"Params: {', '.join(spec.params)}"
     )
     mcp.tool()(fn)
 
@@ -293,7 +283,7 @@ def resource_profiles() -> str:
 
 @mcp.resource("nexhunter://executions")
 def resource_executions() -> str:
-    """Recent executions with status, duration, and policy decision."""
+    """Recent executions with status and duration."""
     return json.dumps(api("/api/executions"), indent=1)
 
 
@@ -305,7 +295,7 @@ def resource_findings() -> str:
 
 @mcp.resource("nexhunter://system/status")
 def resource_status() -> str:
-    """Server health, enforcement posture, and tool availability."""
+    """Server health and tool availability."""
     return json.dumps(api("/health"), indent=1)
 
 
@@ -328,12 +318,9 @@ def tool_info(name: str) -> str:
 
 
 @mcp.tool()
-def executions(engagement_id: str = "") -> str:
-    """List recorded executions, newest first, optionally for one engagement."""
-    path = "/api/executions"
-    if engagement_id:
-        path += f"?engagement_id={urllib.parse.quote(engagement_id)}"
-    return json.dumps(api(path), indent=1)
+def executions() -> str:
+    """List recorded executions, newest first."""
+    return json.dumps(api("/api/executions"), indent=1)
 
 
 @mcp.tool()
@@ -349,14 +336,11 @@ def execution_terminate(execution_id: str) -> str:
 
 
 @mcp.tool()
-def autonomous_assess(target: str, engagement_id: str = "", risk_ceiling: str = "active", max_steps: int = 20) -> str:
+def autonomous_assess(target: str, risk_ceiling: str = "active", max_steps: int = 20) -> str:
     """Run an adaptive autonomous assessment of a target.
 
     The orchestrator plans tools from what it observes, runs them, folds the
     results back into a target profile, and re-plans -- adapting in real time.
-    Every step is authorized against the engagement and audited, exactly as a
-    manual call would be: this cannot reach a target or a risk level the
-    engagement does not permit.
 
     risk_ceiling caps what runs automatically (passive or active). Intrusive
     and destructive tools are never auto-executed; they are returned under
@@ -364,8 +348,6 @@ def autonomous_assess(target: str, engagement_id: str = "", risk_ceiling: str = 
     autonomous_status.
     """
     payload = {"target": target, "risk_ceiling": risk_ceiling, "max_steps": max_steps, "async": True}
-    if engagement_id:
-        payload["engagement_id"] = engagement_id
     return json.dumps(api("/api/autonomous", payload), indent=1)
 
 
@@ -380,10 +362,9 @@ _REGISTERED_TOOL_COUNT = register_profile_tools()
 
 
 def main():
-    global SERVER, API_TOKEN, PROFILE_NAME
+    global SERVER, PROFILE_NAME
     parser = argparse.ArgumentParser(description="nexhunter MCP bridge")
     parser.add_argument("--server", default="http://127.0.0.1:8888", help="nexhunter server URL")
-    parser.add_argument("--token", default="", help="bearer token (else NEXHUNTER_API_TOKEN)")
     parser.add_argument(
         "--profile",
         default="",
@@ -401,8 +382,6 @@ def main():
         return
 
     SERVER = args.server.rstrip("/")
-    if args.token:
-        API_TOKEN = args.token
 
     # Re-register when a profile is requested that differs from the default
     # applied at import time.

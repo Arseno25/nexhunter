@@ -2,8 +2,8 @@
 
 NexHunter exposes its tool registry over MCP (Model Context Protocol) through a
 FastMCP bridge. The bridge is a thin proxy: every call goes to the same REST
-API, the same policy engine, and the same audit log that a human operator hits.
-Nothing is reachable over MCP that would be refused over REST.
+API and the same execution path that a human operator hits. Nothing is
+reachable over MCP that would be refused over REST.
 
 > Only use NexHunter against systems you own or are explicitly authorized to assess.
 
@@ -11,13 +11,13 @@ Nothing is reachable over MCP that would be refused over REST.
 
 ```
 AI client  ──stdio/MCP──►  nexhunter.api.mcp  ──HTTP──►  nexhunter.api.server
-(Claude, Cursor, …)         (profile filter)              (policy, scope, audit,
-                                                           execution, workspaces)
+(Claude, Cursor, …)         (profile filter)              (validation, execution,
+                                                           workspaces, findings)
 ```
 
 The bridge decides **what a client is shown**. The server decides **what is
-allowed to run**. Those are separate on purpose: hiding a tool is a usability
-choice, not a security control.
+valid**. Those are separate on purpose: hiding a tool is a usability choice,
+not a security control.
 
 ## 1. Start the server
 
@@ -30,7 +30,7 @@ exposing it anywhere else.
 
 ## 2. Pick a profile
 
-Listing all ~170 registered tools to every client makes for a large
+Listing all ~204 registered tools to every client makes for a large
 initialization payload, a large token cost on every session, and a model
 choosing between near-identical tools with no basis to pick. A profile narrows
 that to one job.
@@ -43,16 +43,23 @@ python -m nexhunter.api.mcp --list-profiles
 |---|---|
 | `nexhunter-core` | **Default.** Status, findings, executions, and passive stable checks only |
 | `nexhunter-recon` | Host discovery, DNS, subdomain enumeration, service identification |
-| `nexhunter-web` | Web scanning: content discovery, templates, tech identification, TLS |
-| `nexhunter-api` | API surface testing: schema and parameter discovery, GraphQL |
+| `nexhunter-web` | Web security: content discovery, injection testing, templates, TLS — incl. sqlmap/ffuf/nikto |
+| `nexhunter-api` | API surface testing: schema discovery, parameter discovery (arjun), GraphQL |
 | `nexhunter-code` | Static analysis, secret scanning, dependency review |
 | `nexhunter-cloud` | Read-only cloud posture review |
 | `nexhunter-container` | Container and Kubernetes image and configuration review |
-| `nexhunter-forensics` | Offline artifact and binary analysis |
+| `nexhunter-forensics` | Offline artifact, steganography, and binary analysis |
+| `nexhunter-osint` | OSINT: username and email footprinting, maltego/spiderfoot, CVE lookup |
+| `nexhunter-wireless` | Wireless reconnaissance and assessment (destructive withheld) |
+| `nexhunter-privesc` | Local privilege escalation discovery scripts |
+| `nexhunter-payloads` | Payload generation and C2 integration (never auto-executed) |
+| `nexhunter-vulnscan` | Vulnerability scanners and network IDS tooling |
+| `nexhunter-mobile` | APK inspection, decompilation, runtime exploration |
+| `nexhunter-ctf` | One-stop CTF profile: Web Exploitation, Cryptography, Reverse Engineering & Pwn, Forensics, OSINT |
 | `nexhunter-full` | Every non-destructive tool. Large payload; prefer a focused profile |
 
 No profile lists a destructive tool. Reaching one takes explicit, separately
-configured setup plus an approval record.
+configured setup.
 
 ## 3. Configure your client
 
@@ -76,10 +83,7 @@ All of them take the same shape:
         "-m", "nexhunter.api.mcp",
         "--server", "http://127.0.0.1:8888",
         "--profile", "nexhunter-core"
-      ],
-      "env": {
-        "NEXHUNTER_API_TOKEN": "your-token-here"
-      }
+      ]
     }
   }
 }
@@ -90,14 +94,6 @@ environment (most do not):
 
 - Linux/macOS: `/usr/bin/python3` or `/path/to/.venv/bin/python`
 - Windows: `C:\Python313\python.exe` or `.venv\Scripts\python.exe`
-
-## Authentication
-
-If the server has `NEXHUNTER_API_TOKEN` set, the bridge must send the same
-token. Pass it through the client's `env` block (above) or with `--token`.
-Prefer `env`: a token on the command line is visible in the process list.
-
-Without a matching token every tool call comes back `AUTH_REQUIRED`.
 
 ## Resources
 
@@ -110,7 +106,7 @@ without spending a tool call:
 | `nexhunter://tools/stable` | Only tools with parsers, fixtures, and tests |
 | `nexhunter://tools/available` | Tools whose binary is installed on this host |
 | `nexhunter://profiles` | Profiles and their tool counts |
-| `nexhunter://executions` | Recent executions with status and policy decision |
+| `nexhunter://executions` | Recent executions with status |
 | `nexhunter://findings` | Findings recorded so far |
 | `nexhunter://system/status` | Server health and tool availability |
 
@@ -119,20 +115,18 @@ without spending a tool call:
 - **Run an arbitrary command.** There is no command parameter anywhere in the
   registry, and no execution path uses a shell. Model output is a tool name
   plus typed parameters; it is never a command line.
-- **Choose its own scope.** Targets are checked against the engagement, and
-  denied entries beat allowed ones.
-- **Override policy.** The policy engine evaluates every call server-side. A
-  model asking more confidently does not change the answer.
+- **Send invalid parameters.** Values are type-checked server-side; a value
+  that is not a valid target, port, or enum is refused before a command is
+  ever built.
+- **Escalate an autonomous run.** The orchestrator's risk ceiling is clamped
+  to `active`; a model asking for more does not get it.
 - **Reach a destructive tool by asking.** Those are disabled by default and
-  require an admin permission and an approval record.
+  require a feature flag plus a human decision.
 
 ## Troubleshooting
 
 **No tools appear.** The client cannot start the bridge. Run the exact command
 from your config by hand; a wrong interpreter path is the usual cause.
-
-**Everything returns `AUTH_REQUIRED`.** The bridge's token does not match the
-server's. Check `NEXHUNTER_API_TOKEN` on both sides.
 
 **`server unreachable`.** The server is not running, or is on another port.
 Confirm with `curl http://127.0.0.1:8888/health`.

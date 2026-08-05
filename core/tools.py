@@ -50,20 +50,28 @@ def _infer_target_param(params: Dict[str, Any]) -> Optional[str]:
 
 # Category drives MCP profile membership: a client asking for the web profile
 # should not be handed forensics tooling. Order matters; first hit wins.
+# ponytail: keyword heuristic over 180 tools; override per-tool via
+# ToolSpec(category=...) when a specific tool is misclassified (see `ss`, `nm`).
 _CATEGORY_KEYWORDS = (
     ("code", ("semgrep", "bandit", "pylint", "sonar", "checkmarx", "gitleaks",
-              "trufflehog", "snyk", "dependency", "retire", "safety", "npm_audit")),
+              "trufflehog", "snyk", "dependency", "retire", "safety", "npm_audit",
+              "pip_audit", "checkov", "tfsec", "gitrob", "detect_secrets", "secret")),
     ("container", ("docker", "kubectl", "kube", "trivy", "clair", "grype",
-                   "helm", "podman", "container")),
+                   "helm", "podman", "container", "falco")),
     ("cloud", ("aws", "gcloud", "azure", "prowler", "scoutsuite", "cloudsplaining",
                "s3", "cloudmapper", "pacu", "steampipe")),
     ("forensics", ("volatility", "sleuthkit", "autopsy", "binwalk", "exiftool",
-                   "foremost", "bulk_extractor", "plaso", "yara", "capa")),
+                   "foremost", "bulk_extractor", "plaso", "yara", "capa",
+                   "regripper", "pdf2txt", "steghide", "zsteg", "pngcheck",
+                   "fcrackzip")),
     ("binary", ("ghidra", "radare", "r2", "objdump", "readelf", "checksec",
-                "gdb", "strings", "ropgadget", "pwntools", "angr")),
+                "gdb", "strings", "ropgadget", "pwntools", "angr",
+                "cutter", "ida")),
     ("crypto", ("hashid", "hashcat", "john", "openssl", "testssl", "sslscan",
                 "sslyze", "cipher")),
-    ("api", ("graphql", "swagger", "openapi", "postman", "arjun", "kiterunner")),
+    ("ctf", ("xortool", "rsactf", "pwninit", "ctf")),
+    ("api", ("graphql", "swagger", "openapi", "postman", "arjun", "kiterunner",
+             "insomnia")),
     ("web", ("nuclei", "ffuf", "gobuster", "nikto", "sqlmap", "dalfox", "wpscan",
              "joomscan", "drupscan", "zap", "burp", "httpx", "katana", "whatweb",
              "wafw00f", "xsstrike", "commix", "feroxbuster", "dirsearch", "curl",
@@ -71,12 +79,29 @@ _CATEGORY_KEYWORDS = (
     ("recon", ("nmap", "masscan", "rustscan", "subfinder", "amass", "assetfinder",
                "dns", "whois", "shodan", "censys", "theharvester", "recon",
                "fierce", "dnsx", "naabu", "host", "nslookup", "sublist3r")),
-    ("network", ("aircrack", "tcpdump", "tshark", "wireshark", "enum4linux",
-                 "smbmap", "ldapsearch", "snmp", "responder", "netexec", "crackmap",
-                 "impacket", "arp", "netcat", "socat")),
+    ("osint", ("maltego", "spiderfoot", "zoomeye", "cve_search", "nist_tool",
+               "searchsploit", "theharwest", "sherlock", "holehe", "osint",
+               "maigret", "phoneinfoga")),
+    ("wireless", ("aireplay", "airodump", "aircrack", "wifite", "reaver", "kismet",
+                  "airgeddon", "mdk4", "bettercap")),
+    ("network", ("tcpdump", "tshark", "wireshark", "enum4linux",
+                 "smbmap", "smbclient", "rpcclient", "ldapsearch", "snmp",
+                 "responder", "netexec", "crackmap", "impacket", "arp", "netcat",
+                 "socat", "tun2socks", "netdiscover")),
+    ("privesc", ("linpeas", "winpeas", "pspy", "peas", "dirty_cow", "privesc",
+                 "exploit_suggester", "linux_exploit", "traitor")),
+    ("payloads", ("veil", "unicorn", "chimera", "evasion", "phishing",
+                  "social_engineer", "payload", "mimikatz", "beef",
+                  "hoaxshell")),
+    ("ids", ("snort", "suricata", "zeek", "ossec", "wazuh")),
+    ("vuln_scan", ("nessus", "openvas", "qualys", "w3af", "gvm", "vulners",
+                   "arachni", "skipfish", "wapiti")),
     ("exploitation", ("metasploit", "msf", "empire", "cobalt", "havoc", "sliver",
                       "exploit", "hydra", "medusa", "ncrack", "patator")),
     ("mobile", ("apktool", "jadx", "frida", "objection", "mobsf", "androguard")),
+    ("utility", ("awk", "sed", "grep", "jq", "yq", "tar", "zip", "xxd", "hexdump",
+                 "ldd", "ltrace", "rsync", "netstat", "mtr", "traceroute",
+                 "nping", "wget", "strings", "file_type", "ping")),
 )
 
 # Maturity is asserted per tool, never guessed: claiming a tool is "stable"
@@ -112,9 +137,9 @@ class ToolSpec:
     timeout: int = DEFAULT_TOOL_TIMEOUT
     parser: Optional[str] = None
     builder: Optional[Callable] = None
-    # Risk classification for the policy engine. None => inferred from name/binary.
+    # Risk classification used by the autonomy ceiling. None => inferred from name/binary.
     risk_level: Optional[str] = None
-    # Which param carries the scope target (for scope enforcement). None => inferred.
+    # Which param carries the target (for profiling). None => inferred.
     target_param: Optional[str] = None
     # Grouping used by MCP profiles. None => inferred from name/binary.
     category: Optional[str] = None
@@ -326,7 +351,7 @@ _tool_specs = {
         builder=lambda p: ["openssl", "s_client", "-connect", f"{p['host']}:{p['port']}", "-showcerts"]),
     "testssl": ToolSpec(
         name="testssl", binary="testssl.sh", description="SSL/TLS vulnerability scanner",
-        params={"url": None}, timeout=300,
+        params={"url": None}, timeout=300, category="web",
         builder=lambda p: ["testssl.sh", p["url"]]),
 
     # ==================== FORENSICS & ANALYSIS ====================
@@ -378,7 +403,7 @@ _tool_specs = {
         builder=lambda p: ["readelf", "-a", p["file"]]),
     "nm": ToolSpec(
         name="nm", binary="nm", description="List symbols from object files",
-        params={"file": None}, timeout=10,
+        params={"file": None}, timeout=10, category="utility",
         builder=lambda p: ["nm", p["file"]]),
     "ldd": ToolSpec(
         name="ldd", binary="ldd", description="List dynamic dependencies",
@@ -416,7 +441,7 @@ _tool_specs = {
         builder=lambda p: ["netstat", "-tuln"]),
     "ss": ToolSpec(
         name="ss", binary="ss", description="Socket statistics",
-        params={}, timeout=10,
+        params={}, timeout=10, category="utility",
         builder=lambda p: ["ss", "-tuln"]),
     "arp_scan": ToolSpec(
         name="arp_scan", binary="arp-scan", description="ARP scanner",
@@ -469,12 +494,12 @@ _tool_specs = {
 
     # ==================== VULNERABILITY DATABASES ====================
     "searchsploit": ToolSpec(
-        name="searchsploit", binary="searchsploit", description="Search exploit database",
-        params={"query": None}, timeout=10,
+        name="searchsploit", binary="searchsploit", description="Search the local ExploitDB database",
+        params={"query": None}, timeout=30, risk_level="passive",
         builder=lambda p: ["searchsploit", p["query"]]),
     "cve_search": ToolSpec(
         name="cve_search", binary="cve_search", description="Search CVE database",
-        params={"query": None}, timeout=30,
+        params={"query": None}, timeout=30, risk_level="passive",
         builder=lambda p: ["cve_search", p["query"]]),
 
     # ==================== CONTAINER & CLOUD ====================
@@ -654,7 +679,7 @@ _tool_specs = {
         builder=lambda p: ["openvassd", p["target"]]),
     "nist_tool": ToolSpec(
         name="nist_tool", binary="nist-scan", description="NIST compliance checker",
-        params={"target": None}, timeout=300,
+        params={"target": None}, timeout=300, risk_level="passive",
         builder=lambda p: ["nist-scan", p["target"]]),
 
     # ==================== THREAT INTELLIGENCE ====================
@@ -666,10 +691,6 @@ _tool_specs = {
         name="spiderfoot", binary="spiderfoot", description="OSINT automation framework",
         params={"target": None}, timeout=300,
         builder=lambda p: ["spiderfoot", "-s", p["target"]]),
-    "theharwest": ToolSpec(
-        name="theharwest", binary="theharwest", description="Domain recon tool",
-        params={"domain": None}, timeout=60,
-        builder=lambda p: ["theharwest", p["domain"]]),
 
     # ==================== UTILITY TOOLS ====================
     "jq": ToolSpec(
@@ -970,6 +991,166 @@ _tool_specs = {
         name="metasploit_payload", binary="msfvenom", description="Generate MSF payloads",
         params={"lhost": "127.0.0.1", "lport": "4444"}, timeout=30,
         builder=lambda p: ["msfvenom", "-p", "windows/shell_reverse_tcp", "LHOST=" + p["lhost"], "LPORT=" + p["lport"]]),
+
+    # ==================== OSINT ====================
+    "sherlock": ToolSpec(
+        name="sherlock", binary="sherlock", description="Username enumeration across social networks",
+        params={"username": None}, timeout=60, risk_level="passive",
+        builder=lambda p: ["sherlock", p["username"]]),
+    "holehe": ToolSpec(
+        name="holehe", binary="holehe", description="Check if an email is registered on online services",
+        params={"email": None}, timeout=60, risk_level="passive",
+        builder=lambda p: ["holehe", p["email"]]),
+    "theharvester_recon": ToolSpec(
+        name="theharvester_recon", binary="theharvester", description="OSINT email and host harvesting",
+        params={"domain": None, "limit": "100"}, timeout=120, risk_level="passive",
+        builder=lambda p: ["theHarvester", "-d", p["domain"], "-b", "all", "-l", p["limit"]]),
+
+    # ==================== WIRELESS ====================
+    "wifite": ToolSpec(
+        name="wifite", binary="wifite", description="Automated WPA/WPS wireless attack runner",
+        params={"interface": ""}, timeout=600, risk_level="intrusive",
+        builder=lambda p: ["wifite"] + (["-i", p["interface"]] if p["interface"] else [])),
+    "reaver": ToolSpec(
+        name="reaver", binary="reaver", description="WPS PIN brute force",
+        params={"target": None, "interface": None}, timeout=600, risk_level="intrusive",
+        builder=lambda p: ["reaver", "-i", p["interface"], "-b", p["target"], "-vv"]),
+
+    # ==================== PRIVILEGE ESCALATION ====================
+    "linux_exploit_suggester": ToolSpec(
+        name="linux_exploit_suggester", binary="linux-exploit-suggester.sh",
+        description="Suggest local privilege escalation exploits for the current host",
+        params={}, timeout=60, risk_level="passive",
+        builder=lambda p: ["bash", "linux-exploit-suggester.sh"]),
+
+    # ==================== PAYLOADS ====================
+    "mimikatz": ToolSpec(
+        name="mimikatz", binary="mimikatz", description="Credential extraction from Windows memory",
+        params={"action": "sekurlsa::logonpasswords"}, timeout=60, risk_level="intrusive",
+        builder=lambda p: ["mimikatz", p["action"]]),
+
+    # ==================== STEGANOGRAPHY & FILE ANALYSIS ====================
+    "steghide": ToolSpec(
+        name="steghide", binary="steghide", description="Inspect or extract data hidden in media files",
+        params={"file": None, "extract": False}, timeout=60, risk_level="passive",
+        builder=lambda p: ["steghide", "extract", "-sf", p["file"], "-p", ""]
+        if p["extract"] else ["steghide", "info", p["file"]]),
+    "zsteg": ToolSpec(
+        name="zsteg", binary="zsteg", description="Detect hidden data in PNG/BMP files",
+        params={"file": None}, timeout=60, risk_level="passive",
+        builder=lambda p: ["zsteg", p["file"]]),
+    "pngcheck": ToolSpec(
+        name="pngcheck", binary="pngcheck", description="Verify and analyze PNG file integrity",
+        params={"file": None}, timeout=30, risk_level="passive",
+        builder=lambda p: ["pngcheck", "-v", p["file"]]),
+    "fcrackzip": ToolSpec(
+        name="fcrackzip", binary="fcrackzip", description="Dictionary attack on password-protected ZIP files",
+        params={"file": None, "wordlist": "/usr/share/wordlists/rockyou.txt"}, timeout=300,
+        builder=lambda p: ["fcrackzip", "-u", "-D", "-p", p["wordlist"], p["file"]]),
+
+    # ==================== CTF ====================
+    "pwninit": ToolSpec(
+        name="pwninit", binary="pwninit", description="Prepare a pwning challenge binary: patch, download libc, makefile",
+        params={"file": None}, timeout=60, risk_level="passive",
+        builder=lambda p: ["pwninit", "--bin", p["file"]]),
+    "rsa_ctf_tool": ToolSpec(
+        name="rsa_ctf_tool", binary="RsaCtfTool", description="Attack and decode RSA CTF challenges",
+        params={"public_key": None, "attack": "all"}, timeout=300, risk_level="passive",
+        builder=lambda p: ["RsaCtfTool", "--publickey", p["public_key"], "--attack", p["attack"]]),
+    "xortool": ToolSpec(
+        name="xortool", binary="xortool", description="Guess XOR key length and recover xored plaintext",
+        params={"file": None, "key_length": ""}, timeout=120, risk_level="passive",
+        builder=lambda p: ["xortool", "-l", p["key_length"], p["file"]] if p["key_length"] else ["xortool", p["file"]]),
+
+    # ==================== WIRELESS ====================
+    "kismet": ToolSpec(
+        name="kismet", binary="kismet", description="Passive wireless network detector and channel capture",
+        params={"capture_file": ""}, timeout=600, risk_level="passive",
+        builder=lambda p: ["kismet", "--no-gpsd", "--no-server"] + (["--logfile", p["capture_file"]] if p["capture_file"] else [])),
+    "airgeddon": ToolSpec(
+        name="airgeddon", binary="airgeddon.sh", description="Multipurpose wireless attack framework",
+        params={"interface": None}, timeout=600, risk_level="intrusive",
+        builder=lambda p: ["bash", "airgeddon.sh", "-i", p["interface"]]),
+    "bettercap": ToolSpec(
+        name="bettercap", binary="bettercap", description="Network MITM and reconnaissance framework",
+        params={"target": ""}, timeout=300, risk_level="intrusive",
+        builder=lambda p: ["bettercap", "-eval", "net.probe on; arp.spoof on"] + (["--target", p["target"]] if p["target"] else [])),
+    "mdk4": ToolSpec(
+        name="mdk4", binary="mdk4", description="Wireless DoS and deauthentication testing",
+        params={"interface": None, "bssid": None}, timeout=300, risk_level="destructive",
+        builder=lambda p: ["mdk4", p["interface"], "d", p["bssid"]]),
+
+    # ==================== IDS / NETWORK MONITORING ====================
+    "zeek": ToolSpec(
+        name="zeek", binary="zeek", description="Network security monitor: analyze pcap files",
+        params={"pcap": None}, timeout=600,
+        builder=lambda p: ["zeek", "-r", p["pcap"]]),
+
+    # ==================== VULNERABILITY SCANNERS ====================
+    "arachni": ToolSpec(
+        name="arachni", binary="arachni", description="Full-featured web application vulnerability scanner",
+        params={"url": None, "report": "/tmp/arachni.html"}, timeout=900,
+        builder=lambda p: ["arachni", "--output-verbose", p["url"], "--report-save-path", p["report"]]),
+    "skipfish": ToolSpec(
+        name="skipfish", binary="skipfish", description="High-speed web application security scanner",
+        params={"url": None, "output_dir": "/tmp/skipfish"}, timeout=900,
+        builder=lambda p: ["skipfish", "-o", p["output_dir"], p["url"]]),
+    "wapiti": ToolSpec(
+        name="wapiti", binary="wapiti", description="Web application vulnerability scanner with a crawl engine",
+        params={"url": None}, timeout=900,
+        builder=lambda p: ["wapiti", "-u", p["url"], "-f", "html"]),
+
+    # ==================== MOBILE ====================
+    "objection": ToolSpec(
+        name="objection", binary="objection", description="Runtime mobile application exploration and frida gadget control",
+        params={"device_id": None, "action": "explore"}, timeout=300,
+        builder=lambda p: ["objection", "--id", p["device_id"], p["action"]]),
+
+    # ==================== OSINT ====================
+    "maigret": ToolSpec(
+        name="maigret", binary="maigret", description="Username footprinting across hundreds of sites",
+        params={"username": None, "limit": "100"}, timeout=300, risk_level="passive",
+        builder=lambda p: ["maigret", "--no-recursion", "--limit", p["limit"], p["username"]]),
+    "phoneinfoga": ToolSpec(
+        name="phoneinfoga", binary="phoneinfoga", description="Phone number OSINT and carrier intelligence",
+        params={"number": None}, timeout=60, risk_level="passive",
+        builder=lambda p: ["phoneinfoga", "scan", "-n", p["number"]]),
+
+    # ==================== PAYLOADS ====================
+    "hoaxshell": ToolSpec(
+        name="hoaxshell", binary="hoaxshell.py", description="Generate a PowerShell reverse shell payload",
+        params={"lhost": "127.0.0.1", "lport": "4444", "output": "/tmp/shell.ps1"}, timeout=60, risk_level="intrusive",
+        builder=lambda p: ["python3", "hoaxshell.py", "-s", p["lhost"], "-p", p["lport"], "-o", p["output"]]),
+
+    # ==================== PRIVILEGE ESCALATION ====================
+    "traitor": ToolSpec(
+        name="traitor", binary="traitor", description="Find and run local privilege escalation exploits",
+        params={}, timeout=120, risk_level="passive",
+        builder=lambda p: ["traitor", "--exploits"]),
+
+    # ==================== NETWORK ====================
+    "netdiscover": ToolSpec(
+        name="netdiscover", binary="netdiscover", description="ARP-based live host discovery on a subnet",
+        params={"range": None}, timeout=120,
+        builder=lambda p: ["netdiscover", "-r", p["range"]]),
+    "responder": ToolSpec(
+        name="responder", binary="responder", description="LLMNR/NBT-NS/mDNS poisoning and credential recovery",
+        params={"interface": None, "mode": "off"}, timeout=300, risk_level="intrusive",
+        builder=lambda p: ["responder", "-I", p["interface"], "-v"] + (["-A"] if p["mode"] == "analyze" else [])),
+    "snmpwalk": ToolSpec(
+        name="snmpwalk", binary="snmpwalk", description="Enumerate SNMP MIB tree of a target",
+        params={"host": None, "community": "public"}, timeout=120,
+        builder=lambda p: ["snmpwalk", "-c", p["community"], "-v2c", p["host"]]),
+
+    # ==================== WEB ====================
+    "wafw00f": ToolSpec(
+        name="wafw00f", binary="wafw00f", description="Detect Web Application Firewalls in front of a target",
+        params={"url": None}, timeout=60, risk_level="passive",
+        builder=lambda p: ["wafw00f", p["url"]]),
+    "arjun": ToolSpec(
+        name="arjun", binary="arjun", description="HTTP parameter discovery for web and API targets",
+        params={"url": None, "method": "GET"}, timeout=600, category="api",
+        builder=lambda p: ["arjun", "-u", p["url"], "-m", p["method"]]),
 }
 
 def _parse_nmap_xml(text):

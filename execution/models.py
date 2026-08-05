@@ -62,9 +62,7 @@ class ExecutionRecord:
     """
 
     tool_name: str
-    engagement_id: str
     id: str = field(default_factory=lambda: uuid.uuid4().hex)
-    request_id: str = ""
     status: ExecutionStatus = ExecutionStatus.QUEUED
     target: Optional[str] = None
     risk_level: str = "active"
@@ -76,7 +74,6 @@ class ExecutionRecord:
     exit_code: Optional[int] = None
     error_code: Optional[str] = None
     error_message: Optional[str] = None
-    policy_code: Optional[str] = None
     workspace_path: Optional[str] = None
     stdout_bytes: int = 0
     stderr_bytes: int = 0
@@ -107,8 +104,6 @@ class ExecutionRecord:
         """Dashboard-ready view. Contains no unredacted parameters."""
         return {
             "id": self.id,
-            "request_id": self.request_id,
-            "engagement_id": self.engagement_id,
             "tool": self.tool_name,
             "status": self.status.value,
             "target": self.target,
@@ -122,7 +117,6 @@ class ExecutionRecord:
             "exit_code": self.exit_code,
             "error_code": self.error_code,
             "error": self.error_message,
-            "policy_code": self.policy_code,
             "stdout_bytes": self.stdout_bytes,
             "stderr_bytes": self.stderr_bytes,
             "truncated": self.truncated,

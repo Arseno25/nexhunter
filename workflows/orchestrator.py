@@ -1,31 +1,23 @@
 """Autonomous, adaptive assessment orchestration.
 
 This is the piece that lets an AI client say "assess example.com" and have a
-whole sequence run, adapting as results come in -- the capability HexStrike
-frames as autonomous execution and real-time adaptation.
+whole sequence run, adapting as results come in — autonomous execution with
+real-time adaptation.
 
-The difference from an autonomous hacking platform is structural, not a policy
-bolted on top:
-
-  * Every step runs through ExecutionService, so the SecurityGate authorizes
-    each execution against the engagement. The loop cannot reach a target or a
-    risk level the engagement does not permit. Autonomy operates strictly
-    inside the fence, never around it.
+  * The loop runs through ExecutionService, the same path a manual call takes.
 
   * There is a risk ceiling. The loop autonomously runs passive and active
     tools. Anything above the ceiling -- intrusive or destructive: credential
     attacks, brute force, exploitation -- is never auto-executed. It is
     surfaced as a recommendation with the reason it was withheld, for a human
-    to approve. The brief is explicit that those must never run automatically,
-    and this is where that line is drawn.
+    to approve.
 
-  * There is a step budget, so a loop cannot run forever, and every decision is
-    recorded, so an autonomous run is as auditable as a manual one.
+  * There is a step budget, so a loop cannot run forever.
 
 Real-time adaptation is real: the plan is recomputed from the accumulated
 profile on every iteration. Detecting WordPress pulls in a WordPress scan;
 finding an open TLS port pulls in a TLS check. The AI does not choose what
-runs against the OS -- the planner does, from evidence, and the gate approves.
+runs against the OS -- the planner does, from evidence.
 """
 
 import threading
@@ -36,8 +28,8 @@ from enum import Enum
 from typing import Any, Dict, List, Optional, Sequence
 
 from nexhunter.core import tools as T
+from nexhunter.core.risk import RiskLevel
 from nexhunter.agents.profiler import Profiler, TargetProfile
-from nexhunter.security.engagement import RiskLevel
 
 _RISK_ORDER = {
     RiskLevel.PASSIVE: 0,
@@ -141,7 +133,6 @@ class RunRecord:
 
     id: str
     target: str
-    engagement_id: str
     status: RunStatus = RunStatus.RUNNING
     risk_ceiling: str = RiskLevel.ACTIVE.value
     max_steps: int = 20
@@ -164,7 +155,6 @@ class RunRecord:
         return {
             "run_id": self.id,
             "target": self.target,
-            "engagement_id": self.engagement_id,
             "status": self.status.value,
             "risk_ceiling": self.risk_ceiling,
             "current_phase": self.current_phase,
@@ -181,7 +171,7 @@ class RunRecord:
 
 
 class AutonomousOrchestrator:
-    """Run an adaptive assessment, every step gated and audited."""
+    """Run an adaptive assessment, every step within the risk ceiling."""
 
     def __init__(self, execution_service, finding_store=None, planner=None, profiler=None):
         self.exec = execution_service
@@ -202,9 +192,6 @@ class AutonomousOrchestrator:
     def start(
         self,
         target: str,
-        auth_header: Optional[str] = None,
-        source_ip: str = "unknown",
-        engagement_id: Optional[str] = None,
         risk_ceiling: str = "active",
         max_steps: int = 20,
         run_async: bool = True,
@@ -223,7 +210,6 @@ class AutonomousOrchestrator:
         record = RunRecord(
             id=uuid.uuid4().hex[:12],
             target=target,
-            engagement_id=engagement_id or "unscoped",
             risk_ceiling=ceiling.value,
             max_steps=max(1, min(max_steps, 50)),
         )
@@ -233,14 +219,14 @@ class AutonomousOrchestrator:
         if run_async:
             threading.Thread(
                 target=self._run_loop,
-                args=(record, auth_header, source_ip, engagement_id, ceiling),
+                args=(record, ceiling),
                 daemon=True,
             ).start()
         else:
-            self._run_loop(record, auth_header, source_ip, engagement_id, ceiling)
+            self._run_loop(record, ceiling)
         return record
 
-    def _run_loop(self, record, auth_header, source_ip, engagement_id, ceiling):
+    def _run_loop(self, record, ceiling):
         """The adaptive loop: plan from the profile, execute, observe, repeat."""
         try:
             profile = self.profiler.new_profile(record.target)
@@ -270,9 +256,6 @@ class AutonomousOrchestrator:
                     result = self.exec.execute(
                         tool_name=step.tool,
                         params={self._target_param(step.tool): record.target},
-                        auth_header=auth_header,
-                        source_ip=source_ip,
-                        engagement_id=engagement_id,
                     )
                     self._absorb(record, profile, step, result)
 
@@ -353,7 +336,6 @@ class AutonomousOrchestrator:
                 self.findings.add(Finding(
                     tool=step.tool,
                     target=record.target,
-                    engagement_id=record.engagement_id,
                     execution_id=result.get("execution_id", ""),
                     title=str(item.get("name") or item.get("template") or item.get("info") or "finding"),
                     category=Category.VULNERABILITY.value,

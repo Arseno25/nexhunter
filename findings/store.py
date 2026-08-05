@@ -55,7 +55,6 @@ class FindingStore:
 
     def list(
         self,
-        engagement_id: Optional[str] = None,
         severity: Optional[Severity] = None,
         vulnerabilities_only: bool = False,
     ) -> List[Finding]:
@@ -63,8 +62,6 @@ class FindingStore:
         with self._lock:
             findings = list(self._by_fingerprint.values())
 
-        if engagement_id:
-            findings = [f for f in findings if f.engagement_id == engagement_id]
         if severity:
             findings = [f for f in findings if f.severity.rank >= severity.rank]
         if vulnerabilities_only:
@@ -79,9 +76,9 @@ class FindingStore:
                     return finding
         return None
 
-    def summary(self, engagement_id: Optional[str] = None) -> dict:
+    def summary(self) -> dict:
         """Counts by severity and category, for dashboards and reports."""
-        findings = self.list(engagement_id=engagement_id)
+        findings = self.list()
         by_severity = {level.value: 0 for level in Severity}
         by_category: Dict[str, int] = {}
 
@@ -102,20 +99,12 @@ class FindingStore:
             "by_category": by_category,
         }
 
-    def clear(self, engagement_id: Optional[str] = None) -> int:
+    def clear(self) -> int:
         """Drop findings; returns how many were removed."""
         with self._lock:
-            if engagement_id is None:
-                removed = len(self._by_fingerprint)
-                self._by_fingerprint.clear()
-                return removed
-            doomed = [
-                fingerprint for fingerprint, finding in self._by_fingerprint.items()
-                if finding.engagement_id == engagement_id
-            ]
-            for fingerprint in doomed:
-                self._by_fingerprint.pop(fingerprint, None)
-            return len(doomed)
+            removed = len(self._by_fingerprint)
+            self._by_fingerprint.clear()
+            return removed
 
     def __len__(self) -> int:
         with self._lock:

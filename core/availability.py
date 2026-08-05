@@ -2,7 +2,7 @@
 
 NexHunter never installs binaries. It reports what is present so an operator
 knows which tools will actually run before they plan an assessment, rather
-than discovering a gap mid-engagement.
+than discovering a gap mid-run.
 """
 
 import re

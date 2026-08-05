@@ -25,7 +25,6 @@ def _finding(**overrides) -> Finding:
         "tool": "nuclei",
         "target": "example.com",
         "title": "Exposed admin panel",
-        "engagement_id": "ENG-001",
         "category": Category.VULNERABILITY.value,
         "severity": "high",
     }
@@ -177,7 +176,7 @@ def test_fingerprint_distinguishes_real_differences():
     assert base.fingerprint != _finding(target="other.com").fingerprint
     assert base.fingerprint != _finding(title="Something else").fingerprint
     assert base.fingerprint != _finding(location="/admin").fingerprint
-    assert base.fingerprint != _finding(engagement_id="ENG-002").fingerprint
+    assert base.fingerprint != _finding(tool="nmap").fingerprint
 
     print("  [OK] Distinct findings stay distinct")
 
@@ -261,7 +260,7 @@ def test_store_summary():
     store = FindingStore()
     store.add(_finding(title="Vuln A", severity="critical"))
     store.add(_finding(title="Obs A", category=Category.OBSERVATION.value, severity="info"))
-    store.add(Finding.parser_failure("nmap", "example.com", "bad XML", engagement_id="ENG-001"))
+    store.add(Finding.parser_failure("nmap", "example.com", "bad XML"))
 
     summary = store.summary()
     assert summary["total"] == 3

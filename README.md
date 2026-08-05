@@ -3,30 +3,29 @@
 <div align="center">
   <img src="assets/nexhunter.png" alt="NexHunter" width="300">
 
-  <strong>Policy-Driven AI Security Orchestration</strong>
+  <strong>Tool-Driven AI Security Orchestration</strong>
 
-  <p>Secure-by-default orchestration of security tools for <em>authorized</em> assessments.</p>
+  <p>Safe orchestration of security tools for <em>authorized</em> assessments.</p>
 
-![Version](https://img.shields.io/badge/version-2.0.0-blue) ![Python](https://img.shields.io/badge/python-3.10%2B-green) ![Tests](https://img.shields.io/badge/tests-158%20passing-green) ![Coverage](https://img.shields.io/badge/coverage-63%25-yellow)
+![Version](https://img.shields.io/badge/version-2.0.0-blue) ![Python](https://img.shields.io/badge/python-3.10%2B-green) ![Tests](https://img.shields.io/badge/tests-143%20passing-green)
 </div>
 
 ---
 
 > [!WARNING]
 > **Only use NexHunter against systems you own or are explicitly authorized to assess.**
-> Scope enforcement encodes an authorization you already have. It does not grant one.
 
 ---
 
 ## What it is
 
-NexHunter orchestrates external security tools behind a policy engine. It does
-not implement scanners — it decides whether a scan may run, runs it safely, and
-records what happened.
+NexHunter orchestrates external security tools through one execution path. It
+does not implement scanners — it validates a request, runs it safely in an
+isolated workspace, and records what happened.
 
 The distinguishing property: **an AI client is a caller like any other.** It can
-propose a tool and parameters. It cannot propose a command, widen its own scope,
-or overrule the policy engine.
+propose a tool and parameters. It cannot propose a command line, and the
+autonomous loop cannot escalate its own risk ceiling.
 
 ```mermaid
 flowchart LR
@@ -40,16 +39,34 @@ flowchart LR
     MCP --> SVC
     CLI --> SVC
 
-    SVC --> GATE{SecurityGate<br/>auth · scope · policy}
-    GATE -->|denied| AUDIT[(Audit log)]
-    GATE -->|allowed| RUN[Isolated execution<br/>argv only · no shell]
-    RUN --> AUDIT
+    SVC --> RUN[Isolated execution<br/>typed validation · argv only · no shell]
+    RUN --> WS[(Workspace<br/>artifacts)]
 
-    classDef deny fill:#7f1d1d,stroke:#dc2626,color:#fff
     classDef allow fill:#14532d,stroke:#16a34a,color:#fff
-    class GATE deny
     class RUN allow
 ```
+
+## How it works
+
+```mermaid
+flowchart LR
+    A[AI Agent] -->|MCP| B[NexHunter Bridge]
+    B --> C[Plan - profiler + planner]
+    C --> D[Execute - bounded loop]
+    D --> E[Adapt - evidence-driven]
+    E --> F[Report - findings + exports]
+    style B fill:#b71c1c,stroke:#ff5252,stroke-width:3px,color:#fffde7
+    style D fill:#b71c1c,stroke:#ff5252,color:#fffde7
+```
+
+1. **AI Agent Connection** — FastMCP bridge; tools filtered by profile.
+2. **Intelligent Analysis** — profiler accumulates *observed* facts; planner picks tools from them.
+3. **Autonomous Execution** — adaptive loop, clamped to a risk ceiling, on one execution path.
+4. **Real-time Adaptation** — plan recomputed from new evidence each step.
+5. **Advanced Reporting** — normalized findings, JSON/MD/HTML/SARIF export.
+
+Full walkthrough with architecture and sequence diagrams:
+[docs/how-it-works.md](docs/how-it-works.md).
 
 ## Quick start
 
@@ -59,11 +76,6 @@ cd nexhunter
 pip install -e ".[mcp]"
 
 nexhunter doctor          # check this installation can actually run
-
-# Declare what you are authorized to test. Nothing runs until you do.
-nexhunter engagement create --id ENG-001 \
-  --target example.com --target '*.example.com' \
-  --deny admin.example.com --risk passive --risk active
 ```
 
 Then start the server and, optionally, the MCP bridge:
@@ -87,8 +99,7 @@ Roo Code, OpenCode — see [docs/mcp/](docs/mcp/)):
         "-m", "nexhunter.api.mcp",
         "--server", "http://127.0.0.1:8888",
         "--profile", "nexhunter-core"
-      ],
-      "env": { "NEXHUNTER_API_TOKEN": "your-token-here" }
+      ]
     }
   }
 }
@@ -96,21 +107,28 @@ Roo Code, OpenCode — see [docs/mcp/](docs/mcp/)):
 
 ### Profiles
 
-Listing ~170 tools to every client makes for a large payload, a large token
+Listing ~204 tools to every client makes for a large payload, a large token
 cost, and a model choosing blindly between near-identical tools. A profile
 narrows that to one job.
 
 | Profile | Tools | Purpose |
 |---|---:|---|
-| `nexhunter-core` | 7 | **Default.** Status, findings, executions, passive stable checks |
-| `nexhunter-recon` | 15 | Host discovery, DNS, subdomains, service identification |
-| `nexhunter-web` | 13 | Content discovery, template scanning, tech identification, TLS |
-| `nexhunter-api` | 13 | Schema and parameter discovery, GraphQL |
-| `nexhunter-code` | 10 | Static analysis, secret scanning, dependency review |
+| `nexhunter-core` | 12 | **Default.** Status, findings, executions, passive stable checks |
+| `nexhunter-recon` | 16 | Host discovery, DNS, subdomains, service identification |
+| `nexhunter-web` | 21 | Content discovery, injection testing, template scanning, TLS (incl. sqlmap/ffuf/nikto) |
+| `nexhunter-api` | 5 | Schema and parameter discovery (arjun), GraphQL |
+| `nexhunter-code` | 15 | Static analysis, secret scanning, dependency review |
 | `nexhunter-cloud` | 8 | Read-only cloud posture |
-| `nexhunter-container` | 10 | Container and Kubernetes review |
-| `nexhunter-forensics` | 17 | Offline artifact and binary analysis |
-| `nexhunter-full` | 172 | Everything non-destructive. Large payload |
+| `nexhunter-container` | 11 | Container and Kubernetes review |
+| `nexhunter-forensics` | 26 | Offline artifact, steganography, and binary analysis |
+| `nexhunter-osint` | 10 | OSINT: usernames, emails, footprinting, CVE lookup |
+| `nexhunter-wireless` | 7 | Wireless recon and assessment (destructive withheld) |
+| `nexhunter-privesc` | 6 | Local privilege escalation discovery |
+| `nexhunter-payloads` | 10 | Payload generation, C2 integration (never auto-executed) |
+| `nexhunter-vulnscan` | 10 | Vulnerability scanners and IDS tooling |
+| `nexhunter-mobile` | 5 | APK inspection, decompilation, runtime exploration |
+| `nexhunter-ctf` | 69 | All CTF domains: web, crypto, RE/pwn, forensics, OSINT |
+| `nexhunter-full` | 202 | Everything non-destructive. Large payload |
 
 ```bash
 nexhunter profiles                          # list them
@@ -118,8 +136,8 @@ nexhunter profiles --name nexhunter-web     # see what one exposes
 ```
 
 No profile lists a destructive tool. Profiles are a usability control, not a
-security control — the policy engine authorizes every execution regardless of
-which profile surfaced the tool.
+security control — every execution goes through the same typed validation
+regardless of which profile surfaced the tool.
 
 ## Autonomous assessment
 
@@ -128,61 +146,41 @@ results arrive — the autonomous, adaptive flow, but bounded so the AI drives t
 loop, never the operating system.
 
 ```bash
-curl -H "Authorization: Bearer $NEXHUNTER_API_TOKEN" \
-     -X POST http://127.0.0.1:8888/api/autonomous \
-     -d '{"target":"https://example.com","engagement_id":"ENG-001","risk_ceiling":"active"}'
+curl -X POST http://127.0.0.1:8888/api/autonomous \
+     -d '{"target":"https://example.com","risk_ceiling":"active"}'
 ```
 
-Or over MCP: *"Run an autonomous assessment of example.com under ENG-001."*
+Or over MCP: *"Run an autonomous assessment of example.com."*
 
-Three bounds the AI cannot lift:
+Two bounds the AI cannot lift:
 
-- **Gated.** Every step goes through the same `SecurityGate` as a manual call.
-  The loop cannot reach a target or risk level the engagement forbids.
 - **Risk ceiling.** It runs passive and active tools. Intrusive and destructive
-  tools are never auto-run — they are surfaced for human approval. A higher
-  ceiling requested is clamped, not granted.
+  tools are never auto-run — they are surfaced with a reason for human
+  approval. A higher ceiling requested is clamped to `active`, not granted.
 - **Step budget.** It stops after a set number of steps.
+
+Every step also goes through the same `ExecutionService` as a manual call, so
+the loop cannot reach the operating system any other way.
 
 Full walkthrough with diagrams: [docs/how-it-works.md](docs/how-it-works.md).
 
 ## Security model
-
-```mermaid
-flowchart TD
-    T[Target requested] --> E{Engagement<br/>active?}
-    E -->|no| D1[DENY]
-    E -->|yes| DEN{In denied list?}
-    DEN -->|yes| D2[DENY<br/>denied beats allowed]
-    DEN -->|no| ALW{In allowed list?}
-    ALW -->|no| D3[DENY]
-    ALW -->|yes| RES[Resolve every address]
-    RES --> META{Metadata or<br/>internal address?}
-    META -->|yes, not explicit| D4[DENY]
-    META -->|no| OK[ALLOW]
-
-    classDef deny fill:#7f1d1d,stroke:#dc2626,color:#fff
-    classDef allow fill:#14532d,stroke:#16a34a,color:#fff
-    class D1,D2,D3,D4 deny
-    class OK allow
-```
 
 Enforced and covered by tests:
 
 - **No arbitrary command execution.** No tool takes a command parameter, no
   builder splits a string into argv, no path uses a shell. Shell metacharacters
   stay inert as single literal arguments.
-- **Fail-closed scope.** No engagement or an empty allow-list denies everything.
-  Denied beats allowed. `*.example.com` does not match `evil-example.com`.
-- **SSRF and rebinding blocked.** Every resolved address is checked. Cloud
-  metadata is blocked unconditionally, including via IPv4-mapped IPv6.
-- **Risk-tiered policy.** passive → active → intrusive → destructive, each
-  requiring more. Destructive is disabled by default and needs admin plus an
-  approval record.
+- **Typed validation.** Every parameter declares a type, a default, and a
+  validation rule; a value that is not a valid target, port, or enum is refused
+  before a command is ever built.
+- **Bounded autonomy.** The orchestrator's ceiling is clamped to `active`;
+  intrusive and destructive tools are withheld for human approval, and
+  destructive tools additionally require a feature flag.
 - **Contained execution.** Isolated workspace per run, timeouts that kill the
   whole process tree, output caps, no path traversal or symlink escape.
 - **Secrets redacted** from parameters, commands, logs, and output.
-- **Everything audited**, including denials.
+- **One execution path.** REST, MCP, and CLI cannot diverge.
 
 Full detail, and an explicit list of what is *not* guaranteed, in
 [docs/security-model.md](docs/security-model.md).
@@ -195,11 +193,6 @@ nexhunter registry list --category recon      # browse the registry
 nexhunter registry check                      # which binaries are installed
 nexhunter registry info nmap_scan             # describe one tool
 nexhunter profiles                            # MCP profiles
-nexhunter engagement create --id ENG-001 --target example.com
-nexhunter engagement list                     # stored engagements
-nexhunter engagement show ENG-001             # one engagement's scope
-nexhunter engagement status ENG-001 paused    # pause, complete, cancel, resume
-nexhunter engagement validate scope.json      # check a file before relying on it
 ```
 
 `doctor` reports what is true about your environment and never changes it:
@@ -210,7 +203,6 @@ NexHunter Doctor
 Core
   [OK] Python 3.13.7
   [OK] Data directory writable
-  [WARN] API token not configured
   [OK] Server binds to loopback (127.0.0.1)
   [OK] Process execution works
 
@@ -223,6 +215,10 @@ Stable tools (8/24 installed)
   [OK] nmap_scan (nmap 7.80)
   [OK] curl_headers (curl 8.12.1)
   [MISSING] 16 other stable tools not installed
+
+Registry availability (23/204 tools on PATH)
+  [OK] web: 5/21 available
+  [MISSING] wireless: 0/9 available
 ```
 
 NexHunter never installs binaries for you.
@@ -230,37 +226,37 @@ NexHunter never installs binaries for you.
 ## API
 
 ```bash
-curl -H "Authorization: Bearer $NEXHUNTER_API_TOKEN" \
-     -X POST http://127.0.0.1:8888/api/command \
+curl -X POST http://127.0.0.1:8888/api/command \
      -d '{"tool": "nmap_scan", "params": {"target": "example.com", "ports": "80,443"}}'
 ```
 
 | Endpoint | Purpose |
 |---|---|
-| `GET /health` `/ready` `/version` | Public, no auth |
+| `GET /health` `/ready` `/version` | Server status |
 | `GET /api/tools` | Registry, filterable by category, risk, maturity, availability |
 | `GET /api/tools/{name}` | One tool's metadata |
 | `GET /api/tools/status` | What is installed |
 | `POST /api/command` | Run a registered tool |
-| `GET /api/executions` | Execution history with status and policy decision |
+| `GET /api/executions` | Execution history with status |
 | `GET /api/executions/{id}/output` | Captured output, redacted |
 | `GET /api/executions/{id}/artifacts` | Artifacts in that execution's workspace |
 | `POST /api/executions/{id}/terminate` | Stop a running execution and its children |
-| `POST /api/engagements` | Create an engagement |
-| `GET /api/engagements` | List engagements |
-| `GET /api/engagements/{id}` | One engagement's scope |
-| `POST /api/engagements/{id}/status` | Pause, complete, cancel, resume |
+| `POST /api/autonomous` | Start an adaptive autonomous assessment |
+| `GET /api/autonomous[/{id}]` | Run status and result |
 | `GET /api/findings` | Findings |
 | `GET /api/mcp/profiles` | Profile definitions |
+
+The server binds to `127.0.0.1` by default and `doctor` fails loudly on any
+other binding unless `NEXHUNTER_EXTERNAL_BIND_ALLOWED` is set.
 
 ## Tool maturity
 
 Maturity is asserted per tool, never guessed.
 
 | Level | Meaning | Count |
-|---|---|---:|
+|---|---:|---:|
 | **stable** | Command builder, availability check, tests | 24 |
-| **beta** | Registered and validated, less exercised | ~149 |
+| **beta** | Registered and validated, less exercised | 180 |
 
 Cloud, container, and orchestration access is exposed as fixed read-only
 actions (`aws_get_caller_identity`, `kubectl_get_pods`,
@@ -269,59 +265,40 @@ actions (`aws_get_caller_identity`, `kubectl_get_pods`,
 ## Configuration
 
 ```bash
-NEXHUNTER_API_TOKEN=              # required in production
-NEXHUNTER_ENFORCE=true            # default; false disables scope for local dev
-NEXHUNTER_ENGAGEMENT=             # optional: a single fixed engagement file
+NEXHUNTER_ENVIRONMENT=development            # production refuses destructive tools
 NEXHUNTER_BIND_HOST=127.0.0.1
-NEXHUNTER_DATA_DIR=
+NEXHUNTER_BIND_PORT=8888
+NEXHUNTER_EXTERNAL_BIND_ALLOWED=false
+NEXHUNTER_DATA_DIR=./nexhunter_data
 NEXHUNTER_MCP_PROFILE=nexhunter-core
 NEXHUNTER_DESTRUCTIVE_TOOLS_ENABLED=false
 NEXHUNTER_INTRUSIVE_TOOLS_ENABLED=false
 ```
 
-See [.env.example](.env.example). **Enforcement is on by default.** A fresh
-install with no engagement denies every execution and tells you how to create
-one — refusing until someone declares what is in scope is the safe posture for
-a tool that runs scanners. Set `NEXHUNTER_ENFORCE=false` for local development
-against your own hosts.
+See [.env.example](.env.example).
 
 ## Testing
 
 ```bash
-pytest                                                    # 158 tests
+pytest                                                    # 143 tests
 pytest --cov=nexhunter --cov-report=term-missing          # coverage
 ```
 
-**Measured coverage: 63% overall.** Security-critical modules are higher:
-
-| Module | Coverage |
-|---|---:|
-| `security/authentication.py` | 100% |
-| `security/enforcement.py` | 100% |
-| `execution/models.py` | 100% |
-| `security/authorization.py` | 97% |
-| `security/audit.py` | 96% |
-| `execution/registry.py` | 95% |
-| `security/policy.py` | 94% |
-| `security/engagement.py` | 88% |
-| `security/redaction.py` | 87% |
-| `execution/service.py` | 83% |
-
-The gap is legacy agent and engine code. That number is measured, not claimed.
+Coverage is measured, not claimed. The execution and findings layers are the
+best covered; legacy agent and engine code is thinner.
 
 ## Limitations
 
 - Not a sandbox. Tools run with the server process's privileges.
-- Scope is checked at request time; DNS can change afterwards.
+- The server does not authenticate callers; bind to loopback or put something
+  authenticated in front of the port.
 - Redaction is pattern-based and may miss unusual credential formats.
-- Findings are not yet normalized to a single schema.
 
 ## Roadmap
 
-- Typed parameter schemas (hostname, cidr, url, port) at the registry level
-- Finding normalization with SARIF export
-- Structured workflows with visible phases
-- Evidence-based target profiler
+- Migrate legacy workflow definitions onto `ExecutionService`
+- Raise coverage on `api/server.py`, `core/engine.py`, and `agents/`
+- Replace deprecated `datetime.utcnow()` usage
 
 ## Documentation
 
@@ -329,8 +306,8 @@ The gap is legacy agent and engine code. That number is measured, not claimed.
 |---|---|
 | [docs/architecture.md](docs/architecture.md) | Layers, execution flow, state machine, diagrams |
 | [docs/security-model.md](docs/security-model.md) | Threat model, guarantees, non-guarantees |
+| [docs/how-it-works.md](docs/how-it-works.md) | Five-stage flow with architecture and sequence diagrams |
 | [docs/mcp/](docs/mcp/) | MCP setup per client |
-| [docs/HEXSTRIKE_COMPARISON.md](docs/HEXSTRIKE_COMPARISON.md) | Comparison with HexStrike AI |
 
 ## Contributing
 
@@ -342,6 +319,6 @@ discrete values — never a command string. See
 ---
 
 <div align="center">
-<strong>NexHunter v2.0.0</strong> — Policy-Driven AI Security Orchestration<br>
+<strong>NexHunter v2.0.0</strong> — Tool-Driven AI Security Orchestration<br>
 <a href="https://github.com/Arseno25/nexhunter">GitHub</a>
 </div>

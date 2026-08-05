@@ -1,1 +1,1 @@
-"""nexhunter.security - Authentication, authorization, and access control."""
+"""nexhunter.security - Output hygiene helpers (secret redaction)."""

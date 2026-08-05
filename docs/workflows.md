@@ -1,12 +1,12 @@
 # Workflows
 
 A workflow is a phased sequence of tool executions. Each phase runs through the
-same gate as a single execution: a workflow cannot reach a target or a risk
-level that a direct call could not.
+same execution path as a single call: a workflow cannot reach a target or a
+risk level that a direct call could not.
 
 > Only use NexHunter against systems you own or are explicitly authorized to assess.
 
-## How a workflow relates to the gate
+## How a workflow relates to the execution path
 
 ```mermaid
 flowchart TB
@@ -14,20 +14,20 @@ flowchart TB
     subgraph phases [Phases run in order]
         P1[Phase 1] --> P2[Phase 2] --> P3[Phase 3]
     end
-    P1 -.-> GATE
-    P2 -.-> GATE
-    P3 -.-> GATE
-    GATE{SecurityGate<br/>per execution}
-    GATE -->|denied| SKIP[Phase records the denial<br/>and continues]
-    GATE -->|allowed| RUN[Execute]
+    P1 -.-> SVC
+    P2 -.-> SVC
+    P3 -.-> SVC
+    SVC{ExecutionService<br/>typed validation<br/>+ containment}
+    SVC -->|failed| SKIP[Phase records the failure<br/>and continues]
+    SVC -->|ok| RUN[Execute]
 
     classDef deny fill:#7f1d1d,stroke:#dc2626,color:#fff
-    class GATE deny
+    class SVC deny
 ```
 
-A workflow is a *plan*, not an authorization. Every step is still checked
-individually, so a denial mid-workflow stops that step rather than granting the
-rest a pass.
+A workflow is a *plan*, not an authorization. Every step still runs through the
+single execution path, so a failed step mid-workflow stops that step rather
+than granting the rest a pass.
 
 ## Passive reconnaissance
 
@@ -46,7 +46,7 @@ flowchart LR
     class B,C,D,E passive
 ```
 
-Risk level: `passive`. Requires `scan:passive` and an in-scope target.
+Risk level: `passive`.
 
 ## Web assessment
 
@@ -69,8 +69,7 @@ flowchart TB
     class F,G active
 ```
 
-Risk level: `active` at the discovery and scanning phases. Requires
-`scan:active` and an engagement that permits active risk.
+Risk level: `active` at the discovery and scanning phases.
 
 ## Code and dependency review
 
@@ -127,8 +126,8 @@ flowchart LR
 
 ## Writing a workflow
 
-A workflow declares what it needs up front so the policy engine can reject it
-before anything runs:
+A workflow declares what it needs up front so it can be validated before
+anything runs:
 
 ```python
 @dataclass(frozen=True)
@@ -136,7 +135,6 @@ class WorkflowDefinition:
     name: str
     description: str
     phases: tuple[WorkflowPhase, ...]
-    required_permissions: tuple[str, ...]
     maximum_risk_level: RiskLevel
     required_tools: tuple[str, ...]
 ```
@@ -144,12 +142,12 @@ class WorkflowDefinition:
 Rules:
 
 - A phase names registry tools. It never constructs a command.
-- `maximum_risk_level` is a ceiling, not a grant: the engagement still has to
-  permit that level.
+- `maximum_risk_level` is a ceiling, not a grant: the autonomy loop's ceiling
+  still applies.
 - A missing tool is reported, not worked around. NexHunter does not install
   binaries.
-- A denial is recorded as a phase result. Workflows do not retry past a policy
-  decision.
+- A failed step is recorded as a phase result. Workflows do not retry past a
+  failure that the tools themselves report.
 
 ## Progress reporting
 
@@ -172,4 +170,5 @@ The workflow definitions in `workflows/` predate the execution layer and still
 drive tools through the older engine path rather than `ExecutionService`.
 Migrating them is on the roadmap; until then, per-phase execution records and
 workspaces are not produced for workflow runs. Direct tool calls through
-`/api/command` and MCP do get the full treatment.
+`/api/command` and MCP, and autonomous runs through the orchestrator, do get
+the full treatment.

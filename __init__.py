@@ -1,23 +1,24 @@
-"""NexHunter - AI-driven security assessment engine (MCP + HTTP API).
+"""NexHunter - tool-driven AI security orchestration (MCP + HTTP API).
 
-Architecture base: tool registry -> MCP/HTTP layer for AI agents.
-Original code with real implementations: structured output parsing,
-smart result caching, parallel execution, tech-aware tool selection,
-correlated findings, and 13 AI agents (technology, decision, optimizer,
-rate_limit, cve, exploit, recovery, performance, degradation,
-correlator, bugbounty, ctf, browser).
+Architecture: typed tool registry -> one execution path (ExecutionService)
+for REST, MCP, and CLI -> isolated workspaces -> normalized findings.
 
 Layout:
-    core/    tools.py (registry + parsers), engine.py (orchestration)
-    agents/  13 AI agents, each a real implementation
-    api/     server.py (HTTP API), mcp.py (MCP bridge)
-    cli/     client.py (command-line client)
+    core/       tools.py (registry + parsers), params.py (typed validation),
+                risk.py, availability.py, engine.py (legacy orchestration)
+    execution/  models (state machine) · workspace · runner · registry · service
+    findings/   models (normalization) · store (dedup) · export
+    agents/     profiler (evidence-based target knowledge)
+    workflows/  orchestrator (bounded adaptive autonomy)
+    api/        server.py (HTTP API), mcp.py (MCP bridge), mcp_profiles.py
+    cli/        client.py, doctor.py
+    security/   redaction.py (secret hygiene)
 
 Run:
-    pip install -r requirements.txt
+    pip install -e ".[mcp]"
+    nexhunter doctor
     python -m nexhunter.api.server --port 8888
     python -m nexhunter.api.mcp --server http://127.0.0.1:8888
-    python nexhunter.py health
 """
 
-__version__ = "1.0.0"
+__version__ = "2.0.0"

@@ -25,34 +25,27 @@ PYTHON = sys.executable
 # --------------------------------------------------------------------------
 
 def test_workspace_layout(base: Path):
-    """Workspace lands under engagements/<eng>/executions/<exec>/."""
+    """Workspace lands under executions/<exec>/."""
     print("[TEST] Workspace layout...")
-    workspace = Workspace.create("ENG-001", "abc123", base_dir=base)
+    workspace = Workspace.create("abc123", base_dir=base)
 
     assert workspace.root.is_dir(), "workspace directory should exist"
     parts = workspace.root.parts
-    assert "engagements" in parts and "executions" in parts
+    assert "executions" in parts
     assert parts[-1] == "abc123"
-    assert parts[-3] == "ENG-001"
 
     print("  [OK] Workspace created in the expected location")
 
 
 def test_workspace_rejects_unsafe_ids(base: Path):
-    """Traversal in an engagement or execution id is refused."""
+    """Traversal in an execution id is refused."""
     print("[TEST] Workspace rejects unsafe ids...")
-    for bad in ["../escape", "..", "a/b", "eng\x00", "", "/abs"]:
+    for bad in ["../escape", "..", "a/b", "exec\x00", "", "/abs"]:
         try:
-            Workspace.create(bad, "exec1", base_dir=base)
-            assert False, f"expected rejection of engagement id {bad!r}"
+            Workspace.create(bad, base_dir=base)
+            assert False, f"expected rejection of execution id {bad!r}"
         except WorkspaceError:
             pass
-
-    try:
-        Workspace.create("ENG-001", "../../etc", base_dir=base)
-        assert False, "expected rejection of traversing execution id"
-    except WorkspaceError:
-        pass
 
     print("  [OK] Unsafe identifiers rejected")
 
@@ -60,7 +53,7 @@ def test_workspace_rejects_unsafe_ids(base: Path):
 def test_workspace_artifact_path_traversal(base: Path):
     """Artifact names cannot escape the workspace."""
     print("[TEST] Artifact path traversal blocked...")
-    workspace = Workspace.create("ENG-001", "exec1", base_dir=base)
+    workspace = Workspace.create("exec1", base_dir=base)
 
     for bad in ["../outside.txt", "../../etc/passwd", "sub/dir.txt", "a\x00b", "", "/etc/passwd"]:
         try:
@@ -78,7 +71,7 @@ def test_workspace_artifact_path_traversal(base: Path):
 def test_workspace_symlink_escape(base: Path):
     """A symlink planted in the workspace cannot serve outside files."""
     print("[TEST] Symlink escape blocked...")
-    workspace = Workspace.create("ENG-001", "exec-sym", base_dir=base)
+    workspace = Workspace.create("exec-sym", base_dir=base)
 
     secret = base / "secret.txt"
     secret.write_text("classified", encoding="utf-8")
@@ -108,7 +101,7 @@ def test_workspace_symlink_escape(base: Path):
 def test_state_machine_happy_path():
     """The normal lifecycle is queued -> validating -> authorized -> running -> completed."""
     print("[TEST] Execution state machine happy path...")
-    record = ExecutionRecord(tool_name="nmap_scan", engagement_id="ENG-001")
+    record = ExecutionRecord(tool_name="nmap_scan")
 
     assert record.status is ExecutionStatus.QUEUED
     record.transition(ExecutionStatus.VALIDATING)
@@ -126,7 +119,7 @@ def test_state_machine_happy_path():
 def test_state_machine_rejects_invalid_transitions():
     """Illegal transitions raise instead of corrupting the record."""
     print("[TEST] Invalid state transitions rejected...")
-    record = ExecutionRecord(tool_name="nmap_scan", engagement_id="ENG-001")
+    record = ExecutionRecord(tool_name="nmap_scan")
 
     try:
         record.transition(ExecutionStatus.COMPLETED)  # queued -> completed
@@ -150,7 +143,6 @@ def test_record_dict_has_no_raw_parameters():
     print("[TEST] Record serialization stays redacted...")
     record = ExecutionRecord(
         tool_name="wpscan_scan",
-        engagement_id="ENG-001",
         redacted_parameters={"url": "https://example.com", "api_token": "[REDACTED]"},
         redacted_command=["wpscan", "--api-token", "[REDACTED]"],
     )
@@ -295,13 +287,13 @@ def test_registry_basic_operations():
     """Records can be added, fetched, filtered, and transitioned."""
     print("[TEST] Registry basic operations...")
     registry = ExecutionRegistry()
-    first = registry.add(ExecutionRecord(tool_name="nmap_scan", engagement_id="ENG-001"))
-    registry.add(ExecutionRecord(tool_name="httpx_probe", engagement_id="ENG-002"))
+    first = registry.add(ExecutionRecord(tool_name="nmap_scan"))
+    registry.add(ExecutionRecord(tool_name="httpx_probe"))
 
     assert registry.get(first.id) is first
     assert registry.get("nope") is None
     assert len(registry.list()) == 2
-    assert len(registry.list(engagement_id="ENG-001")) == 1
+    assert len(registry.list(status=ExecutionStatus.QUEUED)) == 2
 
     registry.transition(first.id, ExecutionStatus.VALIDATING)
     assert registry.get(first.id).status is ExecutionStatus.VALIDATING
@@ -315,13 +307,13 @@ def test_registry_eviction_keeps_running_work():
     print("[TEST] Registry eviction spares running executions...")
     registry = ExecutionRegistry(max_records=3)
 
-    running = registry.add(ExecutionRecord(tool_name="nmap_scan", engagement_id="ENG-001"))
+    running = registry.add(ExecutionRecord(tool_name="nmap_scan"))
     running.transition(ExecutionStatus.VALIDATING)
     running.transition(ExecutionStatus.AUTHORIZED)
     running.transition(ExecutionStatus.RUNNING)
 
     for _ in range(6):
-        done = registry.add(ExecutionRecord(tool_name="httpx_probe", engagement_id="ENG-001"))
+        done = registry.add(ExecutionRecord(tool_name="httpx_probe"))
         done.transition(ExecutionStatus.VALIDATING)
         done.transition(ExecutionStatus.BLOCKED)
 
@@ -341,10 +333,10 @@ def test_registry_concurrent_access():
         try:
             for n in range(50):
                 record = registry.add(
-                    ExecutionRecord(tool_name=f"tool{index}", engagement_id="ENG-001")
+                    ExecutionRecord(tool_name=f"tool{index}")
                 )
                 registry.transition(record.id, ExecutionStatus.VALIDATING)
-                registry.list(engagement_id="ENG-001")
+                registry.list()
         except Exception as exc:  # noqa: BLE001 - surfaced via the errors list
             errors.append(exc)
 
@@ -364,7 +356,7 @@ def test_registry_cancel_flags():
     """Cancellation is tracked per execution and cleared afterwards."""
     print("[TEST] Registry cancellation flags...")
     registry = ExecutionRegistry()
-    record = registry.add(ExecutionRecord(tool_name="nmap_scan", engagement_id="ENG-001"))
+    record = registry.add(ExecutionRecord(tool_name="nmap_scan"))
 
     assert not registry.is_cancelled(record.id)
     assert registry.request_cancel(record.id)

@@ -142,7 +142,6 @@ class Finding:
     tool: str
     target: str
     title: str
-    engagement_id: str = "unscoped"
     execution_id: str = ""
     category: str = Category.OBSERVATION.value
     description: str = ""
@@ -187,7 +186,6 @@ class Finding:
         """
         material = json.dumps(
             {
-                "engagement": self.engagement_id,
                 "tool": self.tool,
                 "target": self.target.lower(),
                 "title": self.title.strip().lower(),
@@ -231,7 +229,6 @@ class Finding:
         return {
             "id": self.id,
             "fingerprint": self.fingerprint,
-            "engagement_id": self.engagement_id,
             "execution_id": self.execution_id,
             "tool": self.tool,
             "target": self.target,

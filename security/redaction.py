@@ -191,7 +191,7 @@ class SecretRedactor:
 
     # Single-letter flags mean different things per tool: -p is a password to
     # hydra but a port list to nmap. Treating it as secret everywhere would
-    # mask nmap's ports in every audit record; treating it as safe everywhere
+    # mask nmap's ports in every record; treating it as safe everywhere
     # would write hydra's password to disk. So it is resolved per binary.
     # ponytail: hand-maintained map. The real fix is a per-parameter secret
     # marker on ToolSpec, which lands with typed parameters.

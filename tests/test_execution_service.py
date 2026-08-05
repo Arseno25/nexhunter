@@ -10,14 +10,11 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 from nexhunter.core import tools as T
 from nexhunter.execution.models import ExecutionStatus
 from nexhunter.execution.service import ExecutionService
-from nexhunter.security.authentication import TokenValidator
-from nexhunter.security.enforcement import SecurityGate
 
 
-def _service(tmp: Path, token: str = "", enforce: bool = False) -> ExecutionService:
+def _service(tmp: Path) -> ExecutionService:
     os.environ["NEXHUNTER_DATA_DIR"] = str(tmp)
-    gate = SecurityGate(token_validator=TokenValidator(token=token), enforce=enforce)
-    return ExecutionService(gate=gate)
+    return ExecutionService()
 
 
 def test_unknown_tool_rejected(tmp: Path):
@@ -48,44 +45,8 @@ def test_missing_required_param_blocks(tmp: Path):
     print("  [OK] Blocked before execution")
 
 
-def test_denied_execution_is_recorded(tmp: Path):
-    """A policy denial produces a BLOCKED record, not a silent drop."""
-    print("[TEST] Policy denial recorded...")
-    service = _service(tmp, token="secret-token", enforce=True)
-
-    result = service.execute(
-        "nmap_scan",
-        {"target": "example.com"},
-        auth_header="Bearer secret-token",
-    )
-
-    assert not result["ok"], "enforce mode without an engagement must deny"
-    record = service.registry.get(result["execution_id"])
-    assert record.status is ExecutionStatus.BLOCKED
-    assert record.policy_code, "the policy code should be recorded for audit"
-
-    print(f"  [OK] Denial recorded as {record.policy_code}")
-
-
-def test_bad_token_denied(tmp: Path):
-    """A wrong token cannot execute a tool."""
-    print("[TEST] Invalid token denied...")
-    service = _service(tmp, token="right-token", enforce=True)
-
-    result = service.execute(
-        "nmap_scan",
-        {"target": "example.com"},
-        auth_header="Bearer wrong-token",
-    )
-
-    assert not result["ok"]
-    assert result["code"] == "AUTH_REQUIRED"
-
-    print("  [OK] Invalid token denied")
-
-
 def test_successful_execution_records_workspace(tmp: Path):
-    """A permitted execution runs, records output, and gets its own workspace."""
+    """An execution runs, records output, and gets its own workspace."""
     print("[TEST] Successful execution end to end...")
     service = _service(tmp)
 
@@ -185,8 +146,6 @@ if __name__ == "__main__":
             tmp = Path(raw)
             test_unknown_tool_rejected(tmp)
             test_missing_required_param_blocks(tmp)
-            test_denied_execution_is_recorded(tmp)
-            test_bad_token_denied(tmp)
             test_successful_execution_records_workspace(tmp)
             test_executions_get_separate_workspaces(tmp)
             test_secrets_redacted_in_record(tmp)

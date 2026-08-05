@@ -241,9 +241,8 @@ def _validate_url(spec: ParamSpec, value: Any) -> str:
 def _validate_target(spec: ParamSpec, value: Any) -> str:
     """A scan target: hostname, IP, CIDR, or URL.
 
-    Kept deliberately permissive about *form* -- deciding whether the target is
-    in scope is the engagement's job, not this layer's. What this rejects is
-    anything that is not a target at all.
+    Kept deliberately permissive about *form* -- the operator decides what is
+    worth scanning. What this rejects is anything that is not a target at all.
     """
     text = str(value).strip()
     _reject_option_injection(text)

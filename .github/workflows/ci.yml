@@ -102,14 +102,12 @@ jobs:
 
       - name: Security regression tests
         # These encode the guarantees the project is built on: no arbitrary
-        # command execution, no shell, scope enforced, secrets redacted.
+        # command execution, no shell, secrets redacted.
         run: |
           pytest tests/test_no_passthrough.py \
-                 tests/test_engagement_scope.py \
-                 tests/test_policy_engine.py \
                  tests/test_redaction.py \
-                 tests/test_authentication.py \
-                 tests/test_authorization.py -v
+                 tests/test_execution_service.py \
+                 tests/test_execution.py -v
 
   build:
     name: Package build

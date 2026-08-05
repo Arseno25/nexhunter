@@ -1,8 +1,8 @@
 """Regression tests: no registered tool may act as an arbitrary-command API.
 
 A tool whose parameter is a free-form command string is an arbitrary-command
-API wearing a tool's name. It defeats every control above it -- scope, policy,
-audit -- because what actually runs is chosen by the caller, not the registry.
+API wearing a tool's name. It defeats the typed validation and redaction above
+it -- what actually runs is chosen by the caller, not the registry.
 These tests fail if such a tool is ever reintroduced.
 """
 

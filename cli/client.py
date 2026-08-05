@@ -461,138 +461,6 @@ def cmd_profiles(args):
     return 0
 
 
-def _print_engagement(engagement):
-    """Print one engagement's scope in full."""
-    from nexhunter.engagements.store import engagement_to_dict
-
-    data = engagement_to_dict(engagement)
-    print(f"\n{data['id']} ({data['name']})")
-    print(f"  status      {data['status']}" + ("" if data["active"] else "  (not active)"))
-    print(f"  window      {data['starts_at']} .. {data['expires_at']}")
-    print(f"  allowed     {data['scope']['allowed_targets'] or '(none - nothing is in scope)'}")
-    print(f"  denied      {data['scope']['denied_targets'] or '(none)'}")
-    print(f"  risk levels {data['scope']['allowed_risk_levels']}")
-    print()
-
-
-def cmd_engagement(args):
-    """Create, inspect, and validate engagements locally."""
-    import json
-    from datetime import datetime, timedelta
-
-    from nexhunter.engagements.store import (
-        EngagementError,
-        EngagementStore,
-        engagement_to_dict,
-    )
-
-    store = EngagementStore()
-
-    if args.engagement_cmd == "create":
-        if args.from_file:
-            try:
-                payload = json.loads(Path(args.from_file).read_text(encoding="utf-8"))
-            except (OSError, json.JSONDecodeError) as exc:
-                print(f"[FAIL] Could not read {args.from_file}: {exc}")
-                return 1
-            payload["id"] = args.id or payload.get("id")
-        else:
-            now = datetime.utcnow()
-            payload = {
-                "id": args.id,
-                "name": args.name or args.id,
-                "status": "active",
-                "starts_at": now.isoformat(),
-                "expires_at": (now + timedelta(days=args.days)).isoformat(),
-                "scope": {
-                    "allowed_targets": args.target,
-                    "denied_targets": args.deny,
-                    "allowed_risk_levels": args.risk or ["passive"],
-                },
-            }
-
-        try:
-            engagement = store.create(payload, overwrite=args.force)
-        except EngagementError as exc:
-            print(f"[FAIL] {exc}")
-            return 1
-
-        print(f"\n[OK] Engagement created at {store.root / engagement.id}")
-        _print_engagement(engagement)
-        print("Only assess systems you own or are explicitly authorized to assess.\n")
-        return 0
-
-    if args.engagement_cmd == "list":
-        engagements = store.list()
-        if not engagements:
-            print("\nNo engagements. Create one:")
-            print("  nexhunter engagement create --id ENG-001 --target example.com\n")
-            return 0
-        for engagement in engagements:
-            marker = "*" if engagement.is_active() else " "
-            print(f"{marker} {engagement.id:24} {engagement.status:10} "
-                  f"expires {engagement.expires_at.date()}  "
-                  f"{len(engagement.scope.allowed_targets)} target(s)")
-        print(f"\n{len(engagements)} engagement(s); '*' marks active\n")
-        return 0
-
-    if args.engagement_cmd == "show":
-        engagement = store.get(args.id)
-        if engagement is None:
-            print(f"[FAIL] No such engagement: {args.id}")
-            return 1
-        _print_engagement(engagement)
-        return 0
-
-    if args.engagement_cmd == "status":
-        try:
-            engagement = store.set_status(args.id, args.status)
-        except EngagementError as exc:
-            print(f"[FAIL] {exc}")
-            return 1
-        print(f"[OK] {engagement.id} is now {engagement.status}")
-        return 0
-
-    # validate
-    from nexhunter.security.enforcement import _load_engagement
-    from nexhunter.security.engagement import TargetValidator
-
-    try:
-        engagement = _load_engagement(args.file)
-    except (OSError, ValueError, KeyError, json.JSONDecodeError) as exc:
-        print(f"[FAIL] Could not load {args.file}: {exc}")
-        return 1
-
-    if engagement is None:
-        print(f"[FAIL] No engagement found in {args.file}")
-        return 1
-
-    ok, errors = TargetValidator.validate_scope_config(engagement.scope)
-    print(f"\nEngagement {engagement.id} ({engagement.name})")
-    print(f"  status      {engagement.status}")
-    print(f"  active      {engagement.is_active()}")
-    print(f"  window      {engagement.starts_at.isoformat()} .. {engagement.expires_at.isoformat()}")
-    print(f"  allowed     {engagement.scope.allowed_targets or '(none - nothing is in scope)'}")
-    print(f"  denied      {engagement.scope.denied_targets or '(none)'}")
-    print(f"  risk levels {[r.value for r in engagement.scope.allowed_risk_levels]}")
-
-    if not engagement.scope.allowed_targets:
-        print("\n[FAIL] The allowed-target list is empty, so every execution will be denied.\n")
-        return 1
-    if not ok:
-        print("\n[FAIL] Scope errors:")
-        for error in errors:
-            print(f"  - {error}")
-        print()
-        return 1
-    if not engagement.is_active():
-        print("\n[WARN] Engagement is not active; executions will be denied until it is.\n")
-        return 0
-
-    print("\n[OK] Engagement scope is valid.\n")
-    return 0
-
-
 def main(argv=None):
     for stream in (sys.stdout, sys.stderr):
         try:
@@ -654,36 +522,6 @@ def main(argv=None):
     profiles_parser = sub.add_parser("profiles", help="list MCP profiles (no server needed)")
     profiles_parser.add_argument("--name", default="", help="show the tools in one profile")
 
-    engagement_parser = sub.add_parser("engagement", help="engagement scope files (no server needed)")
-    engagement_sub = engagement_parser.add_subparsers(dest="engagement_cmd", required=True)
-    engagement_validate = engagement_sub.add_parser("validate", help="validate an engagement JSON file")
-    engagement_validate.add_argument("file")
-
-    engagement_create = engagement_sub.add_parser("create", help="create and store an engagement")
-    engagement_create.add_argument("--id", required=True, help="engagement id, e.g. ENG-2026-001")
-    engagement_create.add_argument("--name", default="", help="human-readable name")
-    engagement_create.add_argument(
-        "--target", action="append", default=[], required=True,
-        help="in-scope target; repeatable (host, *.wildcard, IP, or CIDR)",
-    )
-    engagement_create.add_argument(
-        "--deny", action="append", default=[], help="explicitly out-of-scope target; repeatable",
-    )
-    engagement_create.add_argument(
-        "--risk", action="append", default=[], choices=["passive", "active", "intrusive"],
-        help="permitted risk levels; repeatable (default: passive)",
-    )
-    engagement_create.add_argument("--days", type=int, default=30, help="validity in days (default 30)")
-    engagement_create.add_argument("--from-file", default="", help="create from a JSON file instead")
-    engagement_create.add_argument("--force", action="store_true", help="overwrite an existing engagement")
-
-    engagement_sub.add_parser("list", help="list stored engagements")
-    engagement_show = engagement_sub.add_parser("show", help="show one engagement")
-    engagement_show.add_argument("id")
-    engagement_status = engagement_sub.add_parser("status", help="change an engagement's status")
-    engagement_status.add_argument("id")
-    engagement_status.add_argument("status", choices=["active", "paused", "completed", "cancelled"])
-
     args = parser.parse_args(argv)
     global SERVER
     SERVER = args.server.rstrip("/")
@@ -705,7 +543,6 @@ def main(argv=None):
         "doctor": cmd_doctor,
         "registry": cmd_registry,
         "profiles": cmd_profiles,
-        "engagement": cmd_engagement,
     }
     try:
         return handlers[args.cmd](args) or 0

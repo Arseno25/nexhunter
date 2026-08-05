@@ -64,7 +64,7 @@ def test_missing_params_rejected(base_url):
 
 
 def test_health_public(base_url):
-    """Test /health remains reachable without authentication."""
+    """Test /health remains reachable."""
     print("[TEST] Health is public...")
     with urllib.request.urlopen(base_url + "/health", timeout=10) as resp:
         body = json.loads(resp.read())

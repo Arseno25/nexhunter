@@ -1,8 +1,8 @@
 """Per-execution workspaces.
 
-Every execution gets its own directory under the engagement it belongs to:
+Every execution gets its own directory:
 
-    NEXHUNTER_DATA_DIR/engagements/<engagement_id>/executions/<execution_id>/
+    NEXHUNTER_DATA_DIR/executions/<execution_id>/
 
 Nothing a tool or an AI client names is allowed to resolve outside that
 directory. There is deliberately no general file-manager API: artifacts are
@@ -43,34 +43,28 @@ def _check_id(value: str, kind: str) -> str:
 class Workspace:
     """An isolated directory for one execution's artifacts."""
 
-    def __init__(self, root: Path, engagement_id: str, execution_id: str):
-        self.engagement_id = engagement_id
+    def __init__(self, root: Path, execution_id: str):
         self.execution_id = execution_id
         self.root = root
 
     @classmethod
     def create(
         cls,
-        engagement_id: str,
         execution_id: str,
         base_dir: Optional[Path] = None,
     ) -> "Workspace":
         """Create (or reuse) the workspace for one execution."""
-        engagement_id = _check_id(engagement_id, "engagement id")
         execution_id = _check_id(execution_id, "execution id")
 
         base = (base_dir or data_dir()).resolve()
-        root = base / "engagements" / engagement_id / "executions" / execution_id
+        root = base / "executions" / execution_id
 
-        # Confirm the composed path really is under the base before creating it.
-        resolved_parent = root.parent
         root.mkdir(parents=True, exist_ok=True)
         root = root.resolve()
         if not cls._is_within(root, base):
             raise WorkspaceError(f"workspace escaped the data directory: {root}")
-        del resolved_parent
 
-        return cls(root=root, engagement_id=engagement_id, execution_id=execution_id)
+        return cls(root=root, execution_id=execution_id)
 
     @staticmethod
     def _is_within(candidate: Path, parent: Path) -> bool:
@@ -126,4 +120,4 @@ class Workspace:
             return handle.read(max_bytes)
 
     def __repr__(self) -> str:
-        return f"Workspace({self.engagement_id}/{self.execution_id})"
+        return f"Workspace({self.execution_id})"
