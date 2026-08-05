@@ -72,8 +72,10 @@ from nexhunter.agents import AGENTS, run_agent
 from nexhunter.agents.enhanced import ENHANCED_AGENTS
 from nexhunter.core.engine import Engine
 from nexhunter.api.visual import VulnerabilityCard, ProgressTracker, DashboardMetrics
+from nexhunter.security.authentication import TokenValidator, AuthenticationError
 
 ENGINE = Engine()
+TOKEN_VALIDATOR = TokenValidator()
 
 
 class ProcessManager:
@@ -187,6 +189,21 @@ def _analyze_target(target):
 
 
 class Handler(BaseHTTPRequestHandler):
+    # Public endpoints that don't require authentication
+    PUBLIC_ENDPOINTS = {"/health", "/version", "/ready"}
+
+    def _check_auth(self, path: str) -> bool:
+        """Check authentication for protected endpoints. Return True if authenticated."""
+        if path in self.PUBLIC_ENDPOINTS:
+            return True
+
+        auth_header = self.headers.get("Authorization")
+        is_valid, error = TOKEN_VALIDATOR.validate(auth_header)
+        if not is_valid:
+            self._json(401, {"ok": False, "error": error or "Unauthorized", "code": "UNAUTHORIZED"})
+            return False
+        return True
+
     def _json(self, code, data):
         body = json.dumps(data).encode()
         self.send_response(code)
@@ -237,6 +254,8 @@ class Handler(BaseHTTPRequestHandler):
         t0 = time.time()
         try:
             path = urllib.parse.urlparse(self.path).path
+            if not self._check_auth(path):
+                return
             if path == "/health":
                 deg = run_agent(ENGINE, "degradation", {})
                 mode = "degraded"
@@ -249,6 +268,10 @@ class Handler(BaseHTTPRequestHandler):
                     "agents": sorted(AGENTS),
                     "tools_installed": {n: bool(T.which(s.binary)) for n, s in T.TOOLS.items()},
                 })
+            elif path == "/version":
+                self._json(200, {"ok": True, "version": "3.0.0", "name": "NexHunter"})
+            elif path == "/ready":
+                self._json(200, {"ok": True, "ready": True})
             elif path == "/api/telemetry":
                 self._json(200, TEL.stats())
             elif path == "/api/cache/stats":
@@ -280,6 +303,8 @@ class Handler(BaseHTTPRequestHandler):
         t0 = time.time()
         try:
             path = urllib.parse.urlparse(self.path).path
+            if not self._check_auth(path):
+                return
             body = self._body()
             fn = None
             if path == "/api/command":
