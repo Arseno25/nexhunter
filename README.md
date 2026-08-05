@@ -13,6 +13,7 @@ git clone https://github.com/Arseno25/nexhunter.git
 cd nexhunter
 pip install -r requirements.txt
 python -m nexhunter.api.server --port 8888
+python -m nexhunter.api.mcp --server http://127.0.0.1:8888
 ```
 
 ---
@@ -22,44 +23,15 @@ python -m nexhunter.api.server --port 8888
 - **18 AI Agents** (13 core + 5 enhanced)
 - **164 Security Tools** (reconnaissance, web, network, cloud, forensics, exploitation)
 - **9 Assessment Workflows** (bug bounty, pentest, API, cloud, mobile, DevSecOps)
-- **30+ REST API Endpoints**
-- **Universal MCP Support** (Claude, Grok, Gemini, GPT-4, Llama, Mistral)
+- **184 MCP Tools** for AI integration
+- **Universal MCP Support** (Claude, Grok, Gemini, GPT-4, Llama, Mistral, custom)
 - **100% Test Coverage** (12/12 tests passing)
 
 ---
 
-## 📋 Usage
+## 🔗 MCP Integration
 
-### Option 1: Command Line
-
-```bash
-python nexhunter.py assess https://example.com           # Full assessment
-python nexhunter.py probe https://example.com            # Quick probe
-python nexhunter.py osint example.com                    # Reconnaissance
-python nexhunter.py analyze-vulns example.com            # Vulnerability analysis
-python nexhunter.py bugbounty-pro example.com            # Bug bounty workflow
-python nexhunter.py dashboard                            # View results
-```
-
-### Option 2: REST API
-
-```bash
-# Start server
-python -m nexhunter.api.server --port 8888
-
-# Run assessment
-curl -X POST http://localhost:8888/api/assess \
-  -H "Content-Type: application/json" \
-  -d '{"target": "https://example.com"}'
-
-# Get results
-curl http://localhost:8888/api/findings
-curl http://localhost:8888/api/visual/dashboard
-```
-
-### Option 3: MCP Integration
-
-#### Setup Instructions
+### Setup
 
 **Step 1:** Start NexHunter Server
 ```bash
@@ -85,11 +57,11 @@ python -m nexhunter.api.mcp --server http://127.0.0.1:8888
   }
 }
 ```
-Edit `~/.claude/config.json` and restart Claude Desktop.
+Edit `~/.claude/config.json` and restart Claude.
 
-**Other Models** (Grok, Gemini, GPT-4, Llama, Mistral)
+**Other AI Models** (Grok, Gemini, GPT-4, Llama, Mistral)
 
-See [MCP Universal Guide](docs/MCP_UNIVERSAL.md) for detailed integration examples.
+See [MCP Universal Guide](docs/MCP_UNIVERSAL.md) for setup instructions.
 
 **Generic MCP Client**
 ```python
@@ -103,7 +75,6 @@ proc = subprocess.Popen(
     text=True
 )
 
-# Send tool request
 request = {
     "jsonrpc": "2.0",
     "method": "tools/call",
@@ -116,15 +87,20 @@ response = proc.stdout.readline()
 print(json.loads(response))
 ```
 
-**Step 4:** Use in AI Model
+### Usage
+
+**In Claude:**
 ```
 "Scan example.com with nexhunter"
-→ AI model automatically uses available tools
+→ Claude uses available tools automatically
 ```
+
+**In Other AI Models:**
+Same pattern - AI automatically discovers and uses tools via MCP.
 
 ---
 
-## 🛠️ Security Tools (164)
+## 🛠️ Available Tools (164)
 
 **Categories:**
 - **Reconnaissance** (11): nmap, masscan, rustscan, subfinder, amass, shodan, dns, whois
@@ -136,11 +112,11 @@ print(json.loads(response))
 - **Cloud/DevOps** (11): kube-bench, trivy, docker, kubectl, aws-cli, gcloud
 - **Code Analysis** (5): semgrep, bandit, pylint, sonarqube, checkmarx
 - **Exploitation** (6): metasploit, empire, cobalt-strike, havoc, sliver
-- **Other** (80+): mobile security, IDS/IPS, secrets detection, social engineering
+- **Other** (80+): mobile, IDS/IPS, secrets, social engineering
 
 ---
 
-## 🔄 Workflows (9 Types)
+## 🔄 Workflows (9)
 
 | Workflow | Phases | Target |
 |----------|--------|--------|
@@ -149,21 +125,19 @@ print(json.loads(response))
 | API Security | 10 | REST/GraphQL APIs |
 | Cloud Security | 8 | AWS/Azure/GCP |
 | Red Team | 6 | Adversarial simulation |
-| Security Audit | 7 | Compliance & governance |
-| Mobile Security | 8 | iOS/Android apps |
+| Security Audit | 7 | Compliance |
+| Mobile Security | 8 | iOS/Android |
 | Supply Chain | 7 | Dependencies |
 | DevSecOps | 8 | CI/CD pipelines |
-
-**Total Phases:** 73
 
 ---
 
 ## 🔐 Security
 
 ✓ Authorization-first design  
-✓ XXE protection (defusedxml)  
-✓ Safe command execution (no shell=True)  
-✓ Input validation (ToolSpec)  
+✓ XXE protection  
+✓ Safe command execution  
+✓ Input validation  
 ✓ Rate limiting  
 ✓ No hardcoded secrets  
 
@@ -177,9 +151,8 @@ print(json.loads(response))
 | Security Tools | 164 |
 | Workflows | 9 |
 | Assessment Phases | 73 |
-| API Endpoints | 30+ |
-| CLI Commands | 15+ |
 | MCP Tools | 184 |
+| CLI Commands | 15+ |
 | Test Coverage | 100% |
 
 ---
@@ -187,28 +160,23 @@ print(json.loads(response))
 ## 📚 Documentation
 
 - **[Complete Guide](docs/README.md)** — Full reference
-- **[Tools Reference](docs/TOOLS.md)** — All 164 tools
-- **[Workflows](WORKFLOWS.md)** — Workflow specifications
 - **[MCP Universal](docs/MCP_UNIVERSAL.md)** — Integration with all AI models
-- **[Advanced Features](docs/ADVANCED_FEATURES.md)** — Caching, process management, intelligence
-- **[Production Ready](docs/PRODUCTION_READINESS.md)** — Deployment guide
+- **[Tools Reference](docs/TOOLS.md)** — All 164 tools
+- **[Advanced Features](docs/ADVANCED_FEATURES.md)** — Caching, intelligence
+- **[Production Ready](docs/PRODUCTION_READINESS.md)** — Deployment
 
 ---
 
 ## 📦 Requirements
 
-- Python 3.8+
-- requests >= 2.28.0
-- urllib3 >= 1.26.0
-
-Optional security tools: nmap, nuclei, ffuf, gobuster, sqlmap, nikto
+Python 3.8+, requests >= 2.28.0, urllib3 >= 1.26.0
 
 ---
 
 <div align="center">
 
-**NexHunter v3.1.0** — Security Assessment Platform
+**NexHunter v3.1.0** — AI-Integrated Security Assessment
 
-[GitHub](https://github.com/Arseno25/nexhunter) • [Docs](docs/README.md)
+[GitHub](https://github.com/Arseno25/nexhunter)
 
 </div>
