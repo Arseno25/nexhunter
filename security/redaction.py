@@ -1,7 +1,7 @@
 """Secret detection and redaction for logs and output."""
 
 import re
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 from dataclasses import dataclass
 
 
@@ -189,53 +189,91 @@ class SecretRedactor:
 
         return False
 
+    # Single-letter flags mean different things per tool: -p is a password to
+    # hydra but a port list to nmap. Treating it as secret everywhere would
+    # mask nmap's ports in every audit record; treating it as safe everywhere
+    # would write hydra's password to disk. So it is resolved per binary.
+    # ponytail: hand-maintained map. The real fix is a per-parameter secret
+    # marker on ToolSpec, which lands with typed parameters.
+    SHORT_SECRET_FLAGS_BY_TOOL = {
+        "hydra": {"-p", "-P"},
+        "medusa": {"-p"},
+        "ncrack": {"-p"},
+        "patator": {"-p"},
+        "smbmap": {"-p"},
+        "crackmapexec": {"-p"},
+        "netexec": {"-p"},
+        "nxc": {"-p"},
+        "evil-winrm": {"-p"},
+        "mysql": {"-p"},
+        "psql": {"-p"},
+        "redis-cli": {"-a"},
+        "curl": {"-u"},
+        "wget": {"-p"},
+    }
+
+    @classmethod
+    def _short_secret_flags(cls, argv: List[str]) -> set:
+        """Short flags that carry a secret for the binary being invoked."""
+        if not argv:
+            return set()
+        binary = str(argv[0]).replace("\\", "/").rsplit("/", 1)[-1].lower()
+        if binary.endswith(".exe"):
+            binary = binary[:-4]
+        return cls.SHORT_SECRET_FLAGS_BY_TOOL.get(binary, set())
+
+    def is_secret_flag(self, arg: str, short_flags: Optional[set] = None) -> bool:
+        """Check if a command-line flag introduces a secret value.
+
+        Long flags match on their name rather than an exact list, so
+        --api-token, --auth-token, and --password-file are all covered; an
+        exact-membership check silently leaked every flag nobody thought of.
+        """
+        if not arg.startswith("-"):
+            return False
+        if short_flags and arg in short_flags:
+            return True
+        name = arg.lstrip("-")
+        if len(name) < 2:
+            return False
+        return self.is_secret_key(name)
+
     def redact_command(self, cmd_args: List[str]) -> List[str]:
-        """
-        Redact secrets from command arguments.
+        """Redact secret values from an argument list.
 
-        Redact values that follow known secret flags.
+        Handles both "--token VALUE" and "--token=VALUE" forms, plus any
+        argument that matches a secret pattern on its own.
         """
-        secret_flags = {
-            "-p",
-            "--password",
-            "--api-key",
-            "-k",
-            "--key",
-            "-t",
-            "--token",
-            "--secret",
-            "-s",
-            "--auth",
-            "--authorization",
-        }
-
-        redacted = []
+        redacted: List[str] = []
         skip_next = False
+        short_flags = self._short_secret_flags(cmd_args)
 
-        for i, arg in enumerate(cmd_args):
+        for arg in cmd_args:
+            arg = str(arg)
+
             if skip_next:
                 redacted.append("[REDACTED]")
                 skip_next = False
                 continue
 
-            arg_lower = arg.lower()
+            # --token=VALUE. Checked first: the whole "--token=VALUE" string
+            # also looks like a secret flag, and treating it as one would mask
+            # the following argument while leaking this one.
+            if arg.startswith("-") and "=" in arg:
+                flag, _ = arg.split("=", 1)
+                if self.is_secret_flag(flag, short_flags):
+                    redacted.append(f"{flag}=[REDACTED]")
+                    continue
 
-            # Check if this arg is a secret flag
-            if arg_lower in secret_flags:
+            # --token VALUE
+            if self.is_secret_flag(arg, short_flags):
                 redacted.append(arg)
                 skip_next = True
                 continue
 
-            # Check if arg contains secret in value form (--key=value)
-            if "=" in arg:
-                key, value = arg.split("=", 1)
-                if any(flag.replace("-", "") in key.lower() for flag in secret_flags):
-                    redacted.append(f"{key}=[REDACTED]")
-                    continue
-
-            # Redact if contains detectable secret
+            # A bare argument that looks like a credential on its own.
             if self.contains_secret(arg):
-                redacted.append("[REDACTED]")
+                redacted.append(self.redact_string(arg))
             else:
                 redacted.append(arg)
 

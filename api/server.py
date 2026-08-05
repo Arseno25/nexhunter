@@ -74,10 +74,14 @@ from nexhunter.core.engine import Engine
 from nexhunter.api.visual import VulnerabilityCard, ProgressTracker, DashboardMetrics
 from nexhunter.security.authentication import TokenValidator, AuthenticationError
 from nexhunter.security.enforcement import SecurityGate, risk_level_from_str
+from nexhunter.execution.service import ExecutionService
 
 ENGINE = Engine()
 TOKEN_VALIDATOR = TokenValidator()
 GATE = SecurityGate(token_validator=TOKEN_VALIDATOR)
+# Single execution path shared with the MCP server: validate, authorize, run,
+# record. Nothing else in this module spawns a process.
+EXEC = ExecutionService(gate=GATE)
 
 
 class ProcessManager:
@@ -229,6 +233,32 @@ class Handler(BaseHTTPRequestHandler):
         except json.JSONDecodeError:
             return {}
 
+    def _source_ip(self):
+        return self.client_address[0] if self.client_address else "unknown"
+
+    def _execution_get(self, path):
+        """Route /api/executions/<id>[/output|/artifacts]. Returns (code, body)."""
+        rest = path[len("/api/executions/"):].strip("/")
+        if not rest:
+            return 404, {"ok": False, "error": "not found", "code": "NOT_FOUND"}
+
+        parts = rest.split("/")
+        execution_id, sub = parts[0], (parts[1] if len(parts) > 1 else "")
+
+        if sub == "output":
+            result = EXEC.output(execution_id)
+        elif sub == "artifacts":
+            result = EXEC.artifacts(execution_id)
+        elif not sub:
+            record = EXEC.registry.get(execution_id)
+            if record is None:
+                return 404, {"ok": False, "error": f"no such execution: {execution_id}", "code": "NOT_FOUND"}
+            result = {"ok": True, "execution": record.to_dict()}
+        else:
+            return 404, {"ok": False, "error": "not found", "code": "NOT_FOUND"}
+
+        return (200 if result.get("ok") else 404), result
+
     def _command(self, body):
         # Only registered tools may run. Raw OS command passthrough was removed:
         # arbitrary "cmd" strings are no longer accepted under any condition.
@@ -236,38 +266,13 @@ class Handler(BaseHTTPRequestHandler):
         if not tool_name:
             return {"ok": False, "error": "missing 'tool'; raw command execution is not permitted", "code": "TOOL_REQUIRED"}
 
-        spec = T.get_tool_spec(tool_name)
-        if not spec:
-            return {"ok": False, "error": f"unknown tool: {tool_name}", "code": "UNKNOWN_TOOL"}
-
-        user_params = body.get("params", {})
-        # Validate the raw user params so missing required fields are caught
-        # before defaults mask them.
-        ok, err = spec.validate(user_params)
-        if not ok:
-            return {"ok": False, "error": err, "code": "INVALID_PARAMS"}
-        params = {k: user_params.get(k, spec.params.get(k)) for k in spec.params}
-
-        target = spec.target_of(params)
-        gate = GATE.authorize_tool(
-            auth_header=self.headers.get("Authorization"),
+        return EXEC.execute(
             tool_name=tool_name,
-            target=target,
-            risk_level=risk_level_from_str(spec.risk_level),
-            source_ip=self.client_address[0] if self.client_address else "unknown",
+            params=body.get("params", {}),
+            auth_header=self.headers.get("Authorization"),
+            source_ip=self._source_ip(),
+            run_async=bool(body.get("async")),
         )
-        if not gate.allowed:
-            code = gate.policy.policy_code or "DENIED"
-            return {"ok": False, "error": gate.policy.reason, "code": code,
-                    "requires_approval": gate.policy.requires_approval}
-
-        cmd = spec.build_cmd(params)
-        if not cmd:
-            return {"ok": False, "error": f"failed to build command for {tool_name}", "code": "BUILD_FAILED"}
-
-        if body.get("async"):
-            return PM.start(cmd, cmd[0])
-        return PM.start_and_wait(cmd, cmd[0], spec.timeout)
 
     def do_GET(self):
         t0 = time.time()
@@ -301,6 +306,17 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(200, PM.list())
             elif path == "/api/findings":
                 self._json(200, json.loads(ENGINE.report("json")))
+            elif path == "/api/executions":
+                query = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+                engagement = (query.get("engagement_id") or [None])[0]
+                records = EXEC.registry.list(engagement_id=engagement)
+                self._json(200, {
+                    "ok": True,
+                    "executions": [r.to_dict() for r in records],
+                    "stats": EXEC.registry.stats(),
+                })
+            elif path.startswith("/api/executions/"):
+                self._json(*self._execution_get(path))
             elif path.startswith("/api/processes/status/"):
                 self._json(200, PM.status(int(path.rsplit("/", 1)[1])))
             elif path == "/api/visual/dashboard":
@@ -328,6 +344,9 @@ class Handler(BaseHTTPRequestHandler):
             fn = None
             if path == "/api/command":
                 fn = lambda: self._command(body)
+            elif path.startswith("/api/executions/") and path.endswith("/terminate"):
+                execution_id = path[len("/api/executions/"):-len("/terminate")].strip("/")
+                fn = lambda: EXEC.terminate(execution_id)
             elif path == "/api/intelligence/analyze-target":
                 fn = lambda: _analyze_target(body.get("target", ""))
             elif path == "/api/intelligence/select-tools":
