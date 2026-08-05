@@ -93,7 +93,7 @@ ROLES = {
     "operator": Role(
         name="operator",
         description="Full operational access including destructive tools",
-        permissions=frozenset([p for p in Permission]),  # All permissions except ADMIN
+        permissions=frozenset([p for p in Permission if p != Permission.ADMIN]),
     ),
     "admin": Role(
         name="admin",
