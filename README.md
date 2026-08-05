@@ -73,6 +73,28 @@ Replace `python3` with full path to Python interpreter and `127.0.0.1:8888` with
 
 ---
 
+## 📖 About NexHunter
+
+**NexHunter** is an AI-driven security assessment platform that orchestrates 164 specialized security tools through an intelligent agent system. It automates complex security workflows by:
+
+- **Intelligent Tool Selection**: AI agents analyze targets and automatically select optimal tools
+- **Workflow Automation**: Executes comprehensive assessment workflows (bug bounty, pentest, API security, cloud security, red team, audit, mobile, supply chain, DevSecOps)
+- **Result Correlation**: Correlates findings across multiple tools to identify attack paths and vulnerabilities
+- **Smart Caching**: LRU cache with MD5-based deduplication reduces redundant scans
+- **Real-time Monitoring**: Process management tracks execution with streaming output
+- **Universal AI Integration**: Works with Claude, Grok, Gemini, GPT-4, Llama, Mistral via MCP protocol
+
+**Use Cases:**
+- Automated security assessments for targets
+- Continuous vulnerability scanning
+- Red team operations
+- Security compliance audits
+- Bug bounty automation
+- API security testing
+- Cloud infrastructure assessment
+
+---
+
 ## 🛠️ Available Tools (164)
 
 **Categories:**
