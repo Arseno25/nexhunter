@@ -59,7 +59,7 @@ python -m nexhunter.api.mcp --list-profiles
 | `nexhunter-full` | **Default (no `--profile`).** Every non-destructive tool. Large payload; prefer a focused profile when you know the job |
 
 Every profile also surfaces the two freeform tools — `execute_command` (raw
-shell command strings, HexStrike-style) and `execute_python_script` (Python snippets).
+shell command strings, free-form style) and `execute_python_script` (Python snippets).
 Both are intrusive, recorded, and withheld from autonomous runs; a profile can
 opt out with `include_freeform_tools=False`.
 

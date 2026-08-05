@@ -1,7 +1,7 @@
-"""Free-form execution tools: the sanctioned, contained HexStrike-style path.
+"""Free-form execution tools: the sanctioned, contained free-form path.
 
 execute_command and execute_python_script take an entire payload string and
-execute it -- the capability HexStrike exposes through its raw /api/command,
+execute it -- the capability exposed through the raw /api/command endpoint,
 kept inside the registry where it is typed, gated (intrusive), recorded,
 uncacheable, and withheld from autonomous runs. There is no shell flag
 anywhere: execute_command is just a builder that returns a ShellCommand instead

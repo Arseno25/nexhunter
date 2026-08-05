@@ -359,7 +359,7 @@ def health():
         mode = deg.get("data", {}).get("mode", "degraded")
     return jsonify({
         "ok": True,
-        "status": "healthy",  # Added for HexStrike client compatibility
+        "status": "healthy",  # Added for client compatibility
         "version": "1.0.0",
         "mode": mode,
         "agents": sorted(AGENTS),
@@ -567,12 +567,12 @@ def visual_vulnerabilities():
 @app.post("/api/command")
 def command():
     body = _body()
-    # Support both NexHunter registry calls and HexStrike raw command string execution.
+    # Support both NexHunter registry calls and raw command string execution.
     tool_name = body.get("tool")
     no_cache = bool(body.get("no_cache"))
 
     if not tool_name and "command" in body:
-        # HexStrike-mode REST command execution. Route it through our secure
+        # Raw command execution compatibility mode. Route it through our secure
         # execute_command ToolSpec so it runs inside ExecutionService.
         res = EXEC.execute(
             tool_name="execute_command",
@@ -677,7 +677,7 @@ def cache_clear():
 
 
 # ---------------------------------------------------------------------------
-# HexStrike Compatibility File & Python REST API Endpoints
+# Compatibility File & Python REST API Endpoints
 # ---------------------------------------------------------------------------
 
 @app.route("/api/files/list", methods=["GET", "POST"])

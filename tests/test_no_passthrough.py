@@ -23,7 +23,7 @@ FORBIDDEN_PARAMS = {
 # Tools that legitimately take shell-ish text as data, not as a command line.
 # Each needs a reason, and its builder must still pass the argv checks below.
 ALLOWED_TEXT_PARAMS: dict[tuple[str, str], str] = {
-    # The deliberate HexStrike-style free-form channel: the whole parameter IS
+    # The deliberate free-form channel: the whole parameter IS
     # the command. Gated as intrusive, uncacheable, recorded, and withheld from
     # autonomous runs -- an operator-facing escape hatch, not a caller API.
     ("execute_command", "command"): "the parameter is the entire shell command, by design",

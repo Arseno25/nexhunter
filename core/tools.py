@@ -1577,10 +1577,10 @@ _tool_specs = {
         params={"path": None}, timeout=300,
         builder=lambda p: ["osv-scanner", "-r", p["path"]]),
 
-    # ==================== FREE-FORM EXECUTION (HexStrike-style) ====================
+    # ==================== FREE-FORM EXECUTION (Free-form style) ====================
     # Two deliberately free-form tools. Every other tool validates values and
     # builds a fixed argv; these take an entire payload string and execute it.
-    # That is the exact capability a HexStrike-style operator wants, kept inside
+    # That is the exact capability a free-form operator wants, kept inside
     # the registry: intrusive risk (never auto-executed, recorded, redacted,
     # timeout-capped), and surfaced by every MCP profile like the workflow
     # tools, since they serve any engagement. execute_command's builder returns a
@@ -1589,7 +1589,7 @@ _tool_specs = {
     "execute_command": ToolSpec(
         name="execute_command", binary="sh",
         description="Run a free-form command string through the system shell "
-                    "(HexStrike-style arbitrary command execution). Pipes, "
+                    "(Free-form arbitrary command execution). Pipes, "
                     "redirects, and chaining are live. Recorded, redacted, "
                     "timeout-capped, intrusive, and withheld from autonomous "
                     "runs. Authorized targets only.",
@@ -1606,7 +1606,7 @@ _tool_specs = {
     "execute_python_script": ToolSpec(
         name="execute_python_script", binary="python",
         description="Run a free-form Python snippet with the server's "
-                    "interpreter (HexStrike-style custom scripting). Recorded, "
+                    "interpreter (Free-form custom scripting). Recorded, "
                     "redacted, timeout-capped, intrusive, and withheld from "
                     "autonomous runs. Authorized targets only.",
         params={"script": None, "env_name": "default", "filename": ""}, timeout=120, cacheable=False,

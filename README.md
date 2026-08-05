@@ -44,7 +44,7 @@ cannot escalate its own risk ceiling.
 - **Browser engine.** Selenium-backed page analysis (tech fingerprint, security
   headers, cookies, DOM depth, JS errors), screenshot, network capture, crawl,
   and form discovery — with a stdlib fallback when Selenium is absent.
-- **Visual engine.** HexStrike-style severity cards, live dashboards, progress
+- **Visual engine.** Pentester-style severity cards, live dashboards, progress
   bars, and spinners for terminal and API consumers (`NO_COLOR` respected).
 - **Fast when you want it.** An LRU+TTL result cache and an optional in-process
   `direct` mode cut repeat work; process management lets you watch and stop runs.
@@ -264,7 +264,7 @@ Performance API, so no CDP dependency. Screenshots land in
 
 ### Visual engine
 
-HexStrike-style terminal rendering with ANSI, auto-degrading to ASCII on
+High-fidelity terminal rendering with ANSI, auto-degrading to ASCII on
 encodings without box-drawing glyphs (e.g. Windows cp1252) and to plain text
 with `NO_COLOR`:
 

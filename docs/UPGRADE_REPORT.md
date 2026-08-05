@@ -14,13 +14,13 @@ Since this report was written:
 - **Browser engine** (`agents/browser.py`): Selenium-backed page analysis,
   screenshots, network capture, crawl, and form discovery, with a stdlib
   fallback when Selenium/Chrome is absent. Exposed as `/api/browser/*`.
-- **Visual engine** (`api/visual.py`): HexStrike-style severity cards, live
+- **Visual engine** (`api/visual.py`): Pentester-style severity cards, live
   dashboard, progress bars; ANSI with ASCII degradation and `NO_COLOR`.
 - **REST rewrite**: the server moved from Werkzeug to Flask; one HTTP server
   now hosts REST + MCP + the visual endpoints.
 - **Registry grew** to 257 tools (29 stable / 206 beta / 22 experimental) with
   16 MCP profiles; `nexhunter-full` (default) exposes 255.
-- **Freeform execution** (`execute_command`, `execute_python_script`): HexStrike-style
+- **Freeform execution** (`execute_command`, `execute_python_script`): Freeform-style
   raw command execution restored as two registry tools — intrusive, recorded,
   uncacheable, withheld from autonomous runs, and surfaced by every profile
   (they serve any engagement; opt out per profile).
@@ -331,7 +331,7 @@ Notable tests:
 3. Verify `pip-audit` / `mypy` advisories.
 4. Replace `datetime.utcnow()` usage with timezone-aware UTC.
 
-## Addendum (2026-08-06) — Freeform execution (HexStrike-style)
+## Addendum (2026-08-06) — Freeform execution (Freeform-style)
 
 Restores raw command execution as a *registered, gated capability* rather than
 a raw endpoint:
