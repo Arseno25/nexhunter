@@ -3,7 +3,7 @@
 <div align="center">
   <img src="assets/nexhunter.png" alt="NexHunter" width="300">
 
-  <strong>Tool-Driven AI Security Orchestration</strong>
+  Tool-Driven AI Security Orchestration
 
   <p>Safe orchestration of security tools for <em>authorized</em> assessments.</p>
 
