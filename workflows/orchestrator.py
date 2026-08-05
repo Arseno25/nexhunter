@@ -39,6 +39,39 @@ _RISK_ORDER = {
 }
 
 
+def _coerce_ceiling(risk_ceiling: str) -> RiskLevel:
+    """Parse a ceiling, clamped so autonomy never reaches intrusive."""
+    try:
+        ceiling = RiskLevel(risk_ceiling)
+    except ValueError:
+        ceiling = RiskLevel.ACTIVE
+    if _RISK_ORDER[ceiling] > _RISK_ORDER[RiskLevel.ACTIVE]:
+        ceiling = RiskLevel.ACTIVE
+    return ceiling
+
+
+# Planner gates: evidence predicates over a target profile. Each decides
+# whether a methodology phase is warranted at all.
+def _is_domain(profile: TargetProfile) -> bool:
+    return profile.target_type in ("domain", "network")
+
+
+def _has_web_surface(profile: TargetProfile) -> bool:
+    return profile.has_web_surface()
+
+
+def _has_open_ports(profile: TargetProfile) -> bool:
+    return bool(profile.open_ports())
+
+
+def _has_tls(profile: TargetProfile) -> bool:
+    return 443 in profile.open_ports() or profile.target.startswith("https://")
+
+
+def _is_wordpress(profile: TargetProfile) -> bool:
+    return any("wordpress" in t for t in profile.technology_names())
+
+
 class RunStatus(Enum):
     RUNNING = "running"
     COMPLETED = "completed"
@@ -65,12 +98,7 @@ def review_plan(target: str, steps, risk_ceiling: str = "active") -> dict:
     This is the whole point of the plan-first flow: the AI can propose a plan,
     but nothing it proposed reaches the OS unvalidated.
     """
-    try:
-        ceiling = RiskLevel(risk_ceiling)
-    except ValueError:
-        ceiling = RiskLevel.ACTIVE
-    if _RISK_ORDER[ceiling] > _RISK_ORDER[RiskLevel.ACTIVE]:
-        ceiling = RiskLevel.ACTIVE
+    ceiling = _coerce_ceiling(risk_ceiling)
 
     approved, withheld, invalid = [], [], []
     for step in steps or []:
@@ -116,6 +144,7 @@ class PlannedStep:
     tool: str
     reason: str
     risk_level: str
+    phase: str = ""
 
 
 class AdaptivePlanner:
@@ -124,29 +153,54 @@ class AdaptivePlanner:
     Deterministic on purpose: the same profile yields the same plan, so an
     autonomous run is reproducible and reviewable. The AI can propose a target
     and a ceiling; it does not get to invent the tool list.
+
+    The plan follows a real assessment methodology, phase by phase:
+
+        1. recon          passive footprint: DNS, WHOIS, subdomains, web probe
+        2. enumeration    active service discovery behind open ports
+        3. web_enum       content, endpoints, parameters on the web surface
+        4. assessment     targeted checks: templates, TLS, tech-specific scans
+        5. exploitation   intrusive follow-ups - always planned, never run
+                          autonomously; the risk ceiling withholds them for a
+                          human, which is exactly where they belong
+
+    A phase is only entered on evidence from the phase before it. A domain
+    that resolves to nothing never reaches enumeration; a host with no web
+    ports never reaches web_enum. Exploitation-class steps are still planned
+    (a senior operator knows what comes next) but the autonomy ceiling
+    surfaces them as recommendations, never as executed commands.
     """
 
-    # Seed steps by target type, run before anything is known.
-    SEED = {
-        "web_application": [
-            ("dns_lookup", "resolve the target"),
-            ("httpx_probe", "identify HTTP status, title, and technology"),
-            ("whatweb_scan", "corroborate technology fingerprint"),
-        ],
-        "domain": [
-            ("whois_lookup", "registration and ownership"),
-            ("dns_lookup", "resolve the domain"),
-            ("subfinder_enum", "passive subdomain discovery"),
-            ("httpx_probe", "probe the apex for a web surface"),
-        ],
-        "host": [
-            ("dns_lookup", "reverse and forward records"),
-            ("nmap_scan", "service discovery"),
-        ],
-        "network": [
-            ("nmap_scan", "sweep the range for live services"),
-        ],
-    }
+    # (phase, tool, reason, gate). Gates are predicates over the profile;
+    # None means "no gate".
+    METHODOLOGY: tuple = (
+        # ---- Phase 1: passive recon ----------------------------------
+        ("recon", "dns_lookup", "resolve the target's records", None),
+        ("recon", "whois_lookup", "registration, ownership, and infrastructure", _is_domain),
+        ("recon", "subfinder_enum", "passive subdomain discovery", _is_domain),
+        ("recon", "httpx_probe", "identify HTTP status, title, and technology", None),
+        ("recon", "whatweb_scan", "corroborate the technology fingerprint", _has_web_surface),
+        # ---- Phase 2: active enumeration ------------------------------
+        ("enumeration", "nmap_scan", "service and version discovery on the host", None),
+        ("enumeration", "naabu", "fast port corroboration of the nmap sweep", _has_open_ports),
+        ("enumeration", "dig_axfr", "zone transfer attempt (misconfiguration check)", _is_domain),
+        # ---- Phase 3: web surface enumeration --------------------------
+        ("web_enum", "katana_crawl", "crawl the web surface for endpoints and JS", _has_web_surface),
+        ("web_enum", "waybackurls", "historical URLs for hidden endpoints", _has_web_surface),
+        ("web_enum", "gau", "URL discovery across passive sources", _has_web_surface),
+        ("web_enum", "paramspider", "parameter discovery for injection surface", _has_web_surface),
+        ("web_enum", "feroxbuster", "content discovery against the web root", _has_web_surface),
+        # ---- Phase 4: targeted assessment ------------------------------
+        ("assessment", "nuclei_scan", "template scan of the observed web surface", _has_web_surface),
+        ("assessment", "nikto_scan", "web server misconfiguration checks", _has_web_surface),
+        ("assessment", "testssl", "TLS configuration review of the HTTPS service", _has_tls),
+        ("assessment", "sslyze", "cipher and protocol policy review", _has_tls),
+        ("assessment", "wpscan_scan", "WordPress detected in the fingerprint", _is_wordpress),
+        ("assessment", "dalfox_xss", "XSS check against discovered parameters", _has_web_surface),
+        # ---- Phase 5: exploitation (withheld by the ceiling) ------------
+        ("exploitation", "sqlmap_scan", "auto-injection testing on the parameter surface", _has_web_surface),
+        ("exploitation", "ffuf_scan", "fuzzing for hidden parameters and vhosts", _has_web_surface),
+    )
 
     def plan(
         self,
@@ -156,27 +210,13 @@ class AdaptivePlanner:
     ) -> List[PlannedStep]:
         """Return the tools worth running next, given current knowledge."""
         done = set(already_run)
-        candidates: List[tuple] = []
-
-        if not already_run:
-            candidates.extend(self.SEED.get(profile.target_type, self.SEED["domain"]))
-
-        # Adaptation: each observed fact can pull in a follow-up.
-        techs = profile.technology_names()
-        if profile.has_web_surface():
-            candidates.append(("nuclei_scan", "template scan of the observed web surface"))
-            candidates.append(("nikto_scan", "web server misconfiguration checks"))
-        if any("wordpress" in t for t in techs):
-            candidates.append(("wpscan_scan", "WordPress detected in the fingerprint"))
-        if 443 in profile.open_ports() or profile.target.startswith("https://"):
-            candidates.append(("testssl", "TLS configuration review of the HTTPS service"))
-        if profile.open_ports() and "nmap_scan" not in done:
-            candidates.append(("nmap_scan", "enumerate the services behind the open ports"))
-
         steps: List[PlannedStep] = []
         seen = set()
-        for tool_name, reason in candidates:
+
+        for phase, tool_name, reason, gate in self.METHODOLOGY:
             if tool_name in done or tool_name in seen:
+                continue
+            if gate is not None and not gate(profile):
                 continue
             spec = T.get_tool_spec(tool_name)
             if spec is None:
@@ -186,8 +226,37 @@ class AdaptivePlanner:
                 tool=tool_name,
                 reason=reason,
                 risk_level=spec.risk_level,
+                phase=phase,
             ))
         return steps
+
+    def recommend(self, target: str, risk_ceiling: str = "active") -> dict:
+        """A reviewable methodology plan for a target, without running anything.
+
+        This is the plan-first answer: give the planner a target and get the
+        phases a senior operator would walk, with the reason for each tool.
+        Exploitation steps are listed under 'withheld' - planned, but gated
+        behind human approval.
+        """
+        ceiling = _coerce_ceiling(risk_ceiling)
+        profile = Profiler().new_profile(target)
+        steps = self.plan(profile, [], ceiling)
+
+        phases: Dict[str, List[dict]] = {}
+        withheld: List[dict] = []
+        for step in steps:
+            entry = {"tool": step.tool, "reason": step.reason, "risk_level": step.risk_level}
+            if _RISK_ORDER[RiskLevel(step.risk_level)] > _RISK_ORDER[ceiling]:
+                withheld.append({**entry, "requires": "human approval"})
+            else:
+                phases.setdefault(step.phase, []).append(entry)
+
+        return {
+            "target": target,
+            "risk_ceiling": ceiling.value,
+            "phases": phases,
+            "withheld": withheld,
+        }
 
 
 @dataclass
@@ -259,6 +328,18 @@ class AutonomousOrchestrator:
         """Validate AI-proposed steps without executing anything."""
         return review_plan(target, steps, risk_ceiling)
 
+    @staticmethod
+    def recommend_plan(target: str, risk_ceiling: str = "active") -> dict:
+        """A methodology-driven plan for a target, without running anything.
+
+        Recon first, then enumeration, web enumeration, assessment, and the
+        exploitation follow-ups a senior operator would schedule next - each
+        gated on the evidence the phase before it would produce. Exploitation
+        steps are listed under 'withheld': planned, but gated behind human
+        approval by the autonomy ceiling.
+        """
+        return AdaptivePlanner().recommend(target, risk_ceiling)
+
     def start(
         self,
         target: str,
@@ -274,15 +355,7 @@ class AutonomousOrchestrator:
         second pass keeps a race from slipping one through). Without `steps`,
         the adaptive loop plans from observed evidence.
         """
-        try:
-            ceiling = RiskLevel(risk_ceiling)
-        except ValueError:
-            ceiling = RiskLevel.ACTIVE
-
-        # Autonomy never reaches intrusive or destructive, whatever is asked:
-        # those require a human approval record, so the ceiling is clamped.
-        if _RISK_ORDER[ceiling] > _RISK_ORDER[RiskLevel.ACTIVE]:
-            ceiling = RiskLevel.ACTIVE
+        ceiling = _coerce_ceiling(risk_ceiling)
 
         record = RunRecord(
             id=uuid.uuid4().hex[:12],

@@ -47,12 +47,17 @@ mcp = FastMCP(
         "Web UI: http://localhost:8888/ or http://localhost:8888/ui\n"
         "Status: server_status() first to verify connectivity.\n\n"
         "Main flows:\n"
+        "  - recommend_plan(target) - senior-pentester methodology plan, nothing runs\n"
+        "  - propose_plan(target, steps) - validate an AI-drafted plan\n"
+        "  - autonomous_assess(target) - execute an adaptive assessment\n"
         "  - run_flow(flow='bugbounty', target=...) - phased assessment\n"
         "  - run_flow(flow='ctf', target=..., category='web|crypto|forensics|pwn|recon')\n"
         "  - assess(target) - quick assessment\n"
         "  - probe(target) - HTTP probe\n"
         "  - select_tools(target) - get recommended tools\n"
-        "  - run_agent(name, params) - run specific agent"
+        "  - run_agent(name, params) - run specific agent\n\n"
+        "For a new target: call recommend_plan() first to get the methodology\n"
+        "phases, review them, then run autonomous_assess()."
     ),
 )
 
@@ -374,6 +379,22 @@ def propose_plan(target: str, steps: list, risk_ceiling: str = "active") -> str:
     """
     payload = {"target": target, "steps": steps, "risk_ceiling": risk_ceiling}
     return json.dumps(api("/api/plan", payload), indent=1)
+
+
+@mcp.tool()
+def recommend_plan(target: str, risk_ceiling: str = "active") -> str:
+    """Generate a senior-pentester methodology plan for a target WITHOUT running anything.
+
+    Phases: recon (DNS/WHOIS/subdomains/web probe) -> enumeration (nmap,
+    zone transfer) -> web enumeration (crawl, endpoints, parameters) ->
+    assessment (nuclei, TLS, tech-specific) -> exploitation follow-ups.
+    Each phase is gated on evidence the previous phase would produce.
+    Exploitation steps are listed under 'withheld' - planned, but gated
+    behind human approval. Use this first, review the phases, then run
+    autonomous_assess.
+    """
+    payload = {"target": target, "risk_ceiling": risk_ceiling}
+    return json.dumps(api("/api/plan/recommend", payload), indent=1)
 
 
 @mcp.tool()

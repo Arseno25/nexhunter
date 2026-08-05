@@ -452,6 +452,9 @@ class Handler(BaseHTTPRequestHandler):
             fn = lambda: self._start_autonomous(body)
         elif path == "/api/plan":
             fn = lambda: self._propose_plan(body)
+        elif path == "/api/plan/recommend":
+            fn = lambda: {"ok": True, "plan": ORCHESTRATOR.recommend_plan(
+                body.get("target", ""), body.get("risk_ceiling", "active"))}
         elif path.startswith("/api/executions/") and path.endswith("/terminate"):
             execution_id = path[len("/api/executions/"):-len("/terminate")].strip("/")
             fn = lambda: EXEC.terminate(execution_id)
