@@ -370,6 +370,138 @@ def cmd_telemetry(args):
     return 0
 
 
+def cmd_doctor(args):
+    """Check that this installation can actually run."""
+    from nexhunter.cli import doctor
+
+    return doctor.run(check_versions=not args.no_versions, show_all_tools=args.all)
+
+
+def cmd_registry(args):
+    """Inspect the tool registry locally, without contacting a server."""
+    from nexhunter.core import tools as T
+    from nexhunter.core.availability import check_binary
+
+    if args.registry_cmd == "info":
+        spec = T.get_tool_spec(args.name)
+        if spec is None:
+            print(f"unknown tool: {args.name}")
+            return 1
+        info = spec.describe()
+        print(f"\n{info['name']}\n  {info['description']}\n")
+        print(f"  binary     {info['binary']}" + ("" if info["available"] else "  (NOT INSTALLED)"))
+        print(f"  category   {info['category']}")
+        print(f"  risk       {info['risk_level']}")
+        print(f"  maturity   {info['maturity']}")
+        print(f"  timeout    {info['timeout_s']}s")
+        print("  parameters")
+        for key, meta in info["parameters"].items():
+            requirement = "required" if meta["required"] else f"default={meta['default']!r}"
+            print(f"    {key:16} {requirement}")
+        print()
+        return 0
+
+    if args.registry_cmd == "check":
+        binaries = {}
+        for spec in T.TOOLS.values():
+            binaries.setdefault(spec.binary, []).append(spec.name)
+        installed = 0
+        for binary in sorted(binaries):
+            status = check_binary(binary)
+            if status.installed:
+                installed += 1
+                version = f" {status.version}" if status.version else ""
+                print(f"  [OK]      {binary}{version}")
+            else:
+                print(f"  [MISSING] {binary}")
+        print(f"\n{installed}/{len(binaries)} binaries installed. NexHunter never installs them for you.\n")
+        return 0
+
+    specs = list(T.TOOLS.values())
+    if args.category:
+        specs = [s for s in specs if s.category == args.category]
+    if args.risk:
+        specs = [s for s in specs if s.risk_level == args.risk]
+    if args.maturity:
+        specs = [s for s in specs if s.maturity == args.maturity]
+    if args.installed:
+        specs = [s for s in specs if s.available]
+
+    for spec in sorted(specs, key=lambda s: (s.category, s.name)):
+        mark = " " if spec.available else "!"
+        print(f"{mark} {spec.name:34} {spec.category:12} {spec.risk_level:10} {spec.maturity:12} {spec.description}")
+    print(f"\n{len(specs)} tools ('!' means the binary is not installed)\n")
+    return 0
+
+
+def cmd_profiles(args):
+    """List MCP profiles, or the tools in one."""
+    from nexhunter.api import mcp_profiles
+
+    if args.name:
+        try:
+            profile = mcp_profiles.get_profile(args.name)
+        except KeyError as exc:
+            print(exc)
+            return 1
+        selected = mcp_profiles.tools_for(profile)
+        print(f"\n{profile.name}\n  {profile.description}\n")
+        for name, spec in sorted(selected.items()):
+            mark = " " if spec.available else "!"
+            print(f"  {mark} {name:34} {spec.risk_level:10} {spec.maturity}")
+        print(f"\n{len(selected)} tools ('!' means the binary is not installed)\n")
+        return 0
+
+    print()
+    for row in mcp_profiles.summarize():
+        print(f"  {row['name']:22} {row['tool_count']:4} tools  {row['available_tool_count']:3} installed")
+        print(f"  {'':22} {row['description']}")
+    print()
+    return 0
+
+
+def cmd_engagement(args):
+    """Validate an engagement scope file before relying on it."""
+    import json
+    from nexhunter.security.enforcement import _load_engagement
+    from nexhunter.security.engagement import TargetValidator
+
+    try:
+        engagement = _load_engagement(args.file)
+    except (OSError, ValueError, KeyError, json.JSONDecodeError) as exc:
+        print(f"[FAIL] Could not load {args.file}: {exc}")
+        return 1
+
+    if engagement is None:
+        print(f"[FAIL] No engagement found in {args.file}")
+        return 1
+
+    ok, errors = TargetValidator.validate_scope_config(engagement.scope)
+    print(f"\nEngagement {engagement.id} ({engagement.name})")
+    print(f"  status      {engagement.status}")
+    print(f"  active      {engagement.is_active()}")
+    print(f"  window      {engagement.starts_at.isoformat()} .. {engagement.expires_at.isoformat()}")
+    print(f"  allowed     {engagement.scope.allowed_targets or '(none - nothing is in scope)'}")
+    print(f"  denied      {engagement.scope.denied_targets or '(none)'}")
+    print(f"  risk levels {[r.value for r in engagement.scope.allowed_risk_levels]}")
+
+    if not engagement.scope.allowed_targets:
+        print("\n[FAIL] The allowed-target list is empty, so every execution will be denied.\n")
+        return 1
+    if not ok:
+        print("\n[FAIL] Scope errors:")
+        for error in errors:
+            print(f"  - {error}")
+        print()
+        return 1
+    if not engagement.is_active():
+        print("\n[WARN] Engagement is not active; executions will be denied until it is.\n")
+        return 0
+
+    print("\n[OK] Engagement scope is valid.\n")
+    return 0
+
+
 def main(argv=None):
     for stream in (sys.stdout, sys.stderr):
         try:
@@ -411,6 +543,31 @@ def main(argv=None):
 
     ctf_parser = sub.add_parser("ctf-solver", help="CTF challenge analyzer")
     ctf_parser.add_argument("--type", choices=["web", "crypto", "forensics", "pwn", "recon"], default="web")
+
+    # Local commands: these inspect this installation and need no server.
+    doctor_parser = sub.add_parser("doctor", help="check this installation can run (no server needed)")
+    doctor_parser.add_argument("--all", action="store_true", help="list every missing stable tool")
+    doctor_parser.add_argument("--no-versions", action="store_true", help="skip version probes (faster)")
+
+    registry_parser = sub.add_parser("registry", help="inspect the tool registry (no server needed)")
+    registry_sub = registry_parser.add_subparsers(dest="registry_cmd", required=True)
+    registry_list = registry_sub.add_parser("list", help="list registered tools")
+    registry_list.add_argument("--category", default="", help="filter by category")
+    registry_list.add_argument("--risk", default="", help="filter by risk level")
+    registry_list.add_argument("--maturity", default="", help="filter by maturity")
+    registry_list.add_argument("--installed", action="store_true", help="only tools whose binary is present")
+    registry_sub.add_parser("check", help="report which tool binaries are installed")
+    registry_info = registry_sub.add_parser("info", help="describe one tool")
+    registry_info.add_argument("name")
+
+    profiles_parser = sub.add_parser("profiles", help="list MCP profiles (no server needed)")
+    profiles_parser.add_argument("--name", default="", help="show the tools in one profile")
+
+    engagement_parser = sub.add_parser("engagement", help="engagement scope files (no server needed)")
+    engagement_sub = engagement_parser.add_subparsers(dest="engagement_cmd", required=True)
+    engagement_validate = engagement_sub.add_parser("validate", help="validate an engagement JSON file")
+    engagement_validate.add_argument("file")
+
     args = parser.parse_args(argv)
     global SERVER
     SERVER = args.server.rstrip("/")
@@ -429,6 +586,10 @@ def main(argv=None):
         "threat-intel": cmd_threat_intel,
         "bugbounty-pro": cmd_bugbounty_pro,
         "ctf-solver": cmd_ctf_solver,
+        "doctor": cmd_doctor,
+        "registry": cmd_registry,
+        "profiles": cmd_profiles,
+        "engagement": cmd_engagement,
     }
     try:
         return handlers[args.cmd](args) or 0

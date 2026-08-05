@@ -2,159 +2,308 @@
 
 <div align="center">
   <img src="assets/nexhunter.png" alt="NexHunter" width="300">
-</div>
 
-<div align="center">
-    <strong>
-        Advanced AI-Driven Security Assessment Platform
-    </strong>
+  <strong>Policy-Driven AI Security Orchestration</strong>
 
-![Version](https://img.shields.io/badge/version-1.0.0-blue) ![Python](https://img.shields.io/badge/python-3.8+-green) ![Tools](https://img.shields.io/badge/tools-164-blue) ![Tests](https://img.shields.io/badge/tests-77%20passing-green)
+  <p>Secure-by-default orchestration of security tools for <em>authorized</em> assessments.</p>
+
+![Version](https://img.shields.io/badge/version-2.0.0-blue) ![Python](https://img.shields.io/badge/python-3.10%2B-green) ![Tests](https://img.shields.io/badge/tests-140%20passing-green) ![Coverage](https://img.shields.io/badge/coverage-63%25-yellow)
 </div>
 
 ---
 
-## ⚡ Quick Start
+> [!WARNING]
+> **Only use NexHunter against systems you own or are explicitly authorized to assess.**
+> Scope enforcement encodes an authorization you already have. It does not grant one.
+
+---
+
+## What it is
+
+NexHunter orchestrates external security tools behind a policy engine. It does
+not implement scanners — it decides whether a scan may run, runs it safely, and
+records what happened.
+
+The distinguishing property: **an AI client is a caller like any other.** It can
+propose a tool and parameters. It cannot propose a command, widen its own scope,
+or overrule the policy engine.
+
+```mermaid
+flowchart LR
+    subgraph callers [Callers]
+        REST[REST API]
+        MCP[MCP / AI client]
+        CLI[CLI]
+    end
+
+    REST --> SVC[ExecutionService]
+    MCP --> SVC
+    CLI --> SVC
+
+    SVC --> GATE{SecurityGate<br/>auth · scope · policy}
+    GATE -->|denied| AUDIT[(Audit log)]
+    GATE -->|allowed| RUN[Isolated execution<br/>argv only · no shell]
+    RUN --> AUDIT
+
+    classDef deny fill:#7f1d1d,stroke:#dc2626,color:#fff
+    classDef allow fill:#14532d,stroke:#16a34a,color:#fff
+    class GATE deny
+    class RUN allow
+```
+
+## Quick start
 
 ```bash
 git clone https://github.com/Arseno25/nexhunter.git
 cd nexhunter
-pip install -r requirements.txt
-python -m nexhunter.api.server --port 8888
-python -m nexhunter.api.mcp --server http://127.0.0.1:8888
+pip install -e ".[mcp]"
+
+nexhunter doctor          # check this installation can actually run
 ```
 
----
+Then start the server and, optionally, the MCP bridge:
 
-## 🎯 Features
+```bash
+python -m nexhunter.api.server --port 8888
+python -m nexhunter.api.mcp --server http://127.0.0.1:8888 --profile nexhunter-recon
+```
 
-- **18 AI Agents** (13 core + 5 enhanced)
-- **164 Security Tools** (reconnaissance, web, network, cloud, forensics, exploitation)
-- **9 Assessment Workflows** (bug bounty, pentest, API, cloud, mobile, DevSecOps)
-- **184 MCP Tools** for AI integration
-- **Universal MCP Support** (Claude, Grok, Gemini, GPT-4, Llama, Mistral, custom)
-- **77 tests passing** across auth, authorization, engagement scope, policy, redaction, audit, enforcement, and MCP registration
+## MCP setup
 
----
-
-## 🔗 MCP Setup
-
-Add to your AI provider's config file (e.g., `~/.claude/config.json`):
+Add to your AI client's config (Claude Desktop, Claude Code, Cursor, VS Code,
+Roo Code, OpenCode — see [docs/mcp/](docs/mcp/)):
 
 ```json
 {
   "mcpServers": {
     "nexhunter": {
-      "command": "python3",
+      "command": "python",
       "args": [
-        "-m",
-        "nexhunter.api.mcp",
-        "--server",
-        "http://127.0.0.1:8888"
+        "-m", "nexhunter.api.mcp",
+        "--server", "http://127.0.0.1:8888",
+        "--profile", "nexhunter-core"
       ],
-      "timeout": 300,
-      "alwaysAllow": []
+      "env": { "NEXHUNTER_API_TOKEN": "your-token-here" }
     }
   }
 }
 ```
 
-Replace `python3` with full path to Python interpreter and `127.0.0.1:8888` with your server address.
+### Profiles
 
-**Examples:**
-- Linux/macOS: `python3` or `/usr/bin/python3`
-- Windows: `C:\Python\python.exe` or `.venv\Scripts\python.exe`
+Listing ~170 tools to every client makes for a large payload, a large token
+cost, and a model choosing blindly between near-identical tools. A profile
+narrows that to one job.
 
-**Usage:**
+| Profile | Tools | Purpose |
+|---|---:|---|
+| `nexhunter-core` | 7 | **Default.** Status, findings, executions, passive stable checks |
+| `nexhunter-recon` | 15 | Host discovery, DNS, subdomains, service identification |
+| `nexhunter-web` | 13 | Content discovery, template scanning, tech identification, TLS |
+| `nexhunter-api` | 13 | Schema and parameter discovery, GraphQL |
+| `nexhunter-code` | 10 | Static analysis, secret scanning, dependency review |
+| `nexhunter-cloud` | 8 | Read-only cloud posture |
+| `nexhunter-container` | 10 | Container and Kubernetes review |
+| `nexhunter-forensics` | 17 | Offline artifact and binary analysis |
+| `nexhunter-full` | 172 | Everything non-destructive. Large payload |
+
+```bash
+nexhunter profiles                          # list them
+nexhunter profiles --name nexhunter-web     # see what one exposes
 ```
-"Scan example.com with nexhunter"
-→ AI model automatically discovers and uses 164 tools
+
+No profile lists a destructive tool. Profiles are a usability control, not a
+security control — the policy engine authorizes every execution regardless of
+which profile surfaced the tool.
+
+## Security model
+
+```mermaid
+flowchart TD
+    T[Target requested] --> E{Engagement<br/>active?}
+    E -->|no| D1[DENY]
+    E -->|yes| DEN{In denied list?}
+    DEN -->|yes| D2[DENY<br/>denied beats allowed]
+    DEN -->|no| ALW{In allowed list?}
+    ALW -->|no| D3[DENY]
+    ALW -->|yes| RES[Resolve every address]
+    RES --> META{Metadata or<br/>internal address?}
+    META -->|yes, not explicit| D4[DENY]
+    META -->|no| OK[ALLOW]
+
+    classDef deny fill:#7f1d1d,stroke:#dc2626,color:#fff
+    classDef allow fill:#14532d,stroke:#16a34a,color:#fff
+    class D1,D2,D3,D4 deny
+    class OK allow
 ```
 
----
+Enforced and covered by tests:
 
-## 📖 About NexHunter
+- **No arbitrary command execution.** No tool takes a command parameter, no
+  builder splits a string into argv, no path uses a shell. Shell metacharacters
+  stay inert as single literal arguments.
+- **Fail-closed scope.** No engagement or an empty allow-list denies everything.
+  Denied beats allowed. `*.example.com` does not match `evil-example.com`.
+- **SSRF and rebinding blocked.** Every resolved address is checked. Cloud
+  metadata is blocked unconditionally, including via IPv4-mapped IPv6.
+- **Risk-tiered policy.** passive → active → intrusive → destructive, each
+  requiring more. Destructive is disabled by default and needs admin plus an
+  approval record.
+- **Contained execution.** Isolated workspace per run, timeouts that kill the
+  whole process tree, output caps, no path traversal or symlink escape.
+- **Secrets redacted** from parameters, commands, logs, and output.
+- **Everything audited**, including denials.
 
-**NexHunter** is an AI-driven security assessment platform that orchestrates 164 specialized security tools through an intelligent agent system. It automates complex security workflows by:
+Full detail, and an explicit list of what is *not* guaranteed, in
+[docs/security-model.md](docs/security-model.md).
 
-- **Intelligent Tool Selection**: AI agents analyze targets and automatically select optimal tools
-- **Workflow Automation**: Executes comprehensive assessment workflows (bug bounty, pentest, API security, cloud security, red team, audit, mobile, supply chain, DevSecOps)
-- **Result Correlation**: Correlates findings across multiple tools to identify attack paths and vulnerabilities
-- **Smart Caching**: LRU cache with MD5-based deduplication reduces redundant scans
-- **Real-time Monitoring**: Process management tracks execution with streaming output
-- **Universal AI Integration**: Works with Claude, Grok, Gemini, GPT-4, Llama, Mistral via MCP protocol
+## CLI
 
-**Use Cases:**
-- Automated security assessments for targets
-- Continuous vulnerability scanning
-- Red team operations
-- Security compliance audits
-- Bug bounty automation
-- API security testing
-- Cloud infrastructure assessment
+```bash
+nexhunter doctor                              # environment health check
+nexhunter registry list --category recon      # browse the registry
+nexhunter registry check                      # which binaries are installed
+nexhunter registry info nmap_scan             # describe one tool
+nexhunter profiles                            # MCP profiles
+nexhunter engagement validate scope.json      # check a scope file before relying on it
+```
 
----
+`doctor` reports what is true about your environment and never changes it:
 
-## 🛠️ Available Tools (164)
+```
+NexHunter Doctor
 
-**Categories:**
-- **Reconnaissance** (11): nmap, masscan, rustscan, subfinder, amass, shodan, dns, whois
-- **Web Scanning** (13): nuclei, ffuf, gobuster, nikto, sqlmap, dalfox, burpsuite, zap
-- **Network** (15): aircrack, tcpdump, tshark, enum4linux, smbmap, ldapsearch
-- **Cryptography** (5): hashid, john, hashcat, openssl, testssl
-- **Forensics** (8): volatility, sleuthkit, autopsy, binwalk, exiftool
-- **Binary Analysis** (10): ghidra, radare2, objdump, readelf, checksec
-- **Cloud/DevOps** (11): kube-bench, trivy, docker, kubectl, aws-cli, gcloud
-- **Code Analysis** (5): semgrep, bandit, pylint, sonarqube, checkmarx
-- **Exploitation** (6): metasploit, empire, cobalt-strike, havoc, sliver
-- **Other** (80+): mobile, IDS/IPS, secrets, social engineering
+Core
+  [OK] Python 3.13.7
+  [OK] Data directory writable
+  [WARN] API token not configured
+  [OK] Server binds to loopback (127.0.0.1)
+  [OK] Process execution works
 
----
+Security
+  [OK] Raw command execution disabled (registry tools only)
+  [OK] No execution path uses a shell
+  [OK] Destructive tools disabled
 
-## 🔄 Workflows (9)
+Stable tools (8/24 installed)
+  [OK] nmap_scan (nmap 7.80)
+  [OK] curl_headers (curl 8.12.1)
+  [MISSING] 16 other stable tools not installed
+```
 
-| Workflow | Phases | Target |
-|----------|--------|--------|
-| Bug Bounty | 10 | Web applications |
-| Penetration Testing | 8 | Corporate networks |
-| API Security | 10 | REST/GraphQL APIs |
-| Cloud Security | 8 | AWS/Azure/GCP |
-| Red Team | 6 | Adversarial simulation |
-| Security Audit | 7 | Compliance |
-| Mobile Security | 8 | iOS/Android |
-| Supply Chain | 7 | Dependencies |
-| DevSecOps | 8 | CI/CD pipelines |
+NexHunter never installs binaries for you.
 
----
+## API
 
-## 🔐 Security
+```bash
+curl -H "Authorization: Bearer $NEXHUNTER_API_TOKEN" \
+     -X POST http://127.0.0.1:8888/api/command \
+     -d '{"tool": "nmap_scan", "params": {"target": "example.com", "ports": "80,443"}}'
+```
 
-✓ Authorization-first design  
-✓ XXE protection  
-✓ Safe command execution  
-✓ Input validation  
-✓ Rate limiting  
-✓ No hardcoded secrets  
+| Endpoint | Purpose |
+|---|---|
+| `GET /health` `/ready` `/version` | Public, no auth |
+| `GET /api/tools` | Registry, filterable by category, risk, maturity, availability |
+| `GET /api/tools/{name}` | One tool's metadata |
+| `GET /api/tools/status` | What is installed |
+| `POST /api/command` | Run a registered tool |
+| `GET /api/executions` | Execution history with status and policy decision |
+| `GET /api/executions/{id}/output` | Captured output, redacted |
+| `GET /api/executions/{id}/artifacts` | Artifacts in that execution's workspace |
+| `POST /api/executions/{id}/terminate` | Stop a running execution and its children |
+| `GET /api/findings` | Findings |
+| `GET /api/mcp/profiles` | Profile definitions |
 
----
+## Tool maturity
 
-## 📊 Stats
+Maturity is asserted per tool, never guessed.
 
-| Metric | Count |
-|--------|-------|
-| AI Agents | 18 |
-| Security Tools | 164 |
-| Workflows | 9 |
-| Assessment Phases | 73 |
-| MCP Tools | 184 |
-| Tests Passing | 77 |
+| Level | Meaning | Count |
+|---|---|---:|
+| **stable** | Command builder, availability check, tests | 24 |
+| **beta** | Registered and validated, less exercised | ~149 |
+
+Cloud, container, and orchestration access is exposed as fixed read-only
+actions (`aws_get_caller_identity`, `kubectl_get_pods`,
+`docker_list_containers`), never as a CLI passthrough.
+
+## Configuration
+
+```bash
+NEXHUNTER_API_TOKEN=              # required in production
+NEXHUNTER_ENFORCE=false           # true = require engagement scope
+NEXHUNTER_ENGAGEMENT=             # path to engagement JSON
+NEXHUNTER_BIND_HOST=127.0.0.1
+NEXHUNTER_DATA_DIR=
+NEXHUNTER_MCP_PROFILE=nexhunter-core
+NEXHUNTER_DESTRUCTIVE_TOOLS_ENABLED=false
+NEXHUNTER_INTRUSIVE_TOOLS_ENABLED=false
+```
+
+See [.env.example](.env.example). Enforcement is opt-in today because engagement
+management has no API yet; in the default mode authentication is honored and
+everything is audited, but scope is not applied.
+
+## Testing
+
+```bash
+pytest                                                    # 140 tests
+pytest --cov=nexhunter --cov-report=term-missing          # coverage
+```
+
+**Measured coverage: 63% overall.** Security-critical modules are higher:
+
+| Module | Coverage |
+|---|---:|
+| `security/authentication.py` | 100% |
+| `security/enforcement.py` | 100% |
+| `execution/models.py` | 100% |
+| `security/authorization.py` | 97% |
+| `security/audit.py` | 96% |
+| `execution/registry.py` | 95% |
+| `security/policy.py` | 94% |
+| `security/engagement.py` | 88% |
+| `security/redaction.py` | 87% |
+| `execution/service.py` | 83% |
+
+The gap is legacy agent and engine code. That number is measured, not claimed.
+
+## Limitations
+
+- Not a sandbox. Tools run with the server process's privileges.
+- Enforcement is opt-in until engagement management gets an API.
+- Scope is checked at request time; DNS can change afterwards.
+- Redaction is pattern-based and may miss unusual credential formats.
+- Findings are not yet normalized to a single schema.
+
+## Roadmap
+
+- Engagement management API, so enforcement can default to on
+- Typed parameter schemas (hostname, cidr, url, port) at the registry level
+- Finding normalization with SARIF export
+- Structured workflows with visible phases
+- Evidence-based target profiler
+
+## Documentation
+
+| Document | Contents |
+|---|---|
+| [docs/architecture.md](docs/architecture.md) | Layers, execution flow, state machine, diagrams |
+| [docs/security-model.md](docs/security-model.md) | Threat model, guarantees, non-guarantees |
+| [docs/mcp/](docs/mcp/) | MCP setup per client |
+| [docs/HEXSTRIKE_COMPARISON.md](docs/HEXSTRIKE_COMPARISON.md) | Comparison with HexStrike AI |
+
+## Contributing
+
+Adding a tool means adding a `ToolSpec` with a command builder that takes
+discrete values — never a command string. See
+[docs/architecture.md](docs/architecture.md). The regression suite in
+`tests/test_no_passthrough.py` will reject a passthrough.
 
 ---
 
 <div align="center">
-
-**NexHunter v1.0.0** — AI-Integrated Security Assessment
-
-[GitHub](https://github.com/Arseno25/nexhunter)
-
+<strong>NexHunter v2.0.0</strong> — Policy-Driven AI Security Orchestration<br>
+<a href="https://github.com/Arseno25/nexhunter">GitHub</a>
 </div>
