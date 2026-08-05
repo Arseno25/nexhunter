@@ -1063,19 +1063,59 @@ def selftest():
     print(f"nexhunter selftest OK ({len(AGENTS)} agents, {len(T.TOOLS)} tools)")
 
 
+class ColoredFormatter(logging.Formatter):
+    """Console formatter using ANSI colors based on log level."""
+
+    COLORS = {
+        "DEBUG": "\033[38;5;240m",      # Gray
+        "INFO": "\033[38;5;46m",        # Green
+        "WARNING": "\033[38;5;208m",     # Orange
+        "ERROR": "\033[38;5;196m",       # Red
+        "CRITICAL": "\033[48;5;196m\033[38;5;15m\033[1m" # Red bg, white bold text
+    }
+    RESET = "\033[0m"
+
+    def __init__(self, fmt=None, datefmt=None, style="%"):
+        super().__init__(fmt, datefmt, style)
+        self.use_color = "NO_COLOR" not in os.environ
+
+    def format(self, record):
+        level = record.levelname
+        color = self.COLORS.get(level, "") if self.use_color else ""
+        asctime = self.formatTime(record, self.datefmt)
+        name = record.name
+        message = record.getMessage()
+
+        # Format levelname with color
+        colored_level = f"{color}{level:<7}{self.RESET}" if color else f"{level:<7}"
+        if level in ("WARNING", "ERROR", "CRITICAL") and color:
+            message = f"{color}{message}{self.RESET}"
+
+        return f"{asctime} | {colored_level} | {name} | {message}"
+
+
 def _configure_logging(verbose: bool) -> None:
     """Send tool-usage and server logs to stdout, with a file fallback."""
-    fmt = "%(asctime)s | %(levelname)-7s | %(name)s | %(message)s"
-    handlers: list[logging.Handler] = [logging.StreamHandler(sys.stdout)]
+    datefmt = "%H:%M:%S"
+    plain_fmt = logging.Formatter(
+        "%(asctime)s | %(levelname)-7s | %(name)s | %(message)s",
+        datefmt=datefmt
+    )
+
+    stdout_handler = logging.StreamHandler(sys.stdout)
+    stdout_handler.setFormatter(ColoredFormatter(datefmt=datefmt))
+
+    handlers: list[logging.Handler] = [stdout_handler]
     try:
-        handlers.append(logging.FileHandler("nexhunter.log"))
+        file_handler = logging.FileHandler("nexhunter.log", encoding="utf-8")
+        file_handler.setFormatter(plain_fmt)
+        handlers.append(file_handler)
     except OSError:
         # Read-only or restricted cwd: stdout-only logging is enough.
         pass
+
     logging.basicConfig(
         level=logging.DEBUG if verbose else logging.INFO,
-        format=fmt,
-        datefmt="%H:%M:%S",
         handlers=handlers,
     )
 
