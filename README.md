@@ -8,7 +8,7 @@
     <strong>
         Advanced AI-Driven Security Assessment Platform
     </strong>
-</br>
+
 ![Version](https://img.shields.io/badge/version-1.0.0-blue) ![Python](https://img.shields.io/badge/python-3.8+-green) ![Tools](https://img.shields.io/badge/tools-164-blue) ![Tests](https://img.shields.io/badge/tests-100%25-green)
 </div>
 
