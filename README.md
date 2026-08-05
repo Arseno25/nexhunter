@@ -52,7 +52,6 @@ Add to your AI provider's config file (e.g., `~/.claude/config.json`):
         "--server",
         "http://127.0.0.1:8888"
       ],
-      "description": "NexHunter v1.0.0 - AI-Driven Security Assessment Platform. 164 tools, 18 agents, 9 workflows.",
       "timeout": 300,
       "alwaysAllow": []
     }
