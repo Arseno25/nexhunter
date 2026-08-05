@@ -33,6 +33,11 @@ SERVER = "http://127.0.0.1:8888"
 # Which slice of the registry this bridge exposes. Overridden by --profile or
 # NEXHUNTER_MCP_PROFILE before tools are registered.
 PROFILE_NAME = os.environ.get("NEXHUNTER_MCP_PROFILE", mcp_profiles.DEFAULT_PROFILE)
+# Optional cap on how many registry tools the bridge registers. AI clients
+# (Claude Desktop, Cursor, etc.) impose their own tool limits; rather than
+# bypassing them like some tools do, nexhunter lets the operator pick which
+# slice of the registry fits. Overridden by --tool-limit.
+TOOL_LIMIT = os.environ.get("NEXHUNTER_MCP_TOOL_LIMIT")
 
 mcp = FastMCP(
     "nexhunter",
@@ -230,15 +235,36 @@ def _register(name, spec):
     mcp.tool()(fn)
 
 
-def register_profile_tools(profile_name: str = None) -> int:
+def _select_for_limit(selected: dict, tool_limit: int) -> dict:
+    """Cull a profile's tools down to tool_limit, stable and installed first.
+
+    A dropped tool is not hidden from the server -- it just is not listed to
+    this client, which is the correct response to a client tool-count limit
+    rather than bypassing it.
+    """
+    if not tool_limit or len(selected) <= tool_limit:
+        return selected
+    ranked = sorted(
+        selected.values(),
+        key=lambda s: (s.maturity != "stable", not s.available, s.name),
+    )
+    return {s.name: s for s in ranked[:tool_limit]}
+
+
+def register_profile_tools(profile_name: str = None, tool_limit: int = None) -> int:
     """Register the registry tools this profile exposes. Returns the count.
 
     Generating from the registry keeps MCP and REST in step: a tool added,
     reclassified, or removed in one place shows up correctly in both, and
     there is no hand-maintained MCP file to drift.
+
+    tool_limit caps how many tools are registered. When the profile exposes
+    more than the limit, the tools most likely to matter are kept first:
+    stable maturity beats beta, installed binaries beat missing ones, and the
+    rest are dropped (see _select_for_limit).
     """
     profile = mcp_profiles.get_profile(profile_name or PROFILE_NAME)
-    selected = mcp_profiles.tools_for(profile)
+    selected = _select_for_limit(mcp_profiles.tools_for(profile), tool_limit)
     for name, spec in selected.items():
         _register(name, spec)
     return len(selected)
@@ -392,7 +418,7 @@ _REGISTERED_TOOL_COUNT = register_profile_tools()
 
 
 def main():
-    global SERVER, PROFILE_NAME
+    global SERVER, PROFILE_NAME, TOOL_LIMIT
     parser = argparse.ArgumentParser(description="nexhunter MCP bridge")
     parser.add_argument("--server", default="http://127.0.0.1:8888", help="nexhunter server URL")
     parser.add_argument(
@@ -400,6 +426,13 @@ def main():
         default="",
         help=f"tool profile to expose (default: {mcp_profiles.DEFAULT_PROFILE}). "
              f"One of: {', '.join(sorted(mcp_profiles.PROFILES))}",
+    )
+    parser.add_argument(
+        "--tool-limit",
+        type=int,
+        default=None,
+        help="cap registered registry tools at N (stable and installed first). "
+             "Respects a client's tool-count limit instead of bypassing it",
     )
     parser.add_argument("--list-profiles", action="store_true", help="print profiles and exit")
     parser.add_argument("--debug", action="store_true")
@@ -412,17 +445,23 @@ def main():
         return
 
     SERVER = args.server.rstrip("/")
+    if args.tool_limit is not None:
+        TOOL_LIMIT = str(args.tool_limit)
 
     # Re-register when a profile is requested that differs from the default
-    # applied at import time.
+    # applied at import time, or when a tool limit changes the payload.
+    limit = int(TOOL_LIMIT) if TOOL_LIMIT else None
     if args.profile and args.profile != PROFILE_NAME:
         PROFILE_NAME = args.profile
-        register_profile_tools(PROFILE_NAME)
+        register_profile_tools(PROFILE_NAME, limit)
+    elif limit:
+        register_profile_tools(PROFILE_NAME, limit)
 
     if args.debug:
         profile = mcp_profiles.get_profile(PROFILE_NAME)
+        exposed = len(mcp_profiles.tools_for(profile))
         print(f"[nexhunter-mcp] server={SERVER} profile={profile.name} "
-              f"tools={len(mcp_profiles.tools_for(profile))}", file=sys.stderr)
+              f"tools={exposed} limit={limit}", file=sys.stderr)
 
     mcp.run()
 

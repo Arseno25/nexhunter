@@ -1,0 +1,17 @@
+services:
+  nexhunter:
+    build: .
+    image: nexhunter:latest
+    container_name: nexhunter
+    ports:
+      - "8888:8888"
+    environment:
+      - NEXHUNTER_BIND_HOST=0.0.0.0
+      - NEXHUNTER_BIND_PORT=8888
+      - NEXHUNTER_EXTERNAL_BIND_ALLOWED=true
+    volumes:
+      - nexhunter_data:/app/nexhunter_data
+    restart: unless-stopped
+
+volumes:
+  nexhunter_data:

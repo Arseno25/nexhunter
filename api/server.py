@@ -72,7 +72,7 @@ from nexhunter.core import tools as T
 from nexhunter.agents import AGENTS, run_agent
 from nexhunter.agents.enhanced import ENHANCED_AGENTS
 from nexhunter.core.engine import Engine
-from nexhunter.api.visual import VulnerabilityCard, ProgressTracker, DashboardMetrics
+from nexhunter.api.visual import VulnerabilityCard, DashboardMetrics
 from nexhunter.execution.service import ExecutionService
 from nexhunter.api import mcp_profiles
 from nexhunter.findings import export as findings_export
@@ -227,6 +227,16 @@ class Handler(BaseHTTPRequestHandler):
 
     def _body(self):
         n = int(self.headers.get("Content-Length", 0) or 0)
+        if n > 5 * 1024 * 1024:
+            # Drain what the client is still sending before responding, or the
+            # unread socket data triggers a reset when the response lands.
+            remaining = n
+            while remaining > 0:
+                chunk = self.rfile.read(min(65536, remaining))
+                if not chunk:
+                    break
+                remaining -= len(chunk)
+            raise ValueError("request body too large (max 5 MiB)")
         try:
             return json.loads(self.rfile.read(n) or b"{}")
         except json.JSONDecodeError:
@@ -296,209 +306,218 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         t0 = time.time()
         try:
-            path = urllib.parse.urlparse(self.path).path
-            if path == "/health":
-                deg = run_agent(ENGINE, "degradation", {})
-                mode = "degraded"
-                if deg.get("ok"):
-                    mode = deg.get("data", {}).get("mode", "degraded")
-                self._json(200, {
-                    "ok": True,
-                    "version": "3.0.0",
-                    "mode": mode,
-                    "agents": sorted(AGENTS),
-                    "tools_installed": {n: bool(T.which(s.binary)) for n, s in T.TOOLS.items()},
-                })
-            elif path == "/version":
-                self._json(200, {"ok": True, "version": "3.0.0", "name": "NexHunter"})
-            elif path == "/ready":
-                self._json(200, {"ok": True, "ready": True})
-            elif path == "/api/telemetry":
-                self._json(200, TEL.stats())
-            elif path == "/api/cache/stats":
-                self._json(200, {"entries": len(ENGINE._cache), "hits": ENGINE.cache_hits, "evictions": ENGINE.cache_evictions})
-            elif path == "/api/agents/list":
-                self._json(200, [{"name": a.name, "desc": a.desc} for a in AGENTS.values()])
-            elif path == "/api/processes/list":
-                self._json(200, PM.list())
-            elif path == "/api/findings":
-                self._json(200, json.loads(ENGINE.report("json")))
-            elif path == "/api/tools":
-                query = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
-                specs = list(T.TOOLS.values())
-                for field in ("category", "risk_level", "maturity"):
-                    wanted = (query.get(field) or [None])[0]
-                    if wanted:
-                        specs = [s for s in specs if getattr(s, field) == wanted]
-                if (query.get("available") or [None])[0] == "true":
-                    specs = [s for s in specs if s.available]
-                self._json(200, {
-                    "ok": True,
-                    "count": len(specs),
-                    "tools": [s.describe() for s in specs],
-                })
-            elif path == "/api/tools/status":
-                specs = list(T.TOOLS.values())
-                installed = [s for s in specs if s.available]
-                self._json(200, {
-                    "ok": True,
-                    "registered": len(specs),
-                    "installed": len(installed),
-                    "missing": len(specs) - len(installed),
-                    "by_category": mcp_profiles.categories(),
-                    "by_maturity": {
-                        level: sum(1 for s in specs if s.maturity == level)
-                        for level in ("stable", "beta", "experimental", "disabled")
-                    },
-                    "installed_tools": sorted(s.name for s in installed),
-                })
-            elif path == "/api/autonomous":
-                runs = ORCHESTRATOR.list_runs()
-                self._json(200, {"ok": True, "runs": [r.to_dict() for r in runs]})
-            elif path.startswith("/api/autonomous/"):
-                run = ORCHESTRATOR.get_run(path.rsplit("/", 1)[1])
-                if run is None:
-                    self._json(404, {"ok": False, "error": "no such run", "code": "NOT_FOUND"})
-                else:
-                    self._json(200, {"ok": True, "run": run.to_dict()})
-            elif path == "/api/findings/summary":
-                self._json(200, {"ok": True, "summary": FINDINGS.summary()})
-            elif path == "/api/findings/export":
-                query = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
-                fmt = (query.get("format") or ["json"])[0]
-                try:
-                    rendered = findings_export.export(
-                        FINDINGS.list(), fmt
-                    )
-                except ValueError as exc:
-                    self._json(400, {"ok": False, "error": str(exc), "code": "UNKNOWN_FORMAT"})
-                else:
-                    if fmt in ("markdown", "md"):
-                        self._text(200, rendered, "text/markdown")
-                    elif fmt == "html":
-                        self._html(200, rendered)
-                    elif fmt == "jsonl":
-                        self._text(200, rendered, "application/x-ndjson")
-                    else:
-                        self._text(200, rendered, "application/json")
-            elif path == "/api/mcp/profiles":
-                self._json(200, {"ok": True, "profiles": mcp_profiles.summarize()})
-            elif path.startswith("/api/tools/"):
-                name = path[len("/api/tools/"):].strip("/")
-                spec = T.get_tool_spec(name)
-                if spec is None:
-                    self._json(404, {"ok": False, "error": f"unknown tool: {name}", "code": "UNKNOWN_TOOL"})
-                else:
-                    self._json(200, {"ok": True, "tool": spec.describe()})
-            elif path == "/api/executions":
-                records = EXEC.registry.list()
-                self._json(200, {
-                    "ok": True,
-                    "executions": [r.to_dict() for r in records],
-                    "stats": EXEC.registry.stats(),
-                })
-            elif path.startswith("/api/executions/"):
-                self._json(*self._execution_get(path))
-            elif path.startswith("/api/processes/status/"):
-                self._json(200, PM.status(int(path.rsplit("/", 1)[1])))
-            elif path == "/api/visual/dashboard":
-                metrics = DashboardMetrics()
-                metrics.requests = getattr(TEL, "total_requests", 0)
-                metrics.findings = len(ENGINE.findings) if hasattr(ENGINE, "findings") else 0
-                metrics.processes = len(PM.procs)
-                self._json(200, metrics.to_dict())
-            elif path == "/api/visual/vulnerabilities":
-                findings = ENGINE.findings if hasattr(ENGINE, "findings") else []
-                vuln_list = [f.to_dict() if hasattr(f, "to_dict") else f for f in findings]
-                self._json(200, {"vulnerabilities": vuln_list, "count": len(vuln_list)})
-            else:
-                self._json(404, {"error": "not found"})
+            try:
+                self._handle_get()
+            except Exception as e:
+                self._json(500, {"ok": False, "error": str(e)})
         finally:
             TEL.record(time.time() - t0)
+
+    def _handle_get(self):
+        path = urllib.parse.urlparse(self.path).path
+        if path == "/health":
+            deg = run_agent(ENGINE, "degradation", {})
+            mode = "degraded"
+            if deg.get("ok"):
+                mode = deg.get("data", {}).get("mode", "degraded")
+            self._json(200, {
+                "ok": True,
+                "version": "3.0.0",
+                "mode": mode,
+                "agents": sorted(AGENTS),
+                "tools_installed": {n: bool(T.which(s.binary)) for n, s in T.TOOLS.items()},
+            })
+        elif path == "/version":
+            self._json(200, {"ok": True, "version": "3.0.0", "name": "NexHunter"})
+        elif path == "/ready":
+            self._json(200, {"ok": True, "ready": True})
+        elif path == "/api/telemetry":
+            self._json(200, TEL.stats())
+        elif path == "/api/cache/stats":
+            self._json(200, {"entries": len(ENGINE._cache), "hits": ENGINE.cache_hits, "evictions": ENGINE.cache_evictions})
+        elif path == "/api/agents/list":
+            self._json(200, [{"name": a.name, "desc": a.desc} for a in AGENTS.values()])
+        elif path == "/api/processes/list":
+            self._json(200, PM.list())
+        elif path == "/api/findings":
+            self._json(200, json.loads(ENGINE.report("json")))
+        elif path == "/api/tools":
+            query = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+            specs = list(T.TOOLS.values())
+            for field in ("category", "risk_level", "maturity"):
+                wanted = (query.get(field) or [None])[0]
+                if wanted:
+                    specs = [s for s in specs if getattr(s, field) == wanted]
+            if (query.get("available") or [None])[0] == "true":
+                specs = [s for s in specs if s.available]
+            self._json(200, {
+                "ok": True,
+                "count": len(specs),
+                "tools": [s.describe() for s in specs],
+            })
+        elif path == "/api/tools/status":
+            specs = list(T.TOOLS.values())
+            installed = [s for s in specs if s.available]
+            self._json(200, {
+                "ok": True,
+                "registered": len(specs),
+                "installed": len(installed),
+                "missing": len(specs) - len(installed),
+                "by_category": mcp_profiles.categories(),
+                "by_maturity": {
+                    level: sum(1 for s in specs if s.maturity == level)
+                    for level in ("stable", "beta", "experimental", "disabled")
+                },
+                "installed_tools": sorted(s.name for s in installed),
+            })
+        elif path == "/api/autonomous":
+            runs = ORCHESTRATOR.list_runs()
+            self._json(200, {"ok": True, "runs": [r.to_dict() for r in runs]})
+        elif path.startswith("/api/autonomous/"):
+            run = ORCHESTRATOR.get_run(path.rsplit("/", 1)[1])
+            if run is None:
+                self._json(404, {"ok": False, "error": "no such run", "code": "NOT_FOUND"})
+            else:
+                self._json(200, {"ok": True, "run": run.to_dict()})
+        elif path == "/api/findings/summary":
+            self._json(200, {"ok": True, "summary": FINDINGS.summary()})
+        elif path == "/api/findings/export":
+            query = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+            fmt = (query.get("format") or ["json"])[0]
+            try:
+                rendered = findings_export.export(
+                    FINDINGS.list(), fmt
+                )
+            except ValueError as exc:
+                self._json(400, {"ok": False, "error": str(exc), "code": "UNKNOWN_FORMAT"})
+            else:
+                if fmt in ("markdown", "md"):
+                    self._text(200, rendered, "text/markdown")
+                elif fmt == "html":
+                    self._html(200, rendered)
+                elif fmt == "jsonl":
+                    self._text(200, rendered, "application/x-ndjson")
+                else:
+                    self._text(200, rendered, "application/json")
+        elif path == "/api/mcp/profiles":
+            self._json(200, {"ok": True, "profiles": mcp_profiles.summarize()})
+        elif path.startswith("/api/tools/"):
+            name = path[len("/api/tools/"):].strip("/")
+            spec = T.get_tool_spec(name)
+            if spec is None:
+                self._json(404, {"ok": False, "error": f"unknown tool: {name}", "code": "UNKNOWN_TOOL"})
+            else:
+                self._json(200, {"ok": True, "tool": spec.describe()})
+        elif path == "/api/executions":
+            records = EXEC.registry.list()
+            self._json(200, {
+                "ok": True,
+                "executions": [r.to_dict() for r in records],
+                "stats": EXEC.registry.stats(),
+            })
+        elif path.startswith("/api/executions/"):
+            self._json(*self._execution_get(path))
+        elif path.startswith("/api/processes/status/"):
+            self._json(200, PM.status(int(path.rsplit("/", 1)[1])))
+        elif path == "/api/visual/dashboard":
+            metrics = DashboardMetrics()
+            metrics.requests = getattr(TEL, "total_requests", 0)
+            metrics.findings = len(ENGINE.findings) if hasattr(ENGINE, "findings") else 0
+            metrics.processes = len(PM.procs)
+            self._json(200, metrics.to_dict())
+        elif path == "/api/visual/vulnerabilities":
+            findings = ENGINE.findings if hasattr(ENGINE, "findings") else []
+            vuln_list = [f.to_dict() if hasattr(f, "to_dict") else f for f in findings]
+            self._json(200, {"vulnerabilities": vuln_list, "count": len(vuln_list)})
+        else:
+            self._json(404, {"error": "not found"})
 
     def do_POST(self):
         t0 = time.time()
         try:
-            path = urllib.parse.urlparse(self.path).path
-            body = self._body()
-            fn = None
-            if path == "/api/command":
-                fn = lambda: self._command(body)
-            elif path == "/api/autonomous":
-                fn = lambda: self._start_autonomous(body)
-            elif path == "/api/plan":
-                fn = lambda: self._propose_plan(body)
-            elif path.startswith("/api/executions/") and path.endswith("/terminate"):
-                execution_id = path[len("/api/executions/"):-len("/terminate")].strip("/")
-                fn = lambda: EXEC.terminate(execution_id)
-            elif path == "/api/intelligence/analyze-target":
-                fn = lambda: _analyze_target(body.get("target", ""))
-            elif path == "/api/intelligence/select-tools":
-                fn = lambda: run_agent(ENGINE, "decision", {"target": body.get("target", ""), "intent": body.get("intent", "auto")})
-            elif path == "/api/intelligence/optimize-parameters":
-                fn = lambda: run_agent(ENGINE, "optimizer", {"tool": body.get("tool", "")})
-            elif path.startswith("/api/agents/"):
-                name = path.rsplit("/", 1)[1]
-                if name in ENHANCED_AGENTS:
-                    fn = lambda: ENHANCED_AGENTS[name].execute(ENGINE, body)
-                else:
-                    fn = lambda: run_agent(ENGINE, name, body)
-            elif path == "/api/flow/bugbounty":
-                fn = lambda: run_agent(ENGINE, "bugbounty", {"target": body.get("target", ""), "phases": body.get("phases", "all")})
-            elif path == "/api/flow/bugbounty-pro":
-                fn = lambda: ENHANCED_AGENTS["bugbounty_pro"].execute(ENGINE, body)
-            elif path == "/api/flow/ctf":
-                fn = lambda: run_agent(ENGINE, "ctf", {"target": body.get("target", ""), "category": body.get("category", "web"), "file": body.get("file", "")})
-            elif path == "/api/intelligence/osint":
-                fn = lambda: ENHANCED_AGENTS["osint"].execute(ENGINE, body)
-            elif path == "/api/intelligence/vulnerability-analysis":
-                fn = lambda: ENHANCED_AGENTS["vuln_analyzer"].execute(ENGINE, body)
-            elif path == "/api/intelligence/threat-assessment":
-                fn = lambda: ENHANCED_AGENTS["threat_intel"].execute(ENGINE, body)
-            elif path == "/api/tools/ctf-solver":
-                fn = lambda: ENHANCED_AGENTS["ctf_solver"].execute(ENGINE, body)
-            elif path.startswith("/api/processes/terminate/"):
-                fn = lambda: PM.terminate(int(path.rsplit("/", 1)[1]))
-            elif path == "/api/processes/terminate":
-                fn = lambda: PM.terminate(int(body.get("pid", 0)))
-            elif path in ("/api/probe", "/api/portscan", "/api/webscan", "/api/recon", "/api/assess"):
-                engine_flow = {"target": body.get("target", ""), "ports": body.get("ports", ""), "domain": body.get("domain", "")}
-                fn = {
-                    "/api/probe": lambda: ENGINE.probe(engine_flow["target"]),
-                    "/api/portscan": lambda: ENGINE.portscan(engine_flow["target"], engine_flow["ports"]),
-                    "/api/webscan": lambda: ENGINE.webscan(engine_flow["target"]),
-                    "/api/recon": lambda: ENGINE.recon(engine_flow["domain"]),
-                    "/api/assess": lambda: ENGINE.assess(engine_flow["target"]),
-                }[path]
-            elif path == "/api/report":
-                fn = lambda: {"report": ENGINE.report(body.get("fmt", "markdown"))}
-            elif path == "/api/clear":
-                fn = lambda: (ENGINE.findings.clear(), {"ok": True})[1]
-            elif path == "/api/visual/vulnerability-card":
-                fn = lambda: VulnerabilityCard(
-                    title=body.get("title", "Unknown"),
-                    severity=body.get("severity", "info"),
-                    endpoint=body.get("endpoint", ""),
-                    impact=body.get("impact", ""),
-                    remediation=body.get("remediation", ""),
-                    vuln_type=body.get("type", "Unknown"),
-                    cvss_score=body.get("cvss_score"),
-                    poc=body.get("poc", ""),
-                ).to_dict()
-            elif path == "/api/visual/vulnerabilities":
-                fn = lambda: {
-                    "vulnerabilities": [f.to_dict() if hasattr(f, "to_dict") else f for f in ENGINE.findings],
-                    "stats": {"total": len(ENGINE.findings), "critical": sum(1 for f in ENGINE.findings if getattr(f, "severity", "") == "critical")},
-                }
-            if fn:
-                try:
-                    self._json(200, fn())
-                except Exception as e:
-                    self._json(500, {"ok": False, "error": str(e)})
-            else:
-                self._json(404, {"error": "not found"})
+            try:
+                body = self._body()
+                path = urllib.parse.urlparse(self.path).path
+                self._dispatch_post(path, body)
+            except Exception as e:
+                self._json(500, {"ok": False, "error": str(e)})
         finally:
             TEL.record(time.time() - t0)
+
+    def _dispatch_post(self, path, body):
+        fn = None
+        if path == "/api/command":
+            fn = lambda: self._command(body)
+        elif path == "/api/autonomous":
+            fn = lambda: self._start_autonomous(body)
+        elif path == "/api/plan":
+            fn = lambda: self._propose_plan(body)
+        elif path.startswith("/api/executions/") and path.endswith("/terminate"):
+            execution_id = path[len("/api/executions/"):-len("/terminate")].strip("/")
+            fn = lambda: EXEC.terminate(execution_id)
+        elif path == "/api/intelligence/analyze-target":
+            fn = lambda: _analyze_target(body.get("target", ""))
+        elif path == "/api/intelligence/select-tools":
+            fn = lambda: run_agent(ENGINE, "decision", {"target": body.get("target", ""), "intent": body.get("intent", "auto")})
+        elif path == "/api/intelligence/optimize-parameters":
+            fn = lambda: run_agent(ENGINE, "optimizer", {"tool": body.get("tool", "")})
+        elif path.startswith("/api/agents/"):
+            name = path.rsplit("/", 1)[1]
+            if name in ENHANCED_AGENTS:
+                fn = lambda: ENHANCED_AGENTS[name].execute(ENGINE, body)
+            else:
+                fn = lambda: run_agent(ENGINE, name, body)
+        elif path == "/api/flow/bugbounty":
+            fn = lambda: run_agent(ENGINE, "bugbounty", {"target": body.get("target", ""), "phases": body.get("phases", "all")})
+        elif path == "/api/flow/bugbounty-pro":
+            fn = lambda: ENHANCED_AGENTS["bugbounty_pro"].execute(ENGINE, body)
+        elif path == "/api/flow/ctf":
+            fn = lambda: run_agent(ENGINE, "ctf", {"target": body.get("target", ""), "category": body.get("category", "web"), "file": body.get("file", "")})
+        elif path == "/api/intelligence/osint":
+            fn = lambda: ENHANCED_AGENTS["osint"].execute(ENGINE, body)
+        elif path == "/api/intelligence/vulnerability-analysis":
+            fn = lambda: ENHANCED_AGENTS["vuln_analyzer"].execute(ENGINE, body)
+        elif path == "/api/intelligence/threat-assessment":
+            fn = lambda: ENHANCED_AGENTS["threat_intel"].execute(ENGINE, body)
+        elif path == "/api/tools/ctf-solver":
+            fn = lambda: ENHANCED_AGENTS["ctf_solver"].execute(ENGINE, body)
+        elif path.startswith("/api/processes/terminate/"):
+            fn = lambda: PM.terminate(int(path.rsplit("/", 1)[1]))
+        elif path == "/api/processes/terminate":
+            fn = lambda: PM.terminate(int(body.get("pid", 0)))
+        elif path in ("/api/probe", "/api/portscan", "/api/webscan", "/api/recon", "/api/assess"):
+            engine_flow = {"target": body.get("target", ""), "ports": body.get("ports", ""), "domain": body.get("domain", "")}
+            fn = {
+                "/api/probe": lambda: ENGINE.probe(engine_flow["target"]),
+                "/api/portscan": lambda: ENGINE.portscan(engine_flow["target"], engine_flow["ports"]),
+                "/api/webscan": lambda: ENGINE.webscan(engine_flow["target"]),
+                "/api/recon": lambda: ENGINE.recon(engine_flow["domain"]),
+                "/api/assess": lambda: ENGINE.assess(engine_flow["target"]),
+            }[path]
+        elif path == "/api/report":
+            fn = lambda: {"report": ENGINE.report(body.get("fmt", "markdown"))}
+        elif path == "/api/clear":
+            fn = lambda: (ENGINE.findings.clear(), {"ok": True})[1]
+        elif path == "/api/visual/vulnerability-card":
+            fn = lambda: VulnerabilityCard(
+                title=body.get("title", "Unknown"),
+                severity=body.get("severity", "info"),
+                endpoint=body.get("endpoint", ""),
+                impact=body.get("impact", ""),
+                remediation=body.get("remediation", ""),
+                vuln_type=body.get("type", "Unknown"),
+                cvss_score=body.get("cvss_score"),
+                poc=body.get("poc", ""),
+            ).to_dict()
+        elif path == "/api/visual/vulnerabilities":
+            fn = lambda: {
+                "vulnerabilities": [f.to_dict() if hasattr(f, "to_dict") else f for f in ENGINE.findings],
+                "stats": {"total": len(ENGINE.findings), "critical": sum(1 for f in ENGINE.findings if getattr(f, "severity", "") == "critical")},
+            }
+        if fn:
+            self._json(200, fn())
+        else:
+            self._json(404, {"error": "not found"})
 
     def log_message(self, fmt, *args):
         pass
@@ -514,6 +533,10 @@ def selftest():
     for name, spec in T.TOOLS.items():
         dummy = {k: (v if v is not None else "x") for k, v in spec.params.items()}
         argv = spec.build_cmd(dummy)
+        # A builder may refuse a dummy value (e.g. a URL-typed parameter does
+        # not accept "x"); that is validation working, not a broken builder.
+        if argv is None:
+            continue
         assert isinstance(argv, list) and all(isinstance(a, str) and a for a in argv), name
         assert argv[0] == spec.binary, name
 

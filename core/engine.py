@@ -5,14 +5,14 @@ import json
 import re
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from collections import OrderedDict
 from dataclasses import asdict, dataclass, field
-from typing import Optional, Dict, List, Any
+from typing import Any
 
 from nexhunter.core import tools as T
 from nexhunter.core.config import (
     CACHE_MAX,
     MAX_PARALLEL_WORKERS,
-    MAX_TOOL_OUTPUT_PREVIEW,
     FINDING_DEDUP_ENABLED,
 )
 
@@ -52,7 +52,7 @@ class WorkflowContext:
         """Record phase result."""
         self.phases[name] = {"result": result, "timestamp": time.time()}
 
-    def get_phase(self, name: str) -> Optional[Any]:
+    def get_phase(self, name: str) -> Any | None:
         """Retrieve phase result."""
         return self.phases.get(name, {}).get("result")
 
@@ -65,15 +65,16 @@ class Engine:
     """Orchestration engine with caching, parallel exec, finding tracking."""
 
     def __init__(self):
-        self.findings: List[Finding] = []
+        self.findings: list[Finding] = []
         self._finding_sigs = set()
-        self._cache: Dict[str, dict] = {}
-        self._cache_order: List[str] = []
+        # LRU cache: OrderedDict; hits move the entry to the end, eviction
+        # drops the least-recently-used entry from the front.
+        self._cache: OrderedDict[str, dict] = OrderedDict()
         self.cache_hits = 0
         self.cache_evictions = 0
-        self._tool_stats: Dict[str, List[float]] = {}
-        self._host_requests: Dict[str, List[float]] = {}
-        self.workflow_contexts: Dict[str, WorkflowContext] = {}
+        self._tool_stats: dict[str, list[float]] = {}
+        self._host_requests: dict[str, list[float]] = {}
+        self.workflow_contexts: dict[str, WorkflowContext] = {}
 
     def _track(self, target: str):
         """Track request rate per host."""
@@ -82,17 +83,17 @@ class Engine:
             self._host_requests.setdefault(host, []).append(time.time())
 
     def _cached_run(self, cmd: list, timeout: int) -> dict:
-        """Run command with caching."""
+        """Run command with an LRU cache."""
         key = " ".join(cmd)
         if key in self._cache:
+            self._cache.move_to_end(key)
             self.cache_hits += 1
             return dict(self._cache[key], cached=True)
         res = T.run(cmd, timeout)
         res["cached"] = False
         self._cache[key] = res
-        self._cache_order.append(key)
         if len(self._cache) > CACHE_MAX:
-            self._cache.pop(self._cache_order.pop(0), None)
+            self._cache.popitem(last=False)
             self.cache_evictions += 1
         return res
 
@@ -117,7 +118,7 @@ class Engine:
         self._tool_stats[name] = self._tool_stats[name][-20:]
         return res
 
-    def parallel(self, jobs: Dict[str, callable]) -> dict:
+    def parallel(self, jobs: dict[str, callable]) -> dict:
         """Execute multiple functions in parallel."""
         out = {}
         max_workers = min(MAX_PARALLEL_WORKERS, len(jobs) or 1)

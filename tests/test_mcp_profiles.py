@@ -169,6 +169,30 @@ def test_mcp_exposes_resources():
     print(f"  [OK] {len(uris)} resources registered")
 
 
+def test_tool_limit_respects_client_cap():
+    """A tool limit culls the payload instead of bypassing the client's cap."""
+    print("[TEST] Tool limit culls the payload...")
+    from nexhunter.api import mcp as bridge
+
+    full = P.tools_for(P.get_profile("nexhunter-full"))
+    assert len(full) > 50, "the full profile must exceed any sane limit for this test"
+
+    picked = bridge._select_for_limit(full, 30)
+    assert len(picked) == 30, f"expected 30 tools, got {len(picked)}"
+
+    # A profile under the limit is returned untouched.
+    assert bridge._select_for_limit(full, None) == full
+    assert bridge._select_for_limit(full, len(full)) == full
+
+    # Stability is preferred: a stable tool must survive a cull that removes
+    # experimental ones.
+    stable_names = [n for n, s in full.items() if s.maturity == "stable"]
+    experimental_names = [n for n, s in full.items() if s.maturity == "experimental"]
+    if stable_names and experimental_names:
+        assert stable_names[0] in picked, "stable tool should outrank experimental"
+    print(f"  [OK] limit 30 -> {len(picked)} tools, stable-first")
+
+
 if __name__ == "__main__":
     print("\n=== MCP Profile Tests ===\n")
     test_all_expected_profiles_exist()

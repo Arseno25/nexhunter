@@ -883,7 +883,7 @@ _tool_specs = {
         params={}, timeout=120,
         builder=lambda p: ["winPEAS"]),
     "linpeas": ToolSpec(
-        name="linpeas", binary="linpeas.sh", description="Linux privilege escalation tool",
+        name="linpeas", binary="bash", description="Linux privilege escalation tool (linpeas.sh)",
         params={}, timeout=120,
         builder=lambda p: ["bash", "linpeas.sh"]),
     "pspy": ToolSpec(
@@ -939,7 +939,7 @@ _tool_specs = {
         params={"image": None}, timeout=600,
         builder=lambda p: ["autopsy", p["image"]]),
     "regripper": ToolSpec(
-        name="regripper", binary="rip", description="Windows registry extraction",
+        name="regripper", binary="rip.pl", description="Windows registry extraction",
         params={"hive": None}, timeout=60,
         builder=lambda p: ["rip.pl", "-r", p["hive"]]),
 
@@ -991,9 +991,9 @@ _tool_specs = {
         params={"email": None}, timeout=60, risk_level="passive",
         builder=lambda p: ["holehe", p["email"]]),
     "theharvester_recon": ToolSpec(
-        name="theharvester_recon", binary="theharvester", description="OSINT email and host harvesting",
+        name="theharvester_recon", binary="theHarvester", description="OSINT email and host harvesting",
         params={"domain": None, "limit": "100"}, timeout=120, risk_level="passive",
-        builder=lambda p: ["theHarvester", "-d", p["domain"], "-b", "all", "-l", p["limit"]]),
+        builder=lambda p: ["theHarvester", "-d", p["domain"], "-b", "all", "-l", str(p["limit"])]),
 
     # ==================== WIRELESS ====================
     "wifite": ToolSpec(
@@ -1007,7 +1007,7 @@ _tool_specs = {
 
     # ==================== PRIVILEGE ESCALATION ====================
     "linux_exploit_suggester": ToolSpec(
-        name="linux_exploit_suggester", binary="linux-exploit-suggester.sh",
+        name="linux_exploit_suggester", binary="bash",
         description="Suggest local privilege escalation exploits for the current host",
         params={}, timeout=60, risk_level="passive",
         builder=lambda p: ["bash", "linux-exploit-suggester.sh"]),
@@ -1057,7 +1057,7 @@ _tool_specs = {
         params={"capture_file": ""}, timeout=600, risk_level="passive",
         builder=lambda p: ["kismet", "--no-gpsd", "--no-server"] + (["--logfile", p["capture_file"]] if p["capture_file"] else [])),
     "airgeddon": ToolSpec(
-        name="airgeddon", binary="airgeddon.sh", description="Multipurpose wireless attack framework",
+        name="airgeddon", binary="bash", description="Multipurpose wireless attack framework (airgeddon.sh)",
         params={"interface": None}, timeout=600, risk_level="intrusive",
         builder=lambda p: ["bash", "airgeddon.sh", "-i", p["interface"]]),
     "bettercap": ToolSpec(
@@ -1099,7 +1099,7 @@ _tool_specs = {
     "maigret": ToolSpec(
         name="maigret", binary="maigret", description="Username footprinting across hundreds of sites",
         params={"username": None, "limit": "100"}, timeout=300, risk_level="passive",
-        builder=lambda p: ["maigret", "--no-recursion", "--limit", p["limit"], p["username"]]),
+        builder=lambda p: ["maigret", "--no-recursion", "--limit", str(p["limit"]), p["username"]]),
     "phoneinfoga": ToolSpec(
         name="phoneinfoga", binary="phoneinfoga", description="Phone number OSINT and carrier intelligence",
         params={"number": None}, timeout=60, risk_level="passive",
@@ -1107,7 +1107,7 @@ _tool_specs = {
 
     # ==================== PAYLOADS ====================
     "hoaxshell": ToolSpec(
-        name="hoaxshell", binary="hoaxshell.py", description="Generate a PowerShell reverse shell payload",
+        name="hoaxshell", binary="python3", description="Generate a PowerShell reverse shell payload (hoaxshell.py)",
         params={"lhost": "127.0.0.1", "lport": "4444", "output": "/tmp/shell.ps1"}, timeout=60, risk_level="intrusive",
         builder=lambda p: ["python3", "hoaxshell.py", "-s", p["lhost"], "-p", p["lport"], "-o", p["output"]]),
 
@@ -1247,7 +1247,8 @@ _tool_specs = {
     "evil_winrm": ToolSpec(
         name="evil_winrm", binary="evil-winrm", description="Windows Remote Management shell",
         params={"host": None, "user": None, "password": ""}, timeout=600,
-        builder=lambda p: ["evil-winrm", "-i", p["host"], "-u", p["user"], "-p", p["password"]]),
+        builder=lambda p: ["evil-winrm", "-i", p["host"], "-u", p["user"]]
+        + (["-p", p["password"]] if p["password"] else [])),
 
     # ==================== OSINT ====================
     "theharvester": ToolSpec(

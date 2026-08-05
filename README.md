@@ -57,12 +57,20 @@ Full walkthrough with a call trace, sequence diagram, and the can/cannot table:
 
 ## Quick start
 
+One-command setup (Linux/macOS/WSL or Windows PowerShell):
+
 ```bash
 git clone https://github.com/Arseno25/nexhunter.git
 cd nexhunter
-pip install -e ".[mcp]"
+./setup.sh          # Windows: .\setup.ps1
+```
 
-nexhunter doctor          # check this installation can actually run
+Or manually:
+
+```bash
+python -m venv .venv
+.venv/bin/pip install -e ".[mcp,browser]"
+.venv/bin/python -m nexhunter.cli.client doctor   # check the installation
 ```
 
 Then start the server and, optionally, the MCP bridge:
@@ -70,6 +78,12 @@ Then start the server and, optionally, the MCP bridge:
 ```bash
 python -m nexhunter.api.server --port 8888
 python -m nexhunter.api.mcp --server http://127.0.0.1:8888 --profile nexhunter-recon
+```
+
+Or run the server in Docker:
+
+```bash
+docker compose up --build        # http://localhost:8888
 ```
 
 ## MCP setup
@@ -126,6 +140,21 @@ No profile lists a destructive tool. Without `--profile`, the bridge exposes
 `nexhunter-full` (250 tools); pass a profile to narrow the payload. Profiles
 are a usability control, not a security control — every execution goes through
 the same typed validation regardless of which profile surfaced the tool.
+
+### Tool limits
+
+AI clients (Claude Desktop, Cursor, etc.) cap how many MCP tools they load.
+Rather than bypassing that limit, nexhunter lets you pick which slice of the
+registry fits your client — `--tool-limit N` keeps the most useful tools
+(stable maturity first, installed binaries second) and drops the rest:
+
+```bash
+python -m nexhunter.api.mcp --profile nexhunter-full --tool-limit 100
+```
+
+The same cap is available via `NEXHUNTER_MCP_TOOL_LIMIT`. A tool that is not
+listed to a client is still callable from the server; it just does not
+consume the client's tool budget.
 
 ## Autonomous assessment
 

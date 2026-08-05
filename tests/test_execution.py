@@ -371,6 +371,46 @@ def test_registry_cancel_flags():
     print("  [OK] Cancellation flags behave")
 
 
+def test_engine_cache_is_lru(base: Path):
+    """Cache evicts the least-recently-used entry, not the oldest."""
+    print("[TEST] Engine cache is LRU...")
+    from nexhunter.core import engine as engine_module
+    from nexhunter.core.engine import Engine
+
+    engine = Engine()
+    cmd = lambda n: [PYTHON, "-c", f"print({n})"]
+    old_max = engine_module.CACHE_MAX
+    engine_module.CACHE_MAX = 8
+    try:
+        # Fill past the cap so entries fall out.
+        for n in range(10):
+            engine._cached_run(cmd(n), 5)
+        # The first entries are gone; the newest are present.
+        assert len(engine._cache) <= 8
+        assert " ".join(cmd(9)) in engine._cache
+        assert " ".join(cmd(0)) not in engine._cache
+
+        # Touch an entry, then insert enough to evict again: the *touched*
+        # entry must survive because it is now the most recently used.
+        touch = " ".join(cmd(5))
+        assert touch in engine._cache, "entry should still be cached"
+        engine._cache.move_to_end(touch)
+        for n in range(10, 14):
+            engine._cached_run(cmd(n), 5)
+        assert touch in engine._cache, "recently used entry must survive eviction"
+
+        # A cache hit also refreshes recency (via move_to_end in _cached_run).
+        hit = " ".join(cmd(12))
+        assert hit in engine._cache
+        for n in range(14, 18):
+            engine._cached_run(cmd(n), 5)
+        assert hit in engine._cache, "a cache hit must refresh recency"
+    finally:
+        engine_module.CACHE_MAX = old_max
+
+    print("  [OK] LRU eviction order respected")
+
+
 if __name__ == "__main__":
     print("\n=== Execution Layer Tests ===\n")
     with tempfile.TemporaryDirectory() as tmp:
@@ -392,4 +432,5 @@ if __name__ == "__main__":
         test_registry_eviction_keeps_running_work()
         test_registry_concurrent_access()
         test_registry_cancel_flags()
+        test_engine_cache_is_lru(base)
     print("\n=== All Execution Layer Tests Passed ===\n")

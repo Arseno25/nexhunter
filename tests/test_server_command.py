@@ -72,6 +72,41 @@ def test_health_public(base_url):
     print("  [OK] Health public")
 
 
+def test_oversized_body_rejected(base_url):
+    """An oversized request body is refused instead of exhausting memory."""
+    print("[TEST] Oversized body rejected...")
+    data = b"x" * (6 * 1024 * 1024)
+    req = urllib.request.Request(
+        base_url + "/api/command",
+        data=data,
+        headers={"Content-Type": "application/json"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            status = resp.status
+            body = json.loads(resp.read())
+    except urllib.error.HTTPError as e:
+        status, body = e.code, json.loads(e.read())
+    assert status == 500, f"expected a 500 for oversized body, got {status}"
+    assert body.get("error") and "too large" in body["error"]
+    print("  [OK] Oversized body refused with a JSON error")
+
+
+def test_unknown_tool_endpoint_returns_json_error(base_url):
+    """A GET for an unknown tool returns JSON, not a dropped connection."""
+    print("[TEST] Unknown tool GET returns JSON error...")
+    req = urllib.request.Request(base_url + "/api/tools/nope_not_a_tool")
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            status = resp.status
+            body = json.loads(resp.read())
+    except urllib.error.HTTPError as e:
+        status, body = e.code, json.loads(e.read())
+    assert status == 404
+    assert body["ok"] is False and body["code"] == "UNKNOWN_TOOL"
+    print("  [OK] JSON error returned")
+
+
 if __name__ == "__main__":
     httpd = ThreadingHTTPServer(("127.0.0.1", 0), server.Handler)
     port = httpd.server_address[1]
@@ -81,5 +116,7 @@ if __name__ == "__main__":
     test_unknown_tool_rejected(url)
     test_missing_params_rejected(url)
     test_health_public(url)
+    test_oversized_body_rejected(url)
+    test_unknown_tool_endpoint_returns_json_error(url)
     httpd.shutdown()
     print("\nAll server command tests passed")
