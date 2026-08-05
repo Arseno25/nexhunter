@@ -2,8 +2,9 @@
 
 import html
 import json
+from collections.abc import Sequence
 from datetime import datetime, timezone
-from typing import Sequence
+from typing import Any
 
 from nexhunter.findings.models import Category, Finding, Severity
 
@@ -228,7 +229,7 @@ def to_sarif(findings: Sequence[Finding], tool_name: str = "NexHunter") -> str:
                 rule["helpUri"] = finding.references[0]
             rules[rule_id] = rule
 
-        result = {
+        result: dict[str, Any] = {
             "ruleId": rule_id,
             "level": _SARIF_LEVEL[finding.severity],
             "message": {"text": finding.description or finding.title},

@@ -12,7 +12,6 @@ forbidding it.
 """
 
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Sequence
 
 from nexhunter.core import tools as T
 
@@ -44,7 +43,7 @@ class Profile:
         return True
 
 
-PROFILES: Dict[str, Profile] = {
+PROFILES: dict[str, Profile] = {
     "nexhunter-core": Profile(
         name="nexhunter-core",
         description="Status, findings, executions, and the safest passive checks. "
@@ -153,7 +152,7 @@ PROFILES: Dict[str, Profile] = {
 DEFAULT_PROFILE = "nexhunter-full"
 
 
-def get_profile(name: Optional[str]) -> Profile:
+def get_profile(name: str | None) -> Profile:
     """Look up a profile by name, falling back to the default."""
     if not name:
         return PROFILES[DEFAULT_PROFILE]
@@ -164,13 +163,13 @@ def get_profile(name: Optional[str]) -> Profile:
     return profile
 
 
-def tools_for(profile: Profile, registry: Optional[dict] = None) -> Dict[str, "T.ToolSpec"]:
+def tools_for(profile: Profile, registry: dict | None = None) -> dict[str, "T.ToolSpec"]:
     """Registry tools this profile exposes, keyed by name."""
     source = registry if registry is not None else T.TOOLS
     return {name: spec for name, spec in source.items() if profile.accepts(spec)}
 
 
-def summarize(registry: Optional[dict] = None) -> List[dict]:
+def summarize(registry: dict | None = None) -> list[dict]:
     """Describe every profile and how many tools it exposes."""
     source = registry if registry is not None else T.TOOLS
     summary = []
@@ -188,10 +187,10 @@ def summarize(registry: Optional[dict] = None) -> List[dict]:
     return summary
 
 
-def categories(registry: Optional[dict] = None) -> Dict[str, int]:
+def categories(registry: dict | None = None) -> dict[str, int]:
     """Tool count per category across the registry."""
     source = registry if registry is not None else T.TOOLS
-    counts: Dict[str, int] = {}
+    counts: dict[str, int] = {}
     for spec in source.values():
         counts[spec.category] = counts.get(spec.category, 0) + 1
     return dict(sorted(counts.items(), key=lambda kv: kv[1], reverse=True))

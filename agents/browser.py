@@ -21,6 +21,7 @@ binary falls back to the stdlib crawl and says so in the output.
 import re
 import urllib.request
 from html.parser import HTMLParser
+from typing import Any
 
 from nexhunter.agents.base import Agent
 
@@ -54,7 +55,7 @@ _SECURITY_HEADERS = (
 )
 
 # Header / DOM / URL signatures per technology; used by the tech detector.
-_TECH_SIGNATURES = {
+_TECH_SIGNATURES: dict[str, dict[str, Any]] = {
     "nginx": {"headers": {"server": "nginx"}},
     "apache": {"headers": {"server": "apache"}},
     "iis": {"headers": {"server": "microsoft-iis"}},
@@ -76,8 +77,12 @@ _TECH_SIGNATURES = {
     "google-analytics": {"content": ["googletagmanager", "google-analytics"]},
 }
 
-_HEADER_TECH = {tech: sig["headers"] for tech, sig in _TECH_SIGNATURES.items() if "headers" in sig}
-_CONTENT_TECH = {tech: sig["content"] for tech, sig in _TECH_SIGNATURES.items() if "content" in sig}
+_HEADER_TECH: dict[str, dict[str, str]] = {
+    tech: sig["headers"] for tech, sig in _TECH_SIGNATURES.items() if "headers" in sig
+}
+_CONTENT_TECH: dict[str, list[str]] = {
+    tech: sig["content"] for tech, sig in _TECH_SIGNATURES.items() if "content" in sig
+}
 
 
 class _DomParser(HTMLParser):
@@ -158,9 +163,9 @@ class _StaticFetcher:
         self.url = url
         self.timeout = timeout
         self.status = 0
-        self.headers = {}
+        self.headers: dict[str, str] = {}
         self.html = ""
-        self.cookies = []
+        self.cookies: list = []
         self.error = ""
 
     def fetch(self) -> bool:

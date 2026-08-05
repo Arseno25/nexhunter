@@ -1,5 +1,7 @@
 """Ops agents: recovery, performance monitoring, degradation, correlation."""
 
+from typing import Any
+
 from nexhunter.core import tools as T
 from nexhunter.execution.recovery import ExecutionRecovery
 from nexhunter.agents.base import Agent
@@ -23,7 +25,7 @@ class FailureRecoverySystem(Agent):
         "max_attempts": (False, int),
     }
 
-    def run(self, tool: str = "", params: dict = None,
+    def run(self, tool: str = "", params: dict | None = None,
             max_attempts: int = 3):
         """Run tool with a recovery loop, then report the recovery trail."""
         params = params or {}
@@ -33,7 +35,7 @@ class FailureRecoverySystem(Agent):
             use_backoff=False,  # agents run in-process; never sleep the server
         )
         res = recovery.execute(tool, params, direct=False)
-        applied = [
+        applied: list[Any] = [
             {
                 "attempt": e.get("attempt"),
                 "action": e.get("action", e.get("outcome")),
@@ -64,7 +66,7 @@ class PerformanceMonitor(Agent):
 
     name = "performance"
     desc = "Per-tool timing, cache effectiveness, slowest tools"
-    param_schema = {}
+    param_schema: dict = {}
 
     def run(self):
         """Analyze performance metrics."""
@@ -92,7 +94,7 @@ class GracefulDegradation(Agent):
 
     name = "degradation"
     desc = "Capability matrix: what works with installed binaries, degraded mode status"
-    param_schema = {}
+    param_schema: dict = {}
 
     def run(self):
         """Check tool availability and report degradation mode."""
@@ -118,7 +120,7 @@ class VulnerabilityCorrelator(Agent):
 
     name = "correlator"
     desc = "Chain recorded findings into attack paths"
-    param_schema = {}
+    param_schema: dict = {}
 
     def run(self):
         """Correlate findings and build attack chains."""

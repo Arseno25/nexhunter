@@ -28,7 +28,7 @@ import threading
 import time
 from collections import OrderedDict
 from dataclasses import dataclass
-from typing import Any, Dict, Optional
+from typing import Any
 
 from nexhunter.core.config import (
     RESULT_CACHE_ENABLED,
@@ -44,7 +44,7 @@ _FALSE = {"0", "false", "no", "off"}
 class CachedResult:
     """One stored result, with the id of the execution that produced it."""
 
-    result: Dict[str, Any]
+    result: dict[str, Any]
     stored_at: float
     execution_id: str
 
@@ -61,7 +61,7 @@ class ResultCache:
         self.max_entries = max(1, int(max_entries))
         self.ttl_seconds = max(0.0, float(ttl_seconds))
         self.enabled = bool(enabled)
-        self._entries: "OrderedDict[str, CachedResult]" = OrderedDict()
+        self._entries: OrderedDict[str, CachedResult] = OrderedDict()
         self._lock = threading.Lock()
         self.hits = 0
         self.misses = 0
@@ -83,7 +83,7 @@ class ResultCache:
         )
 
     @staticmethod
-    def key_for(tool_name: str, normalized_params: Dict[str, Any]) -> str:
+    def key_for(tool_name: str, normalized_params: dict[str, Any]) -> str:
         """A stable hash of the tool and its normalized parameters.
 
         Values are hashed, never stored, so a secret parameter cannot be read
@@ -96,7 +96,7 @@ class ResultCache:
         )
         return hashlib.sha256(blob.encode("utf-8")).hexdigest()
 
-    def get(self, key: str) -> Optional[CachedResult]:
+    def get(self, key: str) -> CachedResult | None:
         """Return a live entry and count the hit, or None (counting the miss)."""
         if not self.enabled:
             return None
@@ -114,7 +114,7 @@ class ResultCache:
             self.hits += 1
             return entry
 
-    def put(self, key: str, result: Dict[str, Any], execution_id: str) -> None:
+    def put(self, key: str, result: dict[str, Any], execution_id: str) -> None:
         """Store a terminal result, evicting the least-recently-used if full."""
         if not self.enabled:
             return
@@ -137,7 +137,7 @@ class ResultCache:
     def _expired(self, entry: CachedResult) -> bool:
         return self.ttl_seconds > 0 and (time.monotonic() - entry.stored_at) > self.ttl_seconds
 
-    def stats(self) -> Dict[str, Any]:
+    def stats(self) -> dict[str, Any]:
         """Cache telemetry for /api/cache/stats."""
         with self._lock:
             total = self.hits + self.misses

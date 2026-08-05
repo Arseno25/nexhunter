@@ -877,12 +877,19 @@ def _server_error(exc):
     return jsonify({"ok": False, "error": str(exc)}), 500
 
 
+def _check(cond: bool, msg: str) -> None:
+    """Selftest assertion that survives `python -O`."""
+    if not cond:
+        raise AssertionError(msg)
+
+
 def selftest():
     from nexhunter.core.engine import Engine
 
-    assert len(AGENTS) >= 13, f"expected 13 agents, got {len(AGENTS)}"
+    _check(len(AGENTS) >= 13, f"expected 13 agents, got {len(AGENTS)}")
     names = sorted(AGENTS)
-    assert "bugbounty" in names and "ctf" in names and "exploit" in names and "browser" in names
+    _check("bugbounty" in names and "ctf" in names and "exploit" in names and "browser" in names,
+           f"core agents missing from {names}")
 
     for name, spec in T.TOOLS.items():
         dummy = {k: (v if v is not None else "x") for k, v in spec.params.items()}
@@ -891,33 +898,34 @@ def selftest():
         # not accept "x"); that is validation working, not a broken builder.
         if argv is None:
             continue
-        assert isinstance(argv, list) and all(isinstance(a, str) and a for a in argv), name
-        assert argv[0] == spec.binary, name
+        _check(isinstance(argv, list) and all(isinstance(a, str) and a for a in argv), name)
+        _check(argv[0] == spec.binary, name)
 
     e = Engine()
     r1 = e._cached_run(["definitely-not-a-binary"], 5)
     r2 = e._cached_run(["definitely-not-a-binary"], 5)
-    assert not r1["ok"] and r2["cached"] is True and e.cache_hits == 1
+    _check(not r1["ok"] and r2["cached"] is True and e.cache_hits == 1,
+           f"cache semantics broken: {r1} {r2}")
 
     d = run_agent(e, "decision", {"target": "http://example.com", "intent": "recon"})
-    assert d["ok"] and isinstance(d.get("data", {}).get("recommended_tools"), list)
+    _check(d["ok"] and isinstance(d.get("data", {}).get("recommended_tools"), list), str(d))
     o = run_agent(e, "optimizer", {"tool": "nmap_scan"})
-    assert o["ok"] and o.get("data", {}).get("binary") == "nmap"
+    _check(o["ok"] and o.get("data", {}).get("binary") == "nmap", str(o))
     g = run_agent(e, "degradation", {})
-    assert g["ok"] and "mode" in g.get("data", {})
+    _check(g["ok"] and "mode" in g.get("data", {}), str(g))
     p = run_agent(e, "performance", {})
-    assert p["ok"] and "cache_hit_rate" in p.get("data", {})
+    _check(p["ok"] and "cache_hit_rate" in p.get("data", {}), str(p))
     c = run_agent(e, "correlator", {})
-    assert c["ok"] and "chains" in c.get("data", {})
+    _check(c["ok"] and "chains" in c.get("data", {}), str(c))
     r = run_agent(e, "recovery", {"tool": "nmap_scan", "params": {}})
-    assert r["ok"] or not r["ok"]
+    _check(r["ok"] or not r["ok"], str(r))
     print(f"nexhunter selftest OK ({len(AGENTS)} agents, {len(T.TOOLS)} tools)")
 
 
 def _configure_logging(verbose: bool) -> None:
     """Send tool-usage and server logs to stdout, with a file fallback."""
     fmt = "%(asctime)s | %(levelname)-7s | %(name)s | %(message)s"
-    handlers = [logging.StreamHandler(sys.stdout)]
+    handlers: list[logging.Handler] = [logging.StreamHandler(sys.stdout)]
     try:
         handlers.append(logging.FileHandler("nexhunter.log"))
     except OSError:
@@ -937,7 +945,7 @@ def _server_mode() -> str:
         deg = run_agent(ENGINE, "degradation", {})
         if deg.get("ok"):
             return deg.get("data", {}).get("mode", "degraded")
-    except Exception:
+    except Exception:  # noqa: S110 - best-effort probe; failure is "unknown"
         pass
     return "unknown"
 

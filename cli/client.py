@@ -16,7 +16,6 @@ import os
 import sys
 import time
 import urllib.request
-from pathlib import Path
 
 SERVER = "http://127.0.0.1:8888"
 
@@ -31,7 +30,7 @@ def _enable_vt():
         mode = ctypes.c_uint32()
         if ctypes.windll.kernel32.GetConsoleMode(h, ctypes.byref(mode)):
             ctypes.windll.kernel32.SetConsoleMode(h, mode.value | 0x0004)
-    except Exception:
+    except Exception:  # noqa: S110 - best-effort console setup
         pass
 
 
@@ -49,12 +48,28 @@ class _C:
         return f"\x1b[{code}m{text}\x1b[0m" if cls.enabled else text
 
 
-OK = lambda t: _C.w("32", t)
-ERR = lambda t: _C.w("31", t)
-INFO = lambda t: _C.w("34", t)
-WARN = lambda t: _C.w("33", t)
-HEAD = lambda t: _C.w("36", t)
-MUTE = lambda t: _C.w("90", t)
+def OK(t):
+    return _C.w("32", t)
+
+
+def ERR(t):
+    return _C.w("31", t)
+
+
+def INFO(t):
+    return _C.w("34", t)
+
+
+def WARN(t):
+    return _C.w("33", t)
+
+
+def HEAD(t):
+    return _C.w("36", t)
+
+
+def MUTE(t):
+    return _C.w("90", t)
 
 BANNER = HEAD(
     "███╗   ██╗███████╗██╗  ██╗██╗  ██╗██╗   ██╗███╗   ██╗████████╗███████╗██████╗\n"
@@ -69,14 +84,17 @@ SEV_COLOR = {"critical": ERR, "high": ERR, "medium": WARN, "low": INFO, "info": 
 
 
 def api(path, payload=None, timeout=600):
-    req = urllib.request.Request(
-        SERVER + path,
+    url = SERVER + path
+    if not url.lower().startswith(("http://", "https://")):
+        return {"ok": False, "error": f"refusing non-http server URL: {url}"}
+    req = urllib.request.Request(  # noqa: S310 - scheme guard above
+        url,
         data=json.dumps(payload or {}).encode() if payload is not None else None,
         headers={"Content-Type": "application/json"},
         method="POST" if payload is not None else "GET",
     )
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as r:
+        with urllib.request.urlopen(req, timeout=timeout) as r:  # noqa: S310 - scheme guard above
             return json.load(r)
     except Exception as e:
         return {"ok": False, "error": f"server unreachable at {SERVER}: {e}"}
@@ -162,10 +180,10 @@ def cmd_probe(args):
         print(f"  {INFO('[*]')} tech:  {', '.join(p.get('tech') or []) or 'unknown'}")
     h = api("/api/command", {"tool": "curl_headers", "params": {"url": args.target}})
     if h.get("ok"):
-        lines = [l for l in h.get("output", "").splitlines() if l.strip()][:12]
+        lines = [line for line in h.get("output", "").splitlines() if line.strip()][:12]
         print(HEAD("Response headers:"))
-        for l in lines:
-            print(f"  {MUTE(l)}")
+        for line in lines:
+            print(f"  {MUTE(line)}")
     verbose(args, d)
     return 0
 
@@ -625,7 +643,7 @@ def main(argv=None):
     for stream in (sys.stdout, sys.stderr):
         try:
             stream.reconfigure(encoding="utf-8", errors="replace")
-        except Exception:
+        except Exception:  # noqa: S110 - encoding already usable
             pass
     _C.init()
     print(BANNER)

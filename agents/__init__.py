@@ -24,7 +24,7 @@ def _discover_agents():
 _discover_agents()
 
 
-def run_agent(engine, name: str, params: dict = None) -> dict:
+def run_agent(engine, name: str, params: dict | None = None) -> dict:
     """Run agent by name with standardized error handling."""
     params = params or {}
     cls = AGENTS.get(name)

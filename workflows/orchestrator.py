@@ -24,9 +24,10 @@ import logging
 import threading
 import uuid
 from dataclasses import dataclass, field
+from typing import Any
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any, Dict, List, Optional, Sequence
+from collections.abc import Sequence
 
 from nexhunter.core import tools as T
 from nexhunter.core.risk import RiskLevel
@@ -107,7 +108,9 @@ def review_plan(target: str, steps, risk_ceiling: str = "active") -> dict:
     """
     ceiling = _coerce_ceiling(risk_ceiling)
 
-    approved, withheld, invalid = [], [], []
+    approved: list[dict[str, Any]] = []
+    withheld: list[dict[str, Any]] = []
+    invalid: list[dict[str, Any]] = []
     for step in steps or []:
         if not isinstance(step, dict):
             invalid.append({"tool": str(step), "reason": "step must be an object with tool and params"})
@@ -214,10 +217,10 @@ class AdaptivePlanner:
         profile: TargetProfile,
         already_run: Sequence[str],
         risk_ceiling: RiskLevel,
-    ) -> List[PlannedStep]:
+    ) -> list[PlannedStep]:
         """Return the tools worth running next, given current knowledge."""
         done = set(already_run)
-        steps: List[PlannedStep] = []
+        steps: list[PlannedStep] = []
         seen = set()
 
         for phase, tool_name, reason, gate in self.METHODOLOGY:
@@ -249,8 +252,8 @@ class AdaptivePlanner:
         profile = Profiler().new_profile(target)
         steps = self.plan(profile, [], ceiling)
 
-        phases: Dict[str, List[dict]] = {}
-        withheld: List[dict] = []
+        phases: dict[str, list[dict]] = {}
+        withheld: list[dict] = []
         for step in steps:
             entry = {"tool": step.tool, "reason": step.reason, "risk_level": step.risk_level}
             if _RISK_ORDER[RiskLevel(step.risk_level)] > _RISK_ORDER[ceiling]:
@@ -285,13 +288,13 @@ class RunRecord:
     direct: bool = True
     current_phase: str = "starting"
     steps_taken: int = 0
-    executions: List[dict] = field(default_factory=list)
-    withheld: List[dict] = field(default_factory=list)   # above the ceiling
-    errors: List[dict] = field(default_factory=list)
-    plan: Optional[List[dict]] = None                    # AI-proposed, approved steps
-    profile: Optional[dict] = None
+    executions: list[dict] = field(default_factory=list)
+    withheld: list[dict] = field(default_factory=list)   # above the ceiling
+    errors: list[dict] = field(default_factory=list)
+    plan: list[dict] | None = None                    # AI-proposed, approved steps
+    profile: dict | None = None
     started_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
-    completed_at: Optional[datetime] = None
+    completed_at: datetime | None = None
 
     @property
     def progress(self) -> int:
@@ -335,7 +338,7 @@ class AutonomousOrchestrator:
         # with, so a selected tool is invoked correctly rather than fed the raw
         # target and rejected.
         self.optimizer = optimizer or ParameterOptimizer()
-        self._runs: Dict[str, RunRecord] = {}
+        self._runs: dict[str, RunRecord] = {}
         self._lock = threading.RLock()
 
     def _params_for(self, spec, record, profile):
@@ -350,11 +353,11 @@ class AutonomousOrchestrator:
                 params[spec.target_param] = record.target
             return params
 
-    def list_runs(self) -> List[RunRecord]:
+    def list_runs(self) -> list[RunRecord]:
         with self._lock:
             return sorted(self._runs.values(), key=lambda r: r.started_at, reverse=True)
 
-    def get_run(self, run_id: str) -> Optional[RunRecord]:
+    def get_run(self, run_id: str) -> RunRecord | None:
         with self._lock:
             return self._runs.get(run_id)
 
@@ -407,7 +410,7 @@ class AutonomousOrchestrator:
         risk_ceiling: str = "active",
         max_steps: int = 20,
         run_async: bool = True,
-        steps: Optional[Sequence[dict]] = None,
+        steps: Sequence[dict] | None = None,
         strategy: str = "methodology",
         objective: str = "standard",
         direct: bool = True,
@@ -475,7 +478,7 @@ class AutonomousOrchestrator:
         )
         try:
             profile = self.profiler.new_profile(record.target)
-            already_run: List[str] = []
+            already_run: list[str] = []
 
             if record.plan is not None:
                 self._run_plan(record, ceiling, profile, total)
@@ -593,7 +596,7 @@ class AutonomousOrchestrator:
         fixed list, and capped by the objective so it never runs everything.
         """
         selector = ToolSelector()
-        already: List[str] = []
+        already: list[str] = []
         while record.steps_taken < record.max_steps:
             result = selector.select(profile, record.objective, ceiling)
             self._record_withheld_selection(record, result.withheld, ceiling)

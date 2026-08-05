@@ -76,15 +76,17 @@ mcp = FastMCP(
 
 def api(path, payload=None, timeout=600):
     url = SERVER + path
+    if not url.lower().startswith(("http://", "https://")):
+        return {"ok": False, "error": f"refusing non-http server URL: {url}"}
     headers = {"Content-Type": "application/json"}
-    req = urllib.request.Request(
+    req = urllib.request.Request(  # noqa: S310 - scheme guard above
         url,
         data=json.dumps(payload or {}).encode() if payload is not None else None,
         headers=headers,
         method="POST" if payload is not None else "GET",
     )
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as r:
+        with urllib.request.urlopen(req, timeout=timeout) as r:  # noqa: S310 - scheme guard above
             return json.load(r)
     except Exception as e:
         return {"ok": False, "error": f"server unreachable at {SERVER}: {e}"}
@@ -322,7 +324,7 @@ def vulnerability_card(
     impact: str = "",
     remediation: str = "",
     vuln_type: str = "Unknown",
-    cvss_score: float = None,
+    cvss_score: float | None = None,
     poc: str = "",
 ) -> str:
     """Format a vulnerability card (title, severity, endpoint, impact, fix,
@@ -496,7 +498,7 @@ def _register(name, spec):
     mcp.tool()(fn)
 
 
-def _select_for_limit(selected: dict, tool_limit: int) -> dict:
+def _select_for_limit(selected: dict, tool_limit: int | None) -> dict:
     """Cull a profile's tools down to tool_limit, stable and installed first.
 
     A dropped tool is not hidden from the server -- it just is not listed to
@@ -512,7 +514,7 @@ def _select_for_limit(selected: dict, tool_limit: int) -> dict:
     return {s.name: s for s in ranked[:tool_limit]}
 
 
-def register_profile_tools(profile_name: str = None, tool_limit: int = None) -> int:
+def register_profile_tools(profile_name: str | None = None, tool_limit: int | None = None) -> int:
     """Register the registry tools this profile exposes. Returns the count.
 
     Generating from the registry keeps MCP and REST in step: a tool added,
@@ -698,7 +700,7 @@ def autonomous_assess(
     target: str,
     risk_ceiling: str = "active",
     max_steps: int = 20,
-    steps: list = None,
+    steps: list | None = None,
     strategy: str = "methodology",
     objective: str = "standard",
     direct: bool = True,

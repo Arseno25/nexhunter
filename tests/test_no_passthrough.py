@@ -22,7 +22,7 @@ FORBIDDEN_PARAMS = {
 
 # Tools that legitimately take shell-ish text as data, not as a command line.
 # Each needs a reason, and its builder must still pass the argv checks below.
-ALLOWED_TEXT_PARAMS = {
+ALLOWED_TEXT_PARAMS: dict[tuple[str, str], str] = {
     # (tool name, param): reason
 }
 

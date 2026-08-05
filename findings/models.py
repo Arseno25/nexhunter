@@ -14,7 +14,7 @@ import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 
 class Severity(Enum):
@@ -123,7 +123,7 @@ class Category(str, Enum):
     VULNERABILITY = "vulnerability"   # a weakness, with evidence
     MISCONFIGURATION = "misconfiguration"
     EXPOSURE = "exposure"             # something reachable that should not be
-    SECRET = "secret"
+    SECRET = "secret"  # noqa: S105 - a finding *type*, not a hardcoded credential
     PARSER_FAILURE = "parser_failure"  # we could not read the tool's output
 
 
@@ -147,13 +147,13 @@ class Finding:
     description: str = ""
     severity: Severity = Severity.INFO
     confidence: Confidence = Confidence.TENTATIVE
-    evidence: Dict[str, Any] = field(default_factory=dict)
-    remediation: Optional[str] = None
-    references: List[str] = field(default_factory=list)
-    cve_ids: List[str] = field(default_factory=list)
-    cwe_ids: List[str] = field(default_factory=list)
-    cvss_score: Optional[float] = None
-    location: Optional[str] = None      # file path, URL path, or port
+    evidence: dict[str, Any] = field(default_factory=dict)
+    remediation: str | None = None
+    references: list[str] = field(default_factory=list)
+    cve_ids: list[str] = field(default_factory=list)
+    cwe_ids: list[str] = field(default_factory=list)
+    cvss_score: float | None = None
+    location: str | None = None      # file path, URL path, or port
     first_seen_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     last_seen_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     id: str = ""
@@ -225,7 +225,7 @@ class Finding:
         if not self.remediation:
             self.remediation = other.remediation
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "id": self.id,
             "fingerprint": self.fingerprint,

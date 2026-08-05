@@ -1,7 +1,7 @@
 """Finding storage with fingerprint deduplication."""
 
 import threading
-from typing import Dict, Iterable, List, Optional
+from collections.abc import Iterable
 
 from nexhunter.findings.models import Category, Finding, Severity
 from nexhunter.security.redaction import SecretRedactor
@@ -16,9 +16,9 @@ class FindingStore:
     to reconcile by hand.
     """
 
-    def __init__(self, redactor: Optional[SecretRedactor] = None, max_findings: int = 10_000):
+    def __init__(self, redactor: SecretRedactor | None = None, max_findings: int = 10_000):
         self._lock = threading.RLock()
-        self._by_fingerprint: Dict[str, Finding] = {}
+        self._by_fingerprint: dict[str, Finding] = {}
         self.redactor = redactor or SecretRedactor()
         self.max_findings = max_findings
 
@@ -50,14 +50,14 @@ class FindingStore:
         )
         self._by_fingerprint.pop(victim.fingerprint, None)
 
-    def add_many(self, findings: Iterable[Finding]) -> List[Finding]:
+    def add_many(self, findings: Iterable[Finding]) -> list[Finding]:
         return [self.add(finding) for finding in findings]
 
     def list(
         self,
-        severity: Optional[Severity] = None,
+        severity: Severity | None = None,
         vulnerabilities_only: bool = False,
-    ) -> List[Finding]:
+    ) -> list[Finding]:
         """Findings, most severe first, then most recently seen."""
         with self._lock:
             findings = list(self._by_fingerprint.values())
@@ -69,7 +69,7 @@ class FindingStore:
 
         return sorted(findings, key=lambda f: (-f.severity.rank, f.last_seen_at), reverse=False)
 
-    def get(self, finding_id: str) -> Optional[Finding]:
+    def get(self, finding_id: str) -> Finding | None:
         with self._lock:
             for finding in self._by_fingerprint.values():
                 if finding.id == finding_id or finding.fingerprint == finding_id:
@@ -80,7 +80,7 @@ class FindingStore:
         """Counts by severity and category, for dashboards and reports."""
         findings = self.list()
         by_severity = {level.value: 0 for level in Severity}
-        by_category: Dict[str, int] = {}
+        by_category: dict[str, int] = {}
 
         for finding in findings:
             by_severity[finding.severity.value] += 1

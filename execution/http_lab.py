@@ -26,6 +26,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
+from typing import Any
 
 MAX_BODY = 200_000  # chars kept from a response body
 MAX_LINES = 4_000
@@ -102,13 +103,15 @@ def apply_match_rules(rules: list[dict], text: str) -> str:
 
 def _send(method: str, url: str, headers: dict, body: str,
           timeout: int, follow_redirects: bool = False) -> HttpResponse:
-    req = urllib.request.Request(url, method=method, headers=headers)
+    if not url.lower().startswith(("http://", "https://")):
+        raise ValueError(f"refusing non-http URL: {url}")
+    req = urllib.request.Request(url, method=method, headers=headers)  # noqa: S310 - scheme guard above
     data = None
     if method in ("POST", "PUT", "PATCH"):
         data = body.encode() if body else None
     t0 = time.monotonic()
     try:
-        with urllib.request.urlopen(
+        with urllib.request.urlopen(  # noqa: S310 - scheme guard above
             req, data=data, timeout=timeout,
         ) as resp:
             duration = time.monotonic() - t0
@@ -164,15 +167,13 @@ def intruder(request: dict, payloads: list[str],
         return {"ok": False, "error": "payloads must be a non-empty list"}
     payloads = [str(p)[:2_000] for p in payloads[:2_000]]
 
-    template = {
-        "method": req.method, "headers": req.headers, "body": req.body,
-    }
+    template_body = req.body
 
     def build_url(payload: str) -> str:
         return re.sub(r"§[^§]*§", payload, req.url)
 
     def build_body(payload: str) -> str:
-        return re.sub(r"§[^§]*§", payload, template["body"])
+        return re.sub(r"§[^§]*§", payload, template_body)
 
     def one(payload: str) -> dict:
         url = build_url(payload)
@@ -254,7 +255,7 @@ def spider(start_url: str, max_pages: int = SPIDER_MAX_PAGES,
         parser = _LinkExtractor(url)
         try:
             parser.feed(resp.body)
-        except Exception:  # noqa: BLE001 - a bad page must not kill the crawl
+        except Exception:  # noqa: BLE001, S110 - a bad page must not kill the crawl
             pass
         for link in parser.links:
             parsed = urllib.parse.urlparse(link)
@@ -296,8 +297,10 @@ class LabProxy:
         self.max_requests = max_requests
         self.logs: list[dict] = []
         self._lock = threading.Lock()
-        self._server = None
-        self._thread = None
+        # _ProxyServer is a nested class created in start(); Any keeps the
+        # annotation stable across the lifecycle (None before start).
+        self._server: Any = None
+        self._thread: threading.Thread | None = None
         self._stop = False
 
     def start(self) -> dict:

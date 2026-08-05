@@ -9,11 +9,10 @@ import re
 import shutil
 import subprocess
 from dataclasses import dataclass
-from typing import Dict, List, Optional
 
 # Per-binary version probe. Most tools answer --version; the exceptions are
 # listed rather than guessed at.
-_VERSION_ARGS: Dict[str, List[str]] = {
+_VERSION_ARGS: dict[str, list[str]] = {
     "nmap": ["--version"],
     "httpx": ["-version"],
     "nuclei": ["-version"],
@@ -65,7 +64,7 @@ _VERSION_PATTERNS = (
 _IPV4 = re.compile(r"\b\d{1,3}(?:\.\d{1,3}){3}\b")
 
 
-def _parse_version(output: str) -> Optional[str]:
+def _parse_version(output: str) -> str | None:
     """Pull a version number out of a tool's version output."""
     # Blank out anything that is an IP address before looking for a version.
     cleaned = _IPV4.sub(" ", output)
@@ -83,9 +82,9 @@ class BinaryStatus:
 
     binary: str
     installed: bool
-    path: Optional[str] = None
-    version: Optional[str] = None
-    error: Optional[str] = None
+    path: str | None = None
+    version: str | None = None
+    error: str | None = None
 
     def to_dict(self) -> dict:
         return {
@@ -97,7 +96,7 @@ class BinaryStatus:
         }
 
 
-def detect_version(binary: str) -> Optional[str]:
+def detect_version(binary: str) -> str | None:
     """Probe a binary for its version. Returns None when it cannot be read.
 
     Version probes are run with a short timeout and no shell. A tool that
@@ -139,9 +138,9 @@ def check_binary(binary: str, with_version: bool = True) -> BinaryStatus:
     return BinaryStatus(binary=binary, installed=True, path=path, version=version)
 
 
-def check_tools(specs, with_version: bool = True) -> Dict[str, BinaryStatus]:
+def check_tools(specs, with_version: bool = True) -> dict[str, BinaryStatus]:
     """Check every distinct binary used by the given tool specs."""
-    statuses: Dict[str, BinaryStatus] = {}
+    statuses: dict[str, BinaryStatus] = {}
     for spec in specs:
         if spec.binary not in statuses:
             statuses[spec.binary] = check_binary(spec.binary, with_version=with_version)

@@ -18,17 +18,21 @@ import threading
 import time
 from collections import OrderedDict
 from pathlib import Path
-from typing import Any, Callable, Dict, Optional
+from typing import Any
 
 from nexhunter.core import tools as T
 from nexhunter.execution.cache import ResultCache
 from nexhunter.execution.models import ExecutionRecord, ExecutionStatus
 from nexhunter.execution.registry import ExecutionRegistry
-from nexhunter.execution.runner import ProcessRunner, RunResult
+from nexhunter.execution.runner import ProcessRunner
 from nexhunter.execution.workspace import Workspace, WorkspaceError
 from nexhunter.security.redaction import SecretRedactor
 
 log = logging.getLogger("nexhunter.execution")
+
+# POSIX-only signals; None on Windows, where pause/resume reports UNSUPPORTED.
+_SIGSTOP = getattr(signal, "SIGSTOP", None)
+_SIGCONT = getattr(signal, "SIGCONT", None)
 
 # Color the status token when writing to a real terminal (mirrors the server
 # banner). NO_COLOR disables it; FORCE_COLOR forces it on.
@@ -62,10 +66,10 @@ class ExecutionService:
 
     def __init__(
         self,
-        registry: Optional[ExecutionRegistry] = None,
-        runner: Optional[ProcessRunner] = None,
-        redactor: Optional[SecretRedactor] = None,
-        cache: Optional[ResultCache] = None,
+        registry: ExecutionRegistry | None = None,
+        runner: ProcessRunner | None = None,
+        redactor: SecretRedactor | None = None,
+        cache: ResultCache | None = None,
     ):
         self.registry = registry or ExecutionRegistry()
         self.runner = runner or ProcessRunner()
@@ -75,21 +79,21 @@ class ExecutionService:
         self.cache = cache or ResultCache.from_env()
         # Captured output per execution. Bounded and lock-guarded: the server
         # is threaded and this must not grow for the life of the process.
-        self._outputs: "OrderedDict[str, tuple]" = OrderedDict()
+        self._outputs: OrderedDict[str, tuple] = OrderedDict()
         self._outputs_lock = threading.Lock()
         self._max_outputs = 200
         # Execution ids whose processes are currently paused (SIGSTOP).
-        self._paused: "set[str]" = set()
+        self._paused: set[str] = set()
         self._paused_lock = threading.Lock()
 
     def execute(
         self,
         tool_name: str,
-        params: Dict[str, Any],
+        params: dict[str, Any],
         run_async: bool = False,
         no_cache: bool = False,
         direct: bool = True,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Run one registered tool. Returns an API-shaped result dict.
 
         The default is the direct in-process path: validate -> build
@@ -120,7 +124,7 @@ class ExecutionService:
         # hit we return without touching the runner or the registry. On an
         # invalid or missing entry we fall through to the full path below, which
         # re-normalizes and produces the proper record and error.
-        cache_key: Optional[str] = None
+        cache_key: str | None = None
         if self.cache.enabled and spec.cacheable and not no_cache:
             probe_merged, probe_err = spec.normalize(params)
             if probe_err is None:
@@ -187,8 +191,8 @@ class ExecutionService:
         result["cached"] = False
         return result
 
-    def run_direct(self, tool_name: str, params: Dict[str, Any],
-                   no_cache: bool = False) -> Dict[str, Any]:
+    def run_direct(self, tool_name: str, params: dict[str, Any],
+                   no_cache: bool = False) -> dict[str, Any]:
         """Direct in-process tool execution.
 
         The fast path for tool calls that want a result, not a history entry:
@@ -213,7 +217,7 @@ class ExecutionService:
 
         # Cache probe: same key as the state-machine path, so both modes share
         # one cache. Only deterministic outcomes are ever stored.
-        cache_key: Optional[str] = None
+        cache_key: str | None = None
         if self.cache.enabled and spec.cacheable and not no_cache:
             cache_key = ResultCache.key_for(tool_name, merged)
             cached = self.cache.get(cache_key)
@@ -234,7 +238,7 @@ class ExecutionService:
             result = self.runner.run(cmd, timeout=spec.timeout, workdir=Path(scratch))
         duration = time.time() - t0
 
-        payload: Dict[str, Any] = {
+        payload: dict[str, Any] = {
             "ok": result.exit_code == 0 and not result.error,
             "tool": tool_name,
             "target": spec.target_of(merged),
@@ -275,7 +279,7 @@ class ExecutionService:
 
     def _run_and_record(
         self, record: ExecutionRecord, cmd, timeout: int, workspace: Workspace,
-        cache_key: Optional[str] = None,
+        cache_key: str | None = None,
     ) -> None:
         """Run the process and fold its outcome into the record."""
         record.transition(ExecutionStatus.RUNNING)
@@ -283,12 +287,14 @@ class ExecutionService:
             "RUNNING", record.tool_name, record.target or "",
             f"(risk={record.risk_level})",
         ))
-        cancel: Callable[[], bool] = lambda: self.registry.is_cancelled(record.id)
+        def cancel() -> bool:
+            return self.registry.is_cancelled(record.id)
 
         # Record the OS pid the moment the child starts, so the process is
         # visible in list_processes() while it is still running -- not only
         # after it exits.
-        on_spawn: Callable[[int], None] = lambda pid: setattr(record, "pid", pid)
+        def on_spawn(pid: int) -> None:
+            record.pid = pid
 
         result = self.runner.run(
             cmd, timeout=timeout, workdir=workspace.root, cancel=cancel, on_spawn=on_spawn
@@ -350,7 +356,7 @@ class ExecutionService:
         with self._outputs_lock:
             return self._outputs.get(execution_id, ("", ""))
 
-    def output(self, execution_id: str, max_bytes: int = 200_000) -> Dict[str, Any]:
+    def output(self, execution_id: str, max_bytes: int = 200_000) -> dict[str, Any]:
         """Return captured output for an execution."""
         record = self.registry.get(execution_id)
         if record is None:
@@ -365,7 +371,7 @@ class ExecutionService:
             "truncated": record.truncated or len(stdout) > max_bytes,
         }
 
-    def terminate(self, execution_id: str) -> Dict[str, Any]:
+    def terminate(self, execution_id: str) -> dict[str, Any]:
         """Request termination of a running execution."""
         record = self.registry.get(execution_id)
         if record is None:
@@ -393,7 +399,7 @@ class ExecutionService:
                 return record
         return None
 
-    def _process_view(self, record: ExecutionRecord) -> Dict[str, Any]:
+    def _process_view(self, record: ExecutionRecord) -> dict[str, Any]:
         return {
             "pid": record.pid,
             "execution_id": record.id,
@@ -409,7 +415,7 @@ class ExecutionService:
         """Every execution currently running, with its live OS pid."""
         return [self._process_view(r) for r in self._running_records()]
 
-    def process_status(self, ident) -> Dict[str, Any]:
+    def process_status(self, ident) -> dict[str, Any]:
         """Live status of one running process, by execution id or pid."""
         record = self._resolve(ident)
         if record is None:
@@ -419,7 +425,7 @@ class ExecutionService:
         view["recent_output"] = self._tail_workspace(record)
         return view
 
-    def terminate_process(self, ident) -> Dict[str, Any]:
+    def terminate_process(self, ident) -> dict[str, Any]:
         """Terminate a running process, by execution id or pid.
 
         Routes through the same cancellation path as terminate(): the request
@@ -433,6 +439,8 @@ class ExecutionService:
 
     def _signal_process(self, ident, sig, want_paused: bool):
         """Internal: STOP/CONT a running process, tracked by execution id."""
+        if sig is None:
+            return _error("UNSUPPORTED", "process pausing is not supported on this platform")
         record = self._resolve(ident)
         if record is None:
             return _error("NOT_FOUND", f"no running process: {ident}")
@@ -445,7 +453,7 @@ class ExecutionService:
                     "status": "paused" if already else "running",
                 }
         try:
-            os.kill(record.pid, signal.SIGSTOP if want_paused else signal.SIGCONT)
+            os.kill(record.pid, _SIGSTOP if want_paused else _SIGCONT)  # type: ignore[arg-type]
         except ProcessLookupError:
             return _error("NOT_RUNNING", f"process {record.pid} is no longer running")
         except PermissionError as exc:
@@ -460,18 +468,18 @@ class ExecutionService:
             "status": "paused" if want_paused else "running",
         }
 
-    def pause_process(self, ident) -> Dict[str, Any]:
+    def pause_process(self, ident) -> dict[str, Any]:
         """Pause a running process (SIGSTOP).
 
         Honest caveat: the supervisor still owns the run time limit, so pausing
         a job near its deadline can let the timeout fire while it is stopped.
         Pause is for controlling long scans, not for extending deadlines.
         """
-        return self._signal_process(ident, signal.SIGSTOP, True)
+        return self._signal_process(ident, _SIGSTOP, True)
 
-    def resume_process(self, ident) -> Dict[str, Any]:
+    def resume_process(self, ident) -> dict[str, Any]:
         """Resume a previously paused process (SIGCONT)."""
-        return self._signal_process(ident, signal.SIGCONT, False)
+        return self._signal_process(ident, _SIGCONT, False)
 
     def _tail_workspace(self, record: ExecutionRecord, lines: int = 50) -> str:
         """Last few lines of a running execution's stdout, redacted."""
@@ -485,7 +493,7 @@ class ExecutionService:
         tail = "\n".join(text.splitlines()[-lines:])
         return self.redactor.redact_string(tail)
 
-    def artifacts(self, execution_id: str) -> Dict[str, Any]:
+    def artifacts(self, execution_id: str) -> dict[str, Any]:
         """List artifacts produced inside an execution's workspace."""
         record = self.registry.get(execution_id)
         if record is None:
@@ -498,7 +506,7 @@ class ExecutionService:
         )
         return {"ok": True, "execution_id": execution_id, "artifacts": workspace.list_artifacts()}
 
-    def _fail(self, record: ExecutionRecord, code: str, message: str, blocked: bool) -> Dict[str, Any]:
+    def _fail(self, record: ExecutionRecord, code: str, message: str, blocked: bool) -> dict[str, Any]:
         record.error_code = code
         record.error_message = message
         record.transition(ExecutionStatus.BLOCKED if blocked else ExecutionStatus.FAILED)
@@ -508,8 +516,8 @@ class ExecutionService:
         ))
         return self._result(record, include_output=False)
 
-    def _result(self, record: ExecutionRecord, include_output: bool) -> Dict[str, Any]:
-        payload: Dict[str, Any] = {
+    def _result(self, record: ExecutionRecord, include_output: bool) -> dict[str, Any]:
+        payload: dict[str, Any] = {
             "ok": record.status is ExecutionStatus.COMPLETED,
             "execution_id": record.id,
             "status": record.status.value,
@@ -527,5 +535,5 @@ class ExecutionService:
         return payload
 
 
-def _error(code: str, message: str) -> Dict[str, Any]:
+def _error(code: str, message: str) -> dict[str, Any]:
     return {"ok": False, "code": code, "error": message}

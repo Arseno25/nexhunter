@@ -8,7 +8,7 @@ class Agent:
 
     name = ""
     desc = ""
-    param_schema = {}  # {param_name: (required: bool, type)}
+    param_schema: dict = {}  # {param_name: (required: bool, type)}
     # True for agents that take attack-side actions (payload delivery, exploit
     # generation) reaching the network outside the ExecutionService gate. The
     # API refuses to run these unless intrusive tooling is explicitly enabled,

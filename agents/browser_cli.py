@@ -19,7 +19,7 @@ import sys
 from html.parser import HTMLParser
 from urllib.parse import urljoin, urlparse
 
-OUT = {
+OUT: dict[str, object] = {
     "ok": False,
     "engine": None,
     "url": None,

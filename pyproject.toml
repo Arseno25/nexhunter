@@ -72,6 +72,10 @@ packages = [
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 python_files = ["test_*.py"]
+asyncio_default_fixture_loop_scope = "function"
+filterwarnings = [
+    "ignore::PendingDeprecationWarning:starlette.formparsers",  # fastmcp dep, upstream
+]
 # Tests drive real subprocesses for timeout and tree-kill coverage, so they
 # are not instantaneous.
 timeout = 300
@@ -101,7 +105,7 @@ ignore = [
 ]
 
 [tool.ruff.lint.per-file-ignores]
-"tests/*" = ["S101"]  # asserts are how these tests report
+"tests/*" = ["S101", "S310"]  # asserts are how tests report; tests open local test-server URLs
 
 [tool.mypy]
 python_version = "3.10"

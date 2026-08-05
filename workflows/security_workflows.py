@@ -1,8 +1,7 @@
 """Advanced security workflows - comprehensive assessment procedures."""
 
-import json
 import time
-from typing import Dict, List, Any, Optional
+from typing import Any
 from dataclasses import dataclass, field
 
 
@@ -11,7 +10,7 @@ class WorkflowPhase:
     """Single workflow phase."""
     name: str
     description: str
-    tools: List[str]
+    tools: list[str]
     status: str = "pending"  # pending, in_progress, completed, failed
     findings: int = 0
     duration: float = 0.0
@@ -75,10 +74,10 @@ class BugBountyWorkflow:
                 tools=["custom-scanner"],
             ),
         }
-        self.findings_log = []
+        self.findings_log: list[dict[str, Any]] = []
         self.started_at = time.time()
 
-    def execute_phase(self, phase_name: str) -> Dict[str, Any]:
+    def execute_phase(self, phase_name: str) -> dict[str, Any]:
         """Execute single phase."""
         if phase_name not in self.phases:
             return {"ok": False, "error": f"Unknown phase: {phase_name}"}
@@ -109,7 +108,7 @@ class BugBountyWorkflow:
             }
         )
 
-    def get_summary(self) -> Dict[str, Any]:
+    def get_summary(self) -> dict[str, Any]:
         """Get workflow summary."""
         completed = sum(1 for p in self.phases.values() if p.status == "completed")
         total_findings = len(self.findings_log)
@@ -147,7 +146,7 @@ class PenetrationTestingWorkflow:
             "reporting": WorkflowPhase("Reporting", "Document findings", ["documentation"]),
         }
 
-    def get_phases(self) -> Dict[str, WorkflowPhase]:
+    def get_phases(self) -> dict[str, WorkflowPhase]:
         """Get all phases."""
         return self.phases
 
@@ -170,7 +169,7 @@ class RedTeamWorkflow:
 class SecurityAuditWorkflow:
     """Compliance and security audit workflow."""
 
-    def __init__(self, target: str, frameworks: List[str] = None):
+    def __init__(self, target: str, frameworks: list[str] | None = None):
         self.target = target
         self.frameworks = frameworks or ["OWASP Top 10", "CWE Top 25", "SANS Top 25"]
         self.phases = {

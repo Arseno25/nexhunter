@@ -132,7 +132,7 @@ def test_pause_and_resume(tmp: Path):
         try:
             os.kill(record.pid, 0)
         except OSError:
-            assert False, "process vanished"
+            raise AssertionError("process vanished") from None
         views = service.list_processes()
         assert any(v["paused"] for v in views)
 

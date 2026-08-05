@@ -12,7 +12,6 @@ reachable only by name, only within one execution's workspace.
 import os
 import re
 from pathlib import Path
-from typing import List, Optional
 
 # Identifiers become directory names, so they are restricted to characters that
 # cannot traverse, escape, or collide case-insensitively on Windows.
@@ -51,7 +50,7 @@ class Workspace:
     def create(
         cls,
         execution_id: str,
-        base_dir: Optional[Path] = None,
+        base_dir: Path | None = None,
     ) -> "Workspace":
         """Create (or reuse) the workspace for one execution."""
         execution_id = _check_id(execution_id, "execution id")
@@ -95,7 +94,7 @@ class Workspace:
             raise WorkspaceError(f"artifact escapes the workspace: {name!r}")
         return resolved
 
-    def list_artifacts(self, max_bytes: int = DEFAULT_MAX_ARTIFACT_BYTES) -> List[dict]:
+    def list_artifacts(self, max_bytes: int = DEFAULT_MAX_ARTIFACT_BYTES) -> list[dict]:
         """List regular files directly inside this workspace."""
         if not self.root.exists():
             return []
@@ -116,7 +115,7 @@ class Workspace:
         path = self.artifact_path(name)
         if not path.is_file():
             raise WorkspaceError(f"no such artifact: {name!r}")
-        with open(path, "r", encoding="utf-8", errors="replace") as handle:
+        with open(path, encoding="utf-8", errors="replace") as handle:
             return handle.read(max_bytes)
 
     def __repr__(self) -> str:

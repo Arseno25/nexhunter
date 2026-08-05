@@ -17,7 +17,7 @@ from nexhunter.core.risk import RiskLevel
 from nexhunter.findings.store import FindingStore
 from nexhunter.workflows.orchestrator import AutonomousOrchestrator, RunStatus
 
-from tests.test_orchestrator import FakeExecutionService
+from test_orchestrator import FakeExecutionService
 
 
 def _web_profile():
@@ -136,7 +136,7 @@ def test_every_category_is_reachable():
 def test_binary_target_selects_binary_tooling():
     """A file target pulls in binary/RE tooling, not web tooling."""
     print("[TEST] binary target -> binary tools...")
-    profile = Profiler().new_profile("/bin/ls")  # a real file
+    profile = Profiler().new_profile(sys.executable)  # a real file on any OS
     assert profile.target_type == "binary", profile.target_type
     result = ToolSelector().select(profile, "standard", RiskLevel.ACTIVE)
     cats = {s.category for s in result.selected}

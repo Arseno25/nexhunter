@@ -258,7 +258,7 @@ def create_banner(
     art = _paint(NEXHUNTER_ART.strip("\n"), "CYAN", "BOLD", color=color)
     accent = _paint("═" * 63, "CRIMSON", color=color)
 
-    def row(icon: str, label: str, value: str, value_color: str = "WHITE") -> str:
+    def row(icon: str, label: str, value: object, value_color: str = "WHITE") -> str:
         label_txt = _paint(f"{icon} {label:<16}", "GRAY", color=color)
         value_txt = _paint(str(value), value_color, color=color)
         return f"  {label_txt}{value_txt}"

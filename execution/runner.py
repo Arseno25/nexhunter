@@ -19,9 +19,9 @@ import os
 import signal
 import subprocess
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Optional
 
 DEFAULT_MAX_OUTPUT_BYTES = 10 * 1024 * 1024
 DEFAULT_GRACE_SECONDS = 5.0
@@ -37,17 +37,17 @@ _IS_WINDOWS = os.name == "nt"
 class RunResult:
     """Outcome of one process run."""
 
-    exit_code: Optional[int]
+    exit_code: int | None
     timed_out: bool = False
     terminated: bool = False
     truncated: bool = False
-    error: Optional[str] = None
-    error_code: Optional[str] = None
+    error: str | None = None
+    error_code: str | None = None
     stdout: str = ""
     stderr: str = ""
     stdout_bytes: int = 0
     stderr_bytes: int = 0
-    pid: Optional[int] = None
+    pid: int | None = None
 
     @property
     def ok(self) -> bool:
@@ -94,13 +94,13 @@ def terminate_tree(proc: subprocess.Popen, grace: float = DEFAULT_GRACE_SECONDS)
         )
     else:
         try:
-            group = os.getpgid(proc.pid)
+            group = os.getpgid(proc.pid)  # type: ignore[attr-defined]  # POSIX-only branch
         except (ProcessLookupError, OSError):
             group = None
 
         if group is not None:
             try:
-                os.killpg(group, signal.SIGTERM)
+                os.killpg(group, signal.SIGTERM)  # type: ignore[attr-defined]
             except (ProcessLookupError, PermissionError, OSError):
                 pass
             try:
@@ -109,7 +109,7 @@ def terminate_tree(proc: subprocess.Popen, grace: float = DEFAULT_GRACE_SECONDS)
             except subprocess.TimeoutExpired:
                 pass
             try:
-                os.killpg(group, signal.SIGKILL)
+                os.killpg(group, signal.SIGKILL)  # type: ignore[attr-defined]
             except (ProcessLookupError, PermissionError, OSError):
                 pass
 
@@ -122,7 +122,7 @@ def terminate_tree(proc: subprocess.Popen, grace: float = DEFAULT_GRACE_SECONDS)
 def _read_capped(path: Path, limit: int) -> str:
     if not path.exists():
         return ""
-    with open(path, "r", encoding="utf-8", errors="replace") as handle:
+    with open(path, encoding="utf-8", errors="replace") as handle:
         return handle.read(limit)
 
 
@@ -139,11 +139,11 @@ class ProcessRunner:
 
     def run(
         self,
-        cmd: List[str],
+        cmd: list[str],
         timeout: int,
         workdir: Path,
-        cancel: Optional[callable] = None,
-        on_spawn: Optional[callable] = None,
+        cancel: Callable[[], bool] | None = None,
+        on_spawn: Callable[[int], None] | None = None,
     ) -> RunResult:
         """Execute cmd, writing output into workdir.
 
@@ -173,7 +173,7 @@ class ProcessRunner:
                 if on_spawn is not None:
                     try:
                         on_spawn(proc.pid)
-                    except Exception:  # noqa: BLE001 - telemetry must not break a run
+                    except Exception:  # noqa: BLE001, S110 - telemetry must not break a run
                         pass
                 result = self._supervise(proc, timeout, stdout_path, stderr_path, cancel)
         except FileNotFoundError:
@@ -197,7 +197,7 @@ class ProcessRunner:
         timeout: int,
         stdout_path: Path,
         stderr_path: Path,
-        cancel: Optional[callable],
+        cancel: Callable[[], bool] | None,
     ) -> RunResult:
         """Wait for the process, enforcing timeout, cancellation, output cap."""
         deadline = time.monotonic() + timeout

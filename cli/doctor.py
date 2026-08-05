@@ -9,7 +9,6 @@ import os
 import platform
 import sys
 from pathlib import Path
-from typing import List, Tuple
 
 from nexhunter.core import tools as T
 from nexhunter.core.availability import check_binary
@@ -23,21 +22,21 @@ FAIL = "[FAIL]"
 MIN_PYTHON = (3, 10)
 
 
-def _check_python() -> Tuple[str, str]:
+def _check_python() -> tuple[str, str]:
     version = f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"
     if sys.version_info[:2] < MIN_PYTHON:
         return FAIL, f"Python {version} (needs {MIN_PYTHON[0]}.{MIN_PYTHON[1]}+)"
     return OK, f"Python {version}"
 
 
-def _check_platform() -> Tuple[str, str]:
+def _check_platform() -> tuple[str, str]:
     system = platform.system()
     if system in ("Linux", "Darwin", "Windows"):
         return OK, f"{system} {platform.release()}"
     return WARN, f"{system} (untested platform)"
 
 
-def _check_data_dir() -> Tuple[str, str]:
+def _check_data_dir() -> tuple[str, str]:
     directory = data_dir()
     try:
         directory.mkdir(parents=True, exist_ok=True)
@@ -49,7 +48,7 @@ def _check_data_dir() -> Tuple[str, str]:
         return FAIL, f"Data directory not writable: {directory} ({exc})"
 
 
-def _check_binding() -> Tuple[str, str]:
+def _check_binding() -> tuple[str, str]:
     host = os.environ.get("NEXHUNTER_BIND_HOST", "127.0.0.1").strip()
     external_allowed = os.environ.get("NEXHUNTER_EXTERNAL_BIND_ALLOWED", "").lower() in {"1", "true", "yes", "on"}
 
@@ -60,7 +59,7 @@ def _check_binding() -> Tuple[str, str]:
     return FAIL, f"Server binds to {host} but NEXHUNTER_EXTERNAL_BIND_ALLOWED is not set"
 
 
-def _check_destructive_flags() -> List[Tuple[str, str]]:
+def _check_destructive_flags() -> list[tuple[str, str]]:
     results = []
     for variable, label in (
         ("NEXHUNTER_DESTRUCTIVE_TOOLS_ENABLED", "Destructive tools"),
@@ -71,7 +70,7 @@ def _check_destructive_flags() -> List[Tuple[str, str]]:
     return results
 
 
-def _check_dependencies() -> List[Tuple[str, str]]:
+def _check_dependencies() -> list[tuple[str, str]]:
     results = []
     for module, purpose in (("fastmcp", "MCP server"), ("defusedxml", "safe XML parsing")):
         try:
@@ -82,7 +81,7 @@ def _check_dependencies() -> List[Tuple[str, str]]:
     return results
 
 
-def _check_browser_engine() -> Tuple[str, str]:
+def _check_browser_engine() -> tuple[str, str]:
     """Report whether browser_crawl can drive a real headless browser."""
     import importlib.util
 
@@ -98,7 +97,7 @@ def _check_browser_engine() -> Tuple[str, str]:
     return WARN, f"browser_crawl falls back to static crawl, no JS: missing {', '.join(missing)}"
 
 
-def _check_execution() -> Tuple[str, str]:
+def _check_execution() -> tuple[str, str]:
     """Confirm we can actually spawn a process and read its output."""
     from nexhunter.execution.runner import ProcessRunner
     import tempfile
@@ -119,7 +118,7 @@ def _check_execution() -> Tuple[str, str]:
 
 def run(check_versions: bool = True, show_all_tools: bool = False) -> int:
     """Print the report. Returns a process exit code: 0 unless something failed."""
-    sections: List[Tuple[str, List[Tuple[str, str]]]] = []
+    sections: list[tuple[str, list[tuple[str, str]]]] = []
 
     core = [
         _check_python(),
@@ -156,7 +155,7 @@ def run(check_versions: bool = True, show_all_tools: bool = False) -> int:
             tool_rows.append((MISSING, f"{missing} other stable tools not installed (--all to list)"))
     sections.append((f"Stable tools ({installed_count}/{len(stable_specs)} installed)", tool_rows))
 
-    per_category = {}
+    per_category: dict[str, list[int]] = {}
     for spec in T.TOOLS.values():
         bucket = per_category.setdefault(spec.category, [0, 0])
         bucket[1] += 1

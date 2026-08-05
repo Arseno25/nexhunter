@@ -13,12 +13,13 @@ execution stays on the single path behind the registry.
 
 from __future__ import annotations
 
+from typing import Any
 
 from nexhunter.core import tools as T
 
 # base_probability: rough chance a step succeeds on a typical authorized lab
 # *given its gate is met*. Availability halves it when the binary is missing.
-CHAIN_PATTERNS: dict[str, dict[str, object]] = {
+CHAIN_PATTERNS: dict[str, dict[str, Any]] = {
     "recon_sweep": {
         "goal": "Map the target's network, services, and web surface.",
         "steps": [

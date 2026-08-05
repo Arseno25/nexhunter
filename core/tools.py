@@ -1258,11 +1258,11 @@ _tool_specs = {
     # ==================== VULNERABILITY SCANNERS ====================
     "arachni": ToolSpec(
         name="arachni", binary="arachni", description="Full-featured web application vulnerability scanner",
-        params={"url": None, "report": "/tmp/arachni.html"}, timeout=900,
+        params={"url": None, "report": "arachni-report.html"}, timeout=900,
         builder=lambda p: ["arachni", "--output-verbose", p["url"], "--report-save-path", p["report"]]),
     "skipfish": ToolSpec(
         name="skipfish", binary="skipfish", description="High-speed web application security scanner",
-        params={"url": None, "output_dir": "/tmp/skipfish"}, timeout=900,
+        params={"url": None, "output_dir": "skipfish-out"}, timeout=900,
         builder=lambda p: ["skipfish", "-o", p["output_dir"], p["url"]]),
     "wapiti": ToolSpec(
         name="wapiti", binary="wapiti", description="Web application vulnerability scanner with a crawl engine",
@@ -1288,7 +1288,7 @@ _tool_specs = {
     # ==================== PAYLOADS ====================
     "hoaxshell": ToolSpec(
         name="hoaxshell", binary="python3", description="Generate a PowerShell reverse shell payload (hoaxshell.py)",
-        params={"lhost": "127.0.0.1", "lport": "4444", "output": "/tmp/shell.ps1"}, timeout=60, risk_level="intrusive",
+        params={"lhost": "127.0.0.1", "lport": "4444", "output": "shell.ps1"}, timeout=60, risk_level="intrusive",
         builder=lambda p: ["python3", "hoaxshell.py", "-s", p["lhost"], "-p", p["lport"], "-o", p["output"]]),
 
     # ==================== PRIVILEGE ESCALATION ====================
@@ -1723,7 +1723,7 @@ def get_tool_spec(name: str) -> ToolSpec | None:
 def risk_of(name: str) -> str:
     """Return the risk level string for a registered tool (default 'active')."""
     spec = TOOLS.get(name)
-    return spec.risk_level if spec else "active"
+    return (spec.risk_level if spec else None) or "active"
 
 
 def parse_output(tool: str, text: str):
