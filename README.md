@@ -60,57 +60,12 @@ Add to your AI provider's config file (e.g., `~/.claude/config.json`):
 }
 ```
 
-**Configure for your system:**
+Replace `/path/to/python` with your Python executable path and `/path/to/nexhunter` with NexHunter repo location.
 
-| Parameter | Example | Notes |
-|-----------|---------|-------|
-| `/path/to/python` | `/usr/bin/python3` or `C:\Python\python.exe` or `.venv/Scripts/python.exe` | Path to Python interpreter |
-| `/path/to/nexhunter` | `/home/user/nexhunter` or `C:\Users\user\nexhunter` | Path to NexHunter repo |
-| `http://127.0.0.1:8888` | Change port if needed | NexHunter server address |
-
-**Linux/macOS Example:**
-```json
-{
-  "mcp": {
-    "nexhunter": {
-      "type": "local",
-      "command": [
-        "/usr/bin/python3",
-        "-m",
-        "nexhunter.api.mcp",
-        "--server",
-        "http://127.0.0.1:8888"
-      ],
-      "environment": {
-        "PYTHONPATH": "/home/user/nexhunter"
-      },
-      "enabled": true
-    }
-  }
-}
-```
-
-**Windows Example:**
-```json
-{
-  "mcp": {
-    "nexhunter": {
-      "type": "local",
-      "command": [
-        "C:\\Users\\user\\nexhunter\\.venv\\Scripts\\python.exe",
-        "-m",
-        "nexhunter.api.mcp",
-        "--server",
-        "http://127.0.0.1:8888"
-      ],
-      "environment": {
-        "PYTHONPATH": "C:\\Users\\user\\nexhunter"
-      },
-      "enabled": true
-    }
-  }
-}
-```
+**Example (Linux/macOS/Windows):**
+- `/usr/bin/python3` → `/home/user/nexhunter`
+- `C:\Python\python.exe` → `C:\Users\user\nexhunter`
+- `.venv/Scripts/python.exe` → `./nexhunter`
 
 **Usage:**
 ```
