@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 from typing import Callable, Optional, Dict, Any
 
 from nexhunter.core.config import TOOL_TIMEOUTS, DEFAULT_TOOL_TIMEOUT
+from nexhunter.core import params as P
 
 
 # Risk classification by keyword in tool name or binary. First match wins,
@@ -119,6 +120,9 @@ class ToolSpec:
     category: Optional[str] = None
     # stable | beta | experimental | disabled. None => derived from STABLE_TOOLS.
     maturity: Optional[str] = None
+    # Typed parameter schemas. None => inferred from the `params` dict, so the
+    # several hundred legacy entries gain validation without being rewritten.
+    param_specs: Optional[tuple] = None
 
     def __post_init__(self):
         if self.timeout == DEFAULT_TOOL_TIMEOUT and self.name in TOOL_TIMEOUTS:
@@ -131,6 +135,21 @@ class ToolSpec:
             self.category = _infer_category(self.name, self.binary)
         if self.maturity is None:
             self.maturity = "stable" if self.name in STABLE_TOOLS else "beta"
+        if self.param_specs is None:
+            self.param_specs = tuple(
+                P.spec_from_legacy(key, default) for key, default in self.params.items()
+            )
+
+    def spec_for(self, name: str):
+        """The typed schema for one parameter, or None."""
+        for spec in self.param_specs or ():
+            if spec.name == name:
+                return spec
+        return None
+
+    def secret_params(self) -> tuple:
+        """Names of parameters whose values are credentials."""
+        return tuple(spec.name for spec in (self.param_specs or ()) if spec.secret)
 
     @property
     def available(self) -> bool:
@@ -148,8 +167,7 @@ class ToolSpec:
             "maturity": self.maturity,
             "timeout_s": self.timeout,
             "parameters": {
-                key: {"required": default is None, "default": default}
-                for key, default in self.params.items()
+                spec.name: spec.describe() for spec in (self.param_specs or ())
             },
             "target_param": self.target_param,
             "available": self.available,
@@ -162,20 +180,24 @@ class ToolSpec:
         return ""
 
     def validate(self, user_params: dict) -> tuple[bool, Optional[str]]:
-        """Validate user params against spec. Return (ok, error_msg)."""
-        missing = [k for k, v in self.params.items() if v is None and k not in user_params]
-        if missing:
-            return False, f"missing required: {', '.join(missing)}"
-        return True, None
+        """Validate user params against the typed schema. Return (ok, error)."""
+        _, error = P.validate_params(self.param_specs or (), user_params or {})
+        return (error is None), error
+
+    def normalize(self, user_params: dict) -> tuple[Optional[dict], Optional[str]]:
+        """Validate and return normalized values, or an error.
+
+        Command builders receive the normalized values, so a builder never sees
+        a raw caller-supplied string.
+        """
+        return P.validate_params(self.param_specs or (), user_params or {})
 
     def build_cmd(self, user_params: dict) -> Optional[list]:
-        """Build command from spec and params."""
-        ok, err = self.validate(user_params)
-        if not ok:
+        """Build the argument list from validated parameters."""
+        normalized, error = self.normalize(user_params)
+        if error is not None or not self.builder:
             return None
-        if self.builder:
-            return self.builder(user_params)
-        return None
+        return self.builder(normalized)
 
 
 _tool_specs = {

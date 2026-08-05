@@ -70,11 +70,17 @@ class ExecutionService:
         self.registry.add(record)
 
         record.transition(ExecutionStatus.VALIDATING)
-        ok, err = spec.validate(params)
-        if not ok:
+        merged, err = spec.normalize(params)
+        if err is not None:
             return self._fail(record, "INVALID_PARAMS", err, blocked=True)
 
-        merged = {k: params.get(k, spec.params.get(k)) for k in spec.params}
+        # Re-redact from the normalized values, using the schema's own notion of
+        # which parameters are credentials rather than a name heuristic.
+        record.redacted_parameters = {
+            key: "[REDACTED]" if (s := spec.spec_for(key)) and s.secret
+            else self.redactor.redact_string(value) if isinstance(value, str) else value
+            for key, value in merged.items()
+        }
         record.target = spec.target_of(merged)
 
         gate_result = self.gate.authorize_tool(
@@ -106,7 +112,17 @@ class ExecutionService:
         cmd = spec.build_cmd(merged)
         if not cmd:
             return self._fail(record, "BUILD_FAILED", f"failed to build command for {tool_name}", blocked=True)
-        record.redacted_command = self.redactor.redact_command(list(cmd))
+
+        # Mask the exact values the schema marked secret, wherever they landed
+        # in argv. This is precise where flag-name matching could only guess,
+        # and it covers tools whose credential flag nobody thought to list.
+        secret_values = [
+            str(merged[name]) for name in spec.secret_params()
+            if merged.get(name) not in (None, "")
+        ]
+        record.redacted_command = self.redactor.redact_command(
+            list(cmd), secret_values=secret_values
+        )
 
         try:
             workspace = Workspace.create(record.engagement_id, record.id)

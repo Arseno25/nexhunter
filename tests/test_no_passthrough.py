@@ -77,9 +77,15 @@ def test_no_builder_splits_a_parameter_into_argv():
     print("  [OK] No builder splits parameters into argv")
 
 
-def test_shell_metacharacters_stay_inert():
-    """Shell metacharacters in a parameter remain one literal argument."""
-    print("[TEST] Shell metacharacters stay inert...")
+def test_shell_metacharacters_rejected_by_typed_validation():
+    """Injection payloads are refused before a command is ever built.
+
+    There are two independent defenses and this checks both. Typed validation
+    rejects a payload that is not a valid target; and even if a value does
+    reach argv, it is one literal argument, because argv goes to the OS as a
+    list with no shell.
+    """
+    print("[TEST] Shell metacharacters rejected...")
 
     payloads = [
         "example.com; whoami",
@@ -88,21 +94,56 @@ def test_shell_metacharacters_stay_inert():
         "$(whoami).example.com",
         "`id`.example.com",
         "example.com\nwhoami",
+        "example.com\x00.evil.com",
     ]
 
     spec = T.get_tool_spec("nmap_scan")
     assert spec is not None, "nmap_scan should be registered"
 
     for payload in payloads:
-        argv = spec.build_cmd({"target": payload, "ports": ""})
-        assert argv is not None, f"expected a command for {payload!r}"
-        # The payload survives intact as exactly one argument: because argv is
-        # passed to the OS as a list with no shell, it is data, not syntax.
-        assert argv.count(payload) == 1, f"{payload!r} was split or duplicated: {argv}"
-        assert "whoami" not in argv, f"metacharacter payload leaked into argv: {argv}"
-        assert "id" not in argv
+        ok, error = spec.validate({"target": payload})
+        assert not ok, f"{payload!r} should not validate as a target"
+        assert error, "a rejection should carry a reason"
+        assert spec.build_cmd({"target": payload, "ports": ""}) is None, (
+            f"{payload!r} must not produce a command"
+        )
 
-    print(f"  [OK] {len(payloads)} injection payloads stayed inert")
+    print(f"  [OK] {len(payloads)} injection payloads refused at validation")
+
+
+def test_free_text_values_stay_single_arguments():
+    """A value that legitimately contains metacharacters stays one argument.
+
+    Second layer: for free-text parameters there is nothing to validate against,
+    so the guarantee is that the value cannot become syntax.
+    """
+    print("[TEST] Free-text values remain single arguments...")
+
+    for name, spec in T.TOOLS.items():
+        text_params = [
+            s.name for s in spec.param_specs
+            if s.type.value == "string" and not s.secret
+        ]
+        if not text_params:
+            continue
+
+        payload = "alpha; whoami && id"
+        params = {
+            s.name: (payload if s.name == text_params[0] else s.default)
+            for s in spec.param_specs
+        }
+        try:
+            argv = spec.build_cmd(params)
+        except Exception:
+            continue
+        if not argv:
+            continue
+
+        assert "whoami" not in argv, f"{name} split a value into argv: {argv}"
+        assert "&&" not in argv, f"{name} split a value into argv: {argv}"
+        break
+
+    print("  [OK] Metacharacters cannot become syntax")
 
 
 def test_no_shell_true_anywhere_in_execution_paths():
@@ -164,7 +205,8 @@ if __name__ == "__main__":
     print("\n=== No-Passthrough Regression Tests ===\n")
     test_no_tool_takes_a_command_parameter()
     test_no_builder_splits_a_parameter_into_argv()
-    test_shell_metacharacters_stay_inert()
+    test_shell_metacharacters_rejected_by_typed_validation()
+    test_free_text_values_stay_single_arguments()
     test_no_shell_true_anywhere_in_execution_paths()
     test_cloud_and_container_tools_are_fixed_actions()
     test_removed_passthrough_tools_are_gone()

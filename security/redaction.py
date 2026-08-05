@@ -238,18 +238,37 @@ class SecretRedactor:
             return False
         return self.is_secret_key(name)
 
-    def redact_command(self, cmd_args: List[str]) -> List[str]:
+    def redact_command(
+        self,
+        cmd_args: List[str],
+        secret_values: Optional[List[str]] = None,
+    ) -> List[str]:
         """Redact secret values from an argument list.
 
-        Handles both "--token VALUE" and "--token=VALUE" forms, plus any
-        argument that matches a secret pattern on its own.
+        `secret_values` are the exact values a tool's schema declared secret.
+        Masking those is precise, where matching on flag names could only
+        guess; the name and pattern heuristics below stay as a backstop for
+        callers that have no schema to hand.
         """
         redacted: List[str] = []
         skip_next = False
         short_flags = self._short_secret_flags(cmd_args)
+        known_secrets = {str(v) for v in (secret_values or []) if str(v)}
 
         for arg in cmd_args:
             arg = str(arg)
+
+            # An exact value the schema marked secret, wherever it appears.
+            if known_secrets and arg in known_secrets:
+                redacted.append("[REDACTED]")
+                skip_next = False
+                continue
+            if known_secrets and "=" in arg:
+                flag, _, value = arg.partition("=")
+                if value in known_secrets:
+                    redacted.append(f"{flag}=[REDACTED]")
+                    skip_next = False
+                    continue
 
             if skip_next:
                 redacted.append("[REDACTED]")
