@@ -7,7 +7,7 @@
 
   <p>Safe orchestration of security tools for <em>authorized</em> assessments.</p>
 
-![Version](https://img.shields.io/badge/version-1.0.0-blue) ![Python](https://img.shields.io/badge/python-3.10%2B-green) ![Tests](https://img.shields.io/badge/tests-277%20passing-green)
+![Version](https://img.shields.io/badge/version-1.0.0-blue) ![Python](https://img.shields.io/badge/python-3.10%2B-green) ![Tests](https://img.shields.io/badge/tests-304%20passing-green)
 </div>
 
 ---
@@ -35,9 +35,14 @@ autonomous loop cannot escalate its own risk ceiling.
   from the registry; no path uses a shell. A regression suite enforces it.
 - **Bounded autonomy.** The orchestrator's risk ceiling is clamped to `active`;
   intrusive and destructive tools are withheld for human approval.
-- **Honest registry.** 252 tools, each tagged with a maturity level that is
+- **Honest registry.** 255 tools, each tagged with a maturity level that is
   asserted, never guessed — stub tools are labelled `experimental`, not sold as
   working capability.
+- **Browser engine.** Selenium-backed page analysis (tech fingerprint, security
+  headers, cookies, DOM depth, JS errors), screenshot, network capture, crawl,
+  and form discovery — with a stdlib fallback when Selenium is absent.
+- **Visual engine.** HexStrike-style severity cards, live dashboards, progress
+  bars, and spinners for terminal and API consumers (`NO_COLOR` respected).
 - **Fast when you want it.** An LRU+TTL result cache and an optional in-process
   `direct` mode cut repeat work; process management lets you watch and stop runs.
 - **Secrets redacted** from parameters, commands, logs, and output.
@@ -50,7 +55,7 @@ flowchart LR
     B[MCP / AI client] --> E
     C[CLI] --> E
     D[Autonomous loop] --> E
-    E --> R[Registry - 252 tools]
+    E --> R[Registry - 255 tools]
     E --> G[validate + build argv]
     E --> S[run isolated + record]
     style E fill:#0e7490,stroke:#06b6d4,stroke-width:3px,color:#f8fafc
@@ -58,7 +63,7 @@ flowchart LR
 
 1. **One execution path** — every caller walks the same code: lookup → typed
    validation → build argv → isolated run → record.
-2. **The registry** — 252 `ToolSpec`s with typed params, risk, category, and
+2. **The registry** — 255 `ToolSpec`s with typed params, risk, category, and
    maturity; MCP profiles slice it per client.
 3. **The loop** — autonomous assessment: profiler evidence → planner → bounded
    by a clamped risk ceiling and a step budget.
@@ -131,15 +136,15 @@ Roo Code, OpenCode — see [docs/mcp/](docs/mcp/)):
 
 ### Profiles
 
-Listing all 252 tools to every client makes for a large payload, a large token
+Listing all 255 tools to every client makes for a large payload, a large token
 cost, and a model choosing blindly between near-identical tools. A profile
 narrows the registry to one job.
 
 | Profile | Tools | Purpose |
 |---|---:|---|
 | `nexhunter-core` | 12 | Status, findings, executions, passive stable checks only |
-| `nexhunter-recon` | 23 | Host discovery, DNS, subdomains, service identification |
-| `nexhunter-web` | 37 | Content discovery, injection testing, template scanning, TLS, browser crawl |
+| `nexhunter-recon` | 25 | Host discovery, DNS, subdomains, service identification |
+| `nexhunter-web` | 38 | Content discovery, injection testing, template scanning, TLS, browser crawl |
 | `nexhunter-api` | 7 | Schema and parameter discovery (arjun), JWT, GraphQL |
 | `nexhunter-code` | 16 | Static analysis, secret scanning, dependency review |
 | `nexhunter-cloud` | 8 | Read-only cloud posture |
@@ -151,8 +156,8 @@ narrows the registry to one job.
 | `nexhunter-payloads` | 3 | Payload generation, C2 integration (never auto-executed) |
 | `nexhunter-vulnscan` | 8 | Vulnerability scanners and IDS tooling |
 | `nexhunter-mobile` | 6 | APK inspection, decompilation, runtime exploration |
-| `nexhunter-ctf` | 86 | All CTF domains: web, crypto, RE/pwn, forensics, OSINT |
-| `nexhunter-full` | 250 | **Default (no `--profile`).** Everything non-destructive, incl. experimental |
+| `nexhunter-ctf` | 87 | All CTF domains: web, crypto, RE/pwn, forensics, OSINT |
+| `nexhunter-full` | 253 | **Default (no `--profile`).** Everything non-destructive, incl. experimental |
 
 ```bash
 nexhunter profiles                          # list them
@@ -227,6 +232,45 @@ ceiling — they differ only in what they leave behind.
 Both cache deterministic terminal results (`completed`/`failed`); a timeout or
 termination is never cached. Set `no_cache: true` to force a fresh run.
 
+### Browser engine
+
+One endpoint, five modes — Selenium (headless Chrome) when installed, stdlib
+fallback otherwise:
+
+```bash
+curl -X POST http://127.0.0.1:8888/api/browser/analyze \
+     -d '{"url":"http://example.com"}'                    # full page analysis
+curl -X POST http://127.0.0.1:8888/api/browser/screenshot -d '{"url":"http://example.com"}'
+curl -X POST http://127.0.0.1:8888/api/browser/network    -d '{"url":"http://example.com"}'
+curl -X POST http://127.0.0.1:8888/api/browser/crawl      -d '{"url":"http://example.com"}'
+curl -X POST http://127.0.0.1:8888/api/browser/forms      -d '{"url":"http://example.com"}'
+```
+
+`analyze` returns title, HTTP status, tech fingerprint (Cloudflare, jQuery, …),
+nine security-header checks, cookie flags (Secure/HttpOnly/SameSite), DOM depth,
+JS errors, and console warnings. The Selenium path disables
+`AutomationControlled` and injects an anti-detection script; without Selenium it
+degrades to a static fetch and says so in `note`. Network capture uses the
+Performance API, so no CDP dependency. Screenshots land in
+`browser_screenshot.png`.
+
+### Visual engine
+
+HexStrike-style terminal rendering with ANSI, auto-degrading to ASCII on
+encodings without box-drawing glyphs (e.g. Windows cp1252) and to plain text
+with `NO_COLOR`:
+
+```bash
+curl -X POST http://127.0.0.1:8888/api/visual/card \
+     -d '{"title":"SQLi","severity":"high","description":"...","remediation":"..."}'
+curl http://127.0.0.1:8888/api/visual/dashboard    # live request/finding counts
+```
+
+`/api/visual/card` returns a typed `VulnerabilityCard` (id, severity, confidence,
+cvss, poc, remediation, timestamp) that `VulnerabilityCard.to_cli()` renders as a
+bordered card colored by severity. The same functions power the CLI's live
+progress bars and the MCP `vulnerability_card` / `dashboard` tools.
+
 ### Caching & process management
 
 - `GET /api/cache/stats` — hits, misses, evictions, hit rate.
@@ -292,7 +336,7 @@ Stable tools (9/29 installed)
   [OK] curl_headers (curl 8.12.1)
   [MISSING] 20 other stable tools not installed
 
-Registry availability (115/252 tools on PATH)
+Registry availability (115/255 tools on PATH)
   [OK] web: 20/37 available
   [MISSING] wireless: 0/9 available
 ```
@@ -322,21 +366,29 @@ curl -X POST http://127.0.0.1:8888/api/command \
 | `GET /api/mcp/profiles` | Profile definitions |
 | `GET /api/cache/stats` · `POST /api/cache/clear` | Result-cache telemetry / reset |
 | `GET /api/processes/list` · `/status/{pid}` · `POST /terminate/{pid}` | Live process management |
+| `POST /api/browser/{mode}` | Browser engine: `analyze` `screenshot` `network` `crawl` `forms` |
+| `POST /api/visual/card` · `GET /api/visual/dashboard` | Vulnerability card / live dashboard |
+| `POST /api/plan` · `POST /api/attack-chain` | Plan-first autonomy · multi-step attack chains |
+| `POST /api/sandbox/validate` · `/execute` · `/cleanup` | Validate + run tool code in an isolated workspace |
+| `POST /api/web-lab/*` | HTTP lab: packet capture, replay, proxy |
+| `GET /api/agents` · `POST /api/agents/{name}` | Agent inventory / single agent execution |
+| `POST /api/intelligence/analyze-target` | AI analysis: tech fingerprint, CVE lookup, tool selection |
+| `POST /api/findings/export` | Ledger export: JSON / MD / HTML / SARIF |
 
 The server binds to `127.0.0.1` by default and `doctor` fails loudly on any
 other binding unless `NEXHUNTER_EXTERNAL_BIND_ALLOWED` is set.
 
 ## Tool registry & maturity
 
-252 tools across 20 categories. Maturity is asserted per tool, never guessed.
+255 tools across 20 categories. Maturity is asserted per tool, never guessed.
 
 | Level | Meaning | Count |
-|---|---|---:|
+|---|---:|---:|
 | **stable** | Command builder, availability check, parser (where applicable), tests | 29 |
-| **beta** | Registered and validated, less exercised | 201 |
+| **beta** | Registered and validated, less exercised | 204 |
 | **experimental** | Registered but not honestly usable as written (placeholder binary or hardcoded stand-in args); kept out of the focused profiles | 22 |
 
-Risk levels: 56 passive · 163 active · 31 intrusive · 2 destructive. Cloud,
+Risk levels: 56 passive · 166 active · 31 intrusive · 2 destructive. Cloud,
 container, and orchestration access is exposed as fixed read-only actions
 (`aws_get_caller_identity`, `kubectl_get_pods`, `docker_list_containers`), never
 as a CLI passthrough.
@@ -362,7 +414,7 @@ See [.env.example](.env.example).
 ## Testing
 
 ```bash
-pytest                                                    # 277 tests
+pytest                                                    # 304 tests
 pytest --cov=nexhunter --cov-report=term-missing          # coverage
 ```
 
@@ -381,6 +433,8 @@ best covered; legacy agent and engine code is thinner.
 - Mature more beta tools to stable (parser + fixture + test), category by category.
 - Migrate legacy `Engine` flows (`/api/probe`, `/api/portscan`) onto `ExecutionService`.
 - Raise coverage on `api/server.py`, `core/engine.py`, and `agents/`.
+- Browser engine: live network interception (mitmproxy/CDP) instead of the
+  post-hoc Performance API capture.
 
 ## Documentation
 
