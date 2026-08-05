@@ -121,6 +121,31 @@ No profile lists a destructive tool. Profiles are a usability control, not a
 security control — the policy engine authorizes every execution regardless of
 which profile surfaced the tool.
 
+## Autonomous assessment
+
+Hand a whole assessment to the orchestrator and it plans, runs, and re-plans as
+results arrive — the autonomous, adaptive flow, but bounded so the AI drives the
+loop, never the operating system.
+
+```bash
+curl -H "Authorization: Bearer $NEXHUNTER_API_TOKEN" \
+     -X POST http://127.0.0.1:8888/api/autonomous \
+     -d '{"target":"https://example.com","engagement_id":"ENG-001","risk_ceiling":"active"}'
+```
+
+Or over MCP: *"Run an autonomous assessment of example.com under ENG-001."*
+
+Three bounds the AI cannot lift:
+
+- **Gated.** Every step goes through the same `SecurityGate` as a manual call.
+  The loop cannot reach a target or risk level the engagement forbids.
+- **Risk ceiling.** It runs passive and active tools. Intrusive and destructive
+  tools are never auto-run — they are surfaced for human approval. A higher
+  ceiling requested is clamped, not granted.
+- **Step budget.** It stops after a set number of steps.
+
+Full walkthrough with diagrams: [docs/how-it-works.md](docs/how-it-works.md).
+
 ## Security model
 
 ```mermaid

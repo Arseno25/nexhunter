@@ -84,6 +84,7 @@ from nexhunter.engagements.store import (
 )
 from nexhunter.findings import export as findings_export
 from nexhunter.findings.store import FindingStore
+from nexhunter.workflows.orchestrator import AutonomousOrchestrator
 from nexhunter import config as nexhunter_config
 
 ENGINE = Engine()
@@ -94,6 +95,9 @@ GATE = SecurityGate(token_validator=TOKEN_VALIDATOR, engagement_store=STORE)
 # Single execution path shared with the MCP server: validate, authorize, run,
 # record. Nothing else in this module spawns a process.
 EXEC = ExecutionService(gate=GATE)
+# Autonomous, adaptive assessment. Drives EXEC, so every step it takes is gated
+# and audited exactly as a manual call would be.
+ORCHESTRATOR = AutonomousOrchestrator(execution_service=EXEC, finding_store=FINDINGS)
 
 
 class ProcessManager:
@@ -295,6 +299,22 @@ class Handler(BaseHTTPRequestHandler):
             engagement_id=body.get("engagement_id") or None,
         )
 
+    def _start_autonomous(self, body):
+        """Kick off an adaptive autonomous run. Every step it takes is gated."""
+        target = body.get("target")
+        if not target:
+            return {"ok": False, "error": "target is required", "code": "TARGET_REQUIRED"}
+        run = ORCHESTRATOR.start(
+            target=target,
+            auth_header=self.headers.get("Authorization"),
+            source_ip=self._source_ip(),
+            engagement_id=body.get("engagement_id") or None,
+            risk_ceiling=body.get("risk_ceiling", "active"),
+            max_steps=int(body.get("max_steps", 20)),
+            run_async=bool(body.get("async", True)),
+        )
+        return {"ok": True, "run": run.to_dict()}
+
     def _create_engagement(self, body):
         """Create an engagement. Validation failures are reported, not raised."""
         try:
@@ -371,6 +391,15 @@ class Handler(BaseHTTPRequestHandler):
                     },
                     "installed_tools": sorted(s.name for s in installed),
                 })
+            elif path == "/api/autonomous":
+                runs = ORCHESTRATOR.list_runs()
+                self._json(200, {"ok": True, "runs": [r.to_dict() for r in runs]})
+            elif path.startswith("/api/autonomous/"):
+                run = ORCHESTRATOR.get_run(path.rsplit("/", 1)[1])
+                if run is None:
+                    self._json(404, {"ok": False, "error": "no such run", "code": "NOT_FOUND"})
+                else:
+                    self._json(200, {"ok": True, "run": run.to_dict()})
             elif path == "/api/findings/summary":
                 self._json(200, {"ok": True, "summary": FINDINGS.summary()})
             elif path == "/api/findings/export":
@@ -457,6 +486,8 @@ class Handler(BaseHTTPRequestHandler):
             fn = None
             if path == "/api/command":
                 fn = lambda: self._command(body)
+            elif path == "/api/autonomous":
+                fn = lambda: self._start_autonomous(body)
             elif path == "/api/engagements":
                 fn = lambda: self._create_engagement(body)
             elif path.startswith("/api/engagements/") and path.endswith("/status"):

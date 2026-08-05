@@ -348,6 +348,34 @@ def execution_terminate(execution_id: str) -> str:
     return json.dumps(api(f"/api/executions/{urllib.parse.quote(execution_id)}/terminate", {}), indent=1)
 
 
+@mcp.tool()
+def autonomous_assess(target: str, engagement_id: str = "", risk_ceiling: str = "active", max_steps: int = 20) -> str:
+    """Run an adaptive autonomous assessment of a target.
+
+    The orchestrator plans tools from what it observes, runs them, folds the
+    results back into a target profile, and re-plans -- adapting in real time.
+    Every step is authorized against the engagement and audited, exactly as a
+    manual call would be: this cannot reach a target or a risk level the
+    engagement does not permit.
+
+    risk_ceiling caps what runs automatically (passive or active). Intrusive
+    and destructive tools are never auto-executed; they are returned under
+    'recommended_next' for a human to approve. Returns a run id to poll with
+    autonomous_status.
+    """
+    payload = {"target": target, "risk_ceiling": risk_ceiling, "max_steps": max_steps, "async": True}
+    if engagement_id:
+        payload["engagement_id"] = engagement_id
+    return json.dumps(api("/api/autonomous", payload), indent=1)
+
+
+@mcp.tool()
+def autonomous_status(run_id: str) -> str:
+    """Poll an autonomous run: phase, progress, executions, findings, and the
+    tools it withheld pending human approval."""
+    return json.dumps(api(f"/api/autonomous/{urllib.parse.quote(run_id)}"), indent=1)
+
+
 _REGISTERED_TOOL_COUNT = register_profile_tools()
 
 
