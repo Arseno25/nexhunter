@@ -98,7 +98,13 @@ from nexhunter.core import tools as T
 from nexhunter.agents import AGENTS, run_agent
 from nexhunter.agents.enhanced import ENHANCED_AGENTS
 from nexhunter.core.engine import Engine
-from nexhunter.api.visual import VulnerabilityCard, DashboardMetrics, create_banner
+from nexhunter.api.visual import (
+    VulnerabilityCard,
+    DashboardMetrics,
+    create_banner,
+    create_live_dashboard,
+)
+from nexhunter.api.logging_setup import configure_logging
 from nexhunter.execution.service import ExecutionService
 from nexhunter.api import mcp_profiles
 from nexhunter.findings import export as findings_export
@@ -550,6 +556,11 @@ def visual_dashboard():
     metrics.requests = getattr(TEL, "total_requests", 0)
     metrics.findings = len(ENGINE.findings) if hasattr(ENGINE, "findings") else 0
     metrics.processes = len(EXEC.list_processes())
+    if _query("format", "json") == "box":
+        box = create_live_dashboard(
+            EXEC.list_processes(), color=_query("color", "0") == "1"
+        )
+        return jsonify({"ok": True, "box": box})
     return jsonify(metrics.to_dict())
 
 
@@ -979,7 +990,7 @@ def clear():
 @app.post("/api/visual/vulnerability-card")
 def visual_vulnerability_card():
     body = _body()
-    return jsonify(VulnerabilityCard(
+    card = VulnerabilityCard(
         title=body.get("title", "Unknown"),
         severity=body.get("severity", "info"),
         endpoint=body.get("endpoint", ""),
@@ -988,7 +999,10 @@ def visual_vulnerability_card():
         vuln_type=body.get("type", "Unknown"),
         cvss_score=body.get("cvss_score"),
         poc=body.get("poc", ""),
-    ).to_dict())
+    )
+    if body.get("format") == "box":
+        return jsonify({"ok": True, "card": card.to_cli(color=body.get("color") == "1")})
+    return jsonify(card.to_dict())
 
 
 @app.post("/api/visual/vulnerabilities")
@@ -1063,63 +1077,6 @@ def selftest():
     print(f"nexhunter selftest OK ({len(AGENTS)} agents, {len(T.TOOLS)} tools)")
 
 
-class ColoredFormatter(logging.Formatter):
-    """Console formatter using ANSI colors based on log level."""
-
-    COLORS = {
-        "DEBUG": "\033[38;5;240m",      # Gray
-        "INFO": "\033[38;5;46m",        # Green
-        "WARNING": "\033[38;5;208m",     # Orange
-        "ERROR": "\033[38;5;196m",       # Red
-        "CRITICAL": "\033[48;5;196m\033[38;5;15m\033[1m" # Red bg, white bold text
-    }
-    RESET = "\033[0m"
-
-    def __init__(self, fmt=None, datefmt=None, style="%"):
-        super().__init__(fmt, datefmt, style)
-        self.use_color = "NO_COLOR" not in os.environ
-
-    def format(self, record):
-        level = record.levelname
-        color = self.COLORS.get(level, "") if self.use_color else ""
-        asctime = self.formatTime(record, self.datefmt)
-        name = record.name
-        message = record.getMessage()
-
-        # Format levelname with color
-        colored_level = f"{color}{level:<7}{self.RESET}" if color else f"{level:<7}"
-        if level in ("WARNING", "ERROR", "CRITICAL") and color:
-            message = f"{color}{message}{self.RESET}"
-
-        return f"{asctime} | {colored_level} | {name} | {message}"
-
-
-def _configure_logging(verbose: bool) -> None:
-    """Send tool-usage and server logs to stdout, with a file fallback."""
-    datefmt = "%H:%M:%S"
-    plain_fmt = logging.Formatter(
-        "%(asctime)s | %(levelname)-7s | %(name)s | %(message)s",
-        datefmt=datefmt
-    )
-
-    stdout_handler = logging.StreamHandler(sys.stdout)
-    stdout_handler.setFormatter(ColoredFormatter(datefmt=datefmt))
-
-    handlers: list[logging.Handler] = [stdout_handler]
-    try:
-        file_handler = logging.FileHandler("nexhunter.log", encoding="utf-8")
-        file_handler.setFormatter(plain_fmt)
-        handlers.append(file_handler)
-    except OSError:
-        # Read-only or restricted cwd: stdout-only logging is enough.
-        pass
-
-    logging.basicConfig(
-        level=logging.DEBUG if verbose else logging.INFO,
-        handlers=handlers,
-    )
-
-
 def _server_mode() -> str:
     """Best-effort degradation mode for the banner (mirrors /health)."""
     try:
@@ -1149,7 +1106,7 @@ def main():
         selftest()
         return
 
-    _configure_logging(args.verbose)
+    configure_logging(args.verbose)
 
     # Validate before binding. Starting with an unintended security posture is
     # worse than not starting, so configuration errors are fatal.

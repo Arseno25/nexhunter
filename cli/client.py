@@ -389,25 +389,20 @@ def cmd_vulnerabilities(args):
 
 def cmd_dashboard(args):
     """Display assessment dashboard."""
-    d = api("/api/visual/dashboard")
+    color = "1" if _C.enabled else "0"
+    d = api(f"/api/visual/dashboard?format=box&color={color}")
     if d.get("error"):
         print(ERR("[-] " + d["error"]))
         return 1
+    if d.get("box"):
+        print(d["box"])
+        return 0
+    # Fallback: plain metrics from an older server.
     print(HEAD("Assessment Dashboard:"))
     print(f"  Requests: {d.get('requests', 0)}")
     print(f"  Findings: {d.get('findings', 0)}")
     print(f"  Active Processes: {d.get('processes', 0)}")
     print(f"  Cache Hits: {d.get('cache_hits', 0)}")
-    vulns = d.get("vulnerabilities", {})
-    if vulns:
-        print(HEAD("Vulnerabilities by Severity:"))
-        for sev in ("critical", "high", "medium", "low", "info"):
-            count = vulns.get(sev, 0)
-            bar_width = 20
-            filled = int((count / max(sum(vulns.values()), 1)) * bar_width)
-            bar = "█" * filled + "░" * (bar_width - filled)
-            color_map = {"critical": ERR, "high": ERR, "medium": WARN, "low": INFO, "info": MUTE}
-            print(f"  {color_map[sev](bar)} {sev:>8} {count}")
     return 0
 
 

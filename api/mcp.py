@@ -38,6 +38,7 @@ from fastmcp import FastMCP
 
 from nexhunter.core import tools as T
 from nexhunter.api import mcp_profiles
+from nexhunter.api.logging_setup import InterceptHandler
 
 log = logging.getLogger("nexhunter.mcp")
 
@@ -339,7 +340,9 @@ def vulnerability_card(
 @mcp.tool()
 def dashboard() -> str:
     """Server dashboard metrics: requests, findings, processes, cache."""
-    return _render(api("/api/visual/dashboard"), indent=1)
+    data = api("/api/visual/dashboard?format=box")
+    box = data.get("box") if isinstance(data, dict) else None
+    return box or _render(data, indent=1)
 
 
 @mcp.tool()
@@ -833,8 +836,9 @@ def main():
         register_profile_tools(PROFILE_NAME, limit)
 
     logging.basicConfig(
+        handlers=[InterceptHandler()],
         level=logging.DEBUG if args.debug else logging.INFO,
-        format="[nexhunter-mcp] %(levelname)s %(message)s",
+        force=True,
     )
     log.info(
         "server=%s profile=%s tools=%d limit=%s max_output=%d",

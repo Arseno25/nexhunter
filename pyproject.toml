@@ -25,6 +25,7 @@ classifiers = [
 # Anything heavier is opt-in.
 dependencies = [
     "defusedxml>=0.7",
+    "loguru>=0.7.3",
 ]
 
 [project.optional-dependencies]
