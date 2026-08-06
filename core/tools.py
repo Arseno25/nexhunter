@@ -652,6 +652,7 @@ _tool_specs = {
         description="Port/service discovery",
         params={"target": None, "ports": "", "timing": "4"},
         timeout=300,
+        parser="nmap_xml",
         builder=lambda p: (
             ["nmap", "-sV", f"-T{p['timing']}", "-oX", "-"] + (["-p", p["ports"]] if p["ports"] else []) + [p["target"]]
         ),
@@ -793,6 +794,7 @@ _tool_specs = {
         description="Vulnerability scanner with templates",
         params={"target": None, "severity": ""},
         timeout=300,
+        parser="nuclei",
         builder=lambda p: (
             ["nuclei", "-u", p["target"], "-silent", "-jsonl"] + (["-severity", p["severity"]] if p["severity"] else [])
         ),
@@ -803,6 +805,7 @@ _tool_specs = {
         description="Web content fuzzer",
         params={"target": None, "wordlist": None, "filter_status": "", "threads": 40},
         timeout=300,
+        parser="ffuf",
         builder=lambda p: (
             ["ffuf", "-u", p["target"].rstrip("/") + "/FUZZ", "-w", p["wordlist"], "-t", str(p["threads"])]
             + (["-fs", p["filter_status"]] if p["filter_status"] else [])
@@ -860,6 +863,7 @@ _tool_specs = {
         description="Web server vulnerability scan",
         params={"target": None},
         timeout=300,
+        parser="nikto",
         builder=lambda p: ["nikto", "-h", p["target"]],
     ),
     "sqlmap_scan": ToolSpec(
@@ -868,6 +872,7 @@ _tool_specs = {
         description="SQL injection tester",
         params={"url": None},
         timeout=600,
+        parser="sqlmap",
         builder=lambda p: ["sqlmap", "-u", p["url"], "--batch", "--random-agent"],
     ),
     "dalfox_xss": ToolSpec(
@@ -884,6 +889,7 @@ _tool_specs = {
         description="HTTP probe with tech detection",
         params={"target": None},
         timeout=60,
+        parser="httpx",
         builder=lambda p: ["httpx", "-u", p["target"], "-status-code", "-title", "-tech-detect", "-silent", "-json"],
     ),
     "curl_headers": ToolSpec(
@@ -900,6 +906,7 @@ _tool_specs = {
         description="WordPress vulnerability scanner",
         params={"url": None, "api_token": ""},
         timeout=300,
+        parser="wpscan",
         builder=lambda p: (
             ["wpscan", "--url", p["url"], "--random-user-agent"]
             + (["--api-token", p["api_token"]] if p["api_token"] else [])
@@ -986,6 +993,7 @@ _tool_specs = {
         params={"url": None},
         timeout=300,
         category="web",
+        parser="testssl",
         builder=lambda p: ["testssl.sh", p["url"]],
     ),
     # ==================== FORENSICS & ANALYSIS ====================
@@ -1037,14 +1045,7 @@ _tool_specs = {
         timeout=10,
         builder=lambda p: ["hexdump", "-C", p["file"]],
     ),
-    "strings_binary": ToolSpec(
-        name="strings_binary",
-        binary="strings",
-        description="Extract strings from binary",
-        params={"file": None},
-        timeout=30,
-        builder=lambda p: ["strings", "-a", p["file"]],
-    ),
+
     "file_type": ToolSpec(
         name="file_type",
         binary="file",
@@ -2181,14 +2182,7 @@ _tool_specs = {
         category="recon",
         builder=lambda p: ["shodan", "host", p["ip"]],
     ),
-    "metasploit_payload": ToolSpec(
-        name="metasploit_payload",
-        binary="msfvenom",
-        description="Generate MSF payloads",
-        params={"lhost": "127.0.0.1", "lport": "4444"},
-        timeout=30,
-        builder=lambda p: ["msfvenom", "-p", "windows/shell_reverse_tcp", "LHOST=" + p["lhost"], "LPORT=" + p["lport"]],
-    ),
+
     # ==================== OSINT ====================
     "sherlock": ToolSpec(
         name="sherlock",
@@ -2523,7 +2517,7 @@ _tool_specs = {
         name="bloodhound",
         binary="bloodhound-python",
         description="Active Directory mapping: users, groups, trusts, sessions",
-        params={"domain": None, "user": None, "password": "", "nameserver": ""},
+        params={"domain": None, "user": None, "password": None, "nameserver": ""},
         timeout=600,
         risk_level="active",
         category="network",
@@ -2593,6 +2587,7 @@ _tool_specs = {
         description="Web technology identification",
         params={"url": None},
         timeout=60,
+        parser="whatweb",
         builder=lambda p: ["whatweb", p["url"]],
     ),
     "feroxbuster": ToolSpec(
@@ -2601,6 +2596,7 @@ _tool_specs = {
         description="Recursive content discovery",
         params={"url": None, "wordlist": None, "extensions": "", "threads": 40},
         timeout=600,
+        parser="urls",
         builder=lambda p: (
             ["feroxbuster", "-u", p["url"], "-w", p["wordlist"], "-q", "-t", str(p["threads"])]
             + (["-x", p["extensions"]] if p["extensions"] else [])
@@ -2708,6 +2704,7 @@ _tool_specs = {
         description="SSL/TLS configuration analyzer",
         params={"host": None},
         timeout=300,
+        parser="sslyze",
         builder=lambda p: ["sslyze", "--regular", p["host"]],
     ),
     "tplmap": ToolSpec(
@@ -2894,14 +2891,7 @@ _tool_specs = {
         timeout=60,
         builder=lambda p: ["aws", "ec2", "describe-instances", "--output", "json"],
     ),
-    "gcloud_projects_list": ToolSpec(
-        name="gcloud_projects_list",
-        binary="gcloud",
-        description="List GCP projects",
-        params={},
-        timeout=60,
-        builder=lambda p: ["gcloud", "projects", "list"],
-    ),
+
     "azure_account_list": ToolSpec(
         name="azure_account_list",
         binary="az",
@@ -3012,14 +3002,7 @@ _tool_specs = {
         timeout=600,
         builder=lambda p: ["bulk_extractor", "-o", "bulk_extractor_out", p["image"]],
     ),
-    "strings_extract": ToolSpec(
-        name="strings_extract",
-        binary="strings",
-        description="Extract printable strings from a binary",
-        params={"file": None},
-        timeout=60,
-        builder=lambda p: ["strings", "-n", "6", p["file"]],
-    ),
+
     "pdf2txt": ToolSpec(
         name="pdf2txt",
         binary="pdf2txt.py",
@@ -3315,6 +3298,100 @@ def _parse_masscan_grep(text):
     return out
 
 
+def _parse_whatweb(text):
+    """WhatWeb text output: one line per target with tech in brackets."""
+    out = []
+    for line in text.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        tech = re.findall(r"\[([^\]]+)\]", line)
+        url_m = re.match(r"(https?://[^\s\[,]+)", line)
+        out.append({"url": url_m.group(1) if url_m else "", "tech": tech})
+    return out
+
+
+def _parse_nikto(text):
+    """Nikto text output: lines starting with '+' are findings."""
+    out = []
+    for line in text.splitlines():
+        line = line.strip()
+        if line.startswith("+ ") and ":" in line:
+            out.append({"finding": line[2:], "severity": "medium"})
+    return out
+
+
+def _parse_ffuf(text):
+    """ffuf text output: lines containing status codes and sizes."""
+    out = []
+    for line in text.splitlines():
+        line = line.strip()
+        # ffuf line: "path    [Status: 200, Size: 1234, ...]"
+        m = re.search(r"Status:\s*(\d+)", line)
+        if m and int(m.group(1)) not in (404, 400):
+            path_m = re.match(r"(\S+)\s+\[Status", line)
+            out.append({
+                "url": path_m.group(1) if path_m else line,
+                "status": int(m.group(1)),
+            })
+    return out
+
+
+def _parse_sqlmap(text):
+    """sqlmap text output: extract injection points and backend info."""
+    out = []
+    for line in text.splitlines():
+        line = line.strip()
+        if "is vulnerable" in line.lower() or "sqlmap identified" in line.lower():
+            out.append({"finding": line, "severity": "high"})
+        elif "parameter" in line.lower() and "injectable" in line.lower():
+            out.append({"finding": line, "severity": "high"})
+        elif line.startswith("[+]") or line.startswith("[INFO]"):
+            out.append({"finding": line.lstrip("[+] ").lstrip("[INFO] "), "severity": "info"})
+    return out or [{"finding": "sqlmap completed", "severity": "info"}]
+
+
+def _parse_testssl(text):
+    """testssl.sh text output: extract severity-tagged findings."""
+    out = []
+    # testssl marks issues with CRITICAL/HIGH/MEDIUM/LOW/OK/INFO
+    sev_map = {"CRITICAL": "critical", "HIGH": "high", "MEDIUM": "medium",
+               "LOW": "low", "WARN": "medium", "OK": "info", "INFO": "info"}
+    for line in text.splitlines():
+        line = line.strip()
+        for tag, sev in sev_map.items():
+            if f" {tag} " in line or line.startswith(tag):
+                # strip ANSI color codes
+                clean = re.sub(r"\x1b\[[0-9;]*m", "", line).strip()
+                if clean:
+                    out.append({"finding": clean, "severity": sev})
+                break
+    return out
+
+
+def _parse_sslyze(text):
+    """sslyze text output: extract cipher/protocol findings."""
+    out = []
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or line.startswith("*") or line.startswith("="):
+            continue
+        if any(kw in line.lower() for kw in ["vulnerable", "not supported", "accepted", "rejected", "error"]):
+            out.append({"finding": line, "severity": "info"})
+    return out
+
+
+def _parse_wpscan(text):
+    """wpscan text output: extract [+] positive findings."""
+    out = []
+    for line in text.splitlines():
+        line = line.strip()
+        if line.startswith("[+]") or line.startswith("[!]") or line.startswith("[i]"):
+            sev = "high" if line.startswith("[!]") else "info"
+            out.append({"finding": line[4:].strip(), "severity": sev})
+    return out
+
+
 PARSERS = {
     "nmap_xml": _parse_nmap_xml,
     "httpx": _parse_httpx,
@@ -3325,6 +3402,13 @@ PARSERS = {
     "host_port": _parse_host_port,
     "dnsx_resp": _parse_dnsx,
     "masscan_grep": _parse_masscan_grep,
+    "whatweb": _parse_whatweb,
+    "nikto": _parse_nikto,
+    "ffuf": _parse_ffuf,
+    "sqlmap": _parse_sqlmap,
+    "testssl": _parse_testssl,
+    "sslyze": _parse_sslyze,
+    "wpscan": _parse_wpscan,
 }
 
 TOOLS = _tool_specs
