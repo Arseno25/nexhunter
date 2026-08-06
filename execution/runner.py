@@ -78,10 +78,12 @@ def terminate_tree(proc: subprocess.Popen, grace: float = DEFAULT_GRACE_SECONDS)
     if _IS_WINDOWS:
         # Ask the whole group to stop first. The child was started with
         # CREATE_NEW_PROCESS_GROUP, so a break reaches its descendants too.
-        try:
-            os.kill(proc.pid, getattr(signal, "CTRL_BREAK_EVENT", 0))
-        except (OSError, ValueError, AttributeError):
-            pass
+        break_event = getattr(signal, "CTRL_BREAK_EVENT", None)
+        if break_event is not None:
+            try:
+                os.kill(proc.pid, break_event)
+            except (OSError, ValueError, AttributeError):
+                pass
         try:
             proc.wait(timeout=grace)
         except subprocess.TimeoutExpired:
