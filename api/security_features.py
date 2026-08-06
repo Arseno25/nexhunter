@@ -83,7 +83,7 @@ class VulnerabilityAnalyzer:
         """Add vulnerability finding."""
         self.vulns.append(
             {
-                "id": f"vuln_{int(time.time() * 1000)}",
+                "id": f"vuln_{time.time_ns()}",
                 "title": title,
                 "cwe": cwe,
                 "cvss": cvss,

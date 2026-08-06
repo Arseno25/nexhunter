@@ -1,6 +1,16 @@
-"""Enhanced security agents - OSINT, threat analysis, bug bounty."""
+"""Enhanced security agents - OSINT, threat analysis, bug bounty.
 
+These agents execute registered tools through the Engine and analyze the
+real results (tool stdout, engine.findings). Nothing is simulated or
+fabricated: every subdomain, finding, and IOC traces back to tool output or
+to findings the engine recorded. Agents with nothing to report say so.
+"""
+
+import json
+import re
 from typing import Any
+from urllib.parse import urlparse
+
 from nexhunter.agents.base import Agent
 from nexhunter.api.security_features import (
     OsintCollector,
@@ -10,9 +20,48 @@ from nexhunter.api.security_features import (
     ThreatIntelligence,
 )
 
+_EMAIL_RE = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
+_IP_RE = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
+_CVE_RE = re.compile(r"\bCVE-\d{4}-\d{4,7}\b", re.IGNORECASE)
+_CWE_RE = re.compile(r"\bCWE-\d+\b", re.IGNORECASE)
+
+# ATT&CK mapping per tool, used only to label tools that actually ran.
+_TOOL_TTPS = {
+    "nmap": ("T1595", "Active Scanning", "Discovery"),
+    "masscan": ("T1595", "Active Scanning", "Discovery"),
+    "naabu": ("T1595", "Active Scanning", "Discovery"),
+    "httpx": ("T1595", "Active Scanning", "Discovery"),
+    "whatweb": ("T1595", "Active Scanning", "Discovery"),
+    "nuclei": ("T1595.002", "Vulnerability Scanning", "Discovery"),
+    "nikto": ("T1595.002", "Vulnerability Scanning", "Discovery"),
+    "subfinder": ("T1596", "Search Open Technical Databases", "Discovery"),
+    "amass": ("T1596", "Search Open Technical Databases", "Discovery"),
+    "crt_sh": ("T1596", "Search Open Technical Databases", "Discovery"),
+    "recon": ("T1596", "Search Open Technical Databases", "Discovery"),
+    "sqlmap": ("T1190", "Exploit Public-Facing Application", "Initial Access"),
+    "dalfox": ("T1190", "Exploit Public-Facing Application", "Initial Access"),
+}
+
+
+def _hostname(target: str) -> str:
+    """Bare host from a URL, host:port, or plain host."""
+    text = (target or "").strip()
+    if "://" in text:
+        host = urlparse(text).hostname
+        if host:
+            return host
+    return urlparse(f"//{text}").hostname or text.split("/")[0].split(":")[0]
+
+
+def _finding_cwe(finding) -> str:
+    """Best-effort CWE id found in a real finding's text."""
+    blob = f"{finding.title} {finding.evidence or ''}"
+    match = _CWE_RE.search(blob)
+    return match.group(0).upper() if match else ""
+
 
 class OsintAgent(Agent):
-    """OSINT intelligence gathering and analysis."""
+    """OSINT intelligence gathering from live recon tool output."""
 
     name = "osint"
     desc = "Open-source intelligence gathering"
@@ -22,42 +71,75 @@ class OsintAgent(Agent):
         self.collector = OsintCollector()
 
     def execute(self, engine, params: dict[str, Any]) -> dict:
-        """Execute OSINT collection."""
+        """Collect real subdomains, emails, DNS records, and whois data."""
         target = params.get("target", "")
         if not target:
             return self.result(False, error="Target required")
+        if engine is None:
+            return self.result(False, error="engine required")
+        domain = _hostname(target)
 
-        try:
-            # Simulate OSINT gathering
-            self.collector.add_subdomain("app.example.com", "1.2.3.4", "active")
-            self.collector.add_subdomain("api.example.com", "1.2.3.5", "active")
-            self.collector.add_subdomain("dev.example.com", "1.2.3.6", "inactive")
+        tools_run: list[str] = []
 
-            self.collector.add_email("admin@example.com", "Company website")
-            self.collector.add_email("security@example.com", "Security.txt")
+        recon = engine.recon(domain)
+        tools_run += sorted(recon.get("tools_run", []))
+        for sub in sorted(recon.get("subdomains", [])):
+            self.collector.add_subdomain(sub, "", "discovered")
 
-            self.collector.add_social("LinkedIn", "example-company", "linkedin.com/company/example")
-            self.collector.add_social("Twitter", "@example_corp", "twitter.com/example_corp")
+        whois = engine.run_tool("whois_lookup", {"query": domain})
+        if whois.get("ok") and whois.get("stdout"):
+            tools_run.append("whois_lookup")
+            self.collector.data["whois_info"] = {"raw": whois["stdout"][:4000]}
+        else:
+            self.collector.data["whois_info"] = {"raw": ""}
 
-            self.collector.add_dns_record("A", "1.2.3.4", 3600)
-            self.collector.add_dns_record("MX", "mail.example.com", 3600)
-            self.collector.add_dns_record("TXT", "v=spf1...", 3600)
+        dns = engine.run_tool("dns_lookup", {"domain": domain, "type": "ANY"})
+        if dns.get("ok") and dns.get("stdout"):
+            tools_run.append("dns_lookup")
+            for line in dns["stdout"].splitlines():
+                match = re.search(r"\sIN\s+(A|AAAA|MX|NS|CNAME|TXT)\s+(.+)$", line)
+                if match:
+                    self.collector.add_dns_record(match.group(1), match.group(2).strip())
 
-            return self.result(
-                True,
-                data={
-                    "target": target,
-                    "intelligence": self.collector.to_dict(),
-                    "summary": self.collector.summary(),
-                },
-                meta={"collection_method": "passive", "sources": 5},
-            )
-        except Exception as e:
-            return self.result(False, error=f"OSINT failed: {str(e)}")
+        mail = engine.run_tool("theharvester_recon", {"domain": domain})
+        if mail.get("ok"):
+            tools_run.append("theharvester_recon")
+            blob = f"{mail.get('stdout', '')}\n{mail.get('stderr', '')}"
+            for email in sorted(set(_EMAIL_RE.findall(blob))):
+                self.collector.add_email(email, "theHarvester")
+
+        certs = engine.run_tool("crt_sh", {"domain": domain})
+        if certs.get("ok") and certs.get("stdout"):
+            tools_run.append("crt_sh")
+            try:
+                payload = json.loads(certs["stdout"])
+                for entry in payload[:50]:
+                    for name in str(entry.get("name_value", "")).splitlines():
+                        if name.strip():
+                            self.collector.data["ssl_certs"].append(
+                                {"domain": name.strip(), "source": "crt.sh"}
+                            )
+            except (ValueError, TypeError):
+                pass
+
+        summary = self.collector.summary()
+        meta = {"collection_method": "passive", "tools_run": tools_run}
+        if not any(summary.values()) and not tools_run:
+            meta["note"] = ("no recon binary installed "
+                            "(subfinder, amass, whois, dig, theHarvester)")
+        return self.result(
+            True,
+            data={
+                "target": target,
+                "intelligence": self.collector.to_dict(),
+                "summary": summary,
+            },
+            meta=meta,
+        )
 
 
 class VulnerabilityAnalysisAgent(Agent):
-    """Advanced vulnerability analysis and correlation."""
+    """Analyze engine findings: real vulns, chains, threat score."""
 
     name = "vuln_analyzer"
     desc = "Vulnerability analysis and attack path detection"
@@ -67,67 +149,62 @@ class VulnerabilityAnalysisAgent(Agent):
         self.analyzer = VulnerabilityAnalyzer()
 
     def execute(self, engine, params: dict[str, Any]) -> dict:
-        """Analyze vulnerabilities."""
+        """Analyze the findings the engine has actually recorded."""
         target = params.get("target", "")
         if not target:
             return self.result(False, error="Target required")
+        if engine is None:
+            return self.result(False, error="engine required")
 
-        try:
-            # Simulate vulnerability finding
-            self.analyzer.add_vulnerability(
-                "SQL Injection in login form",
-                "CWE-89",
-                9.8,
-                "critical",
-                "Database compromise",
-                "username parameter",
-            )
-
-            self.analyzer.add_vulnerability(
-                "Unauthenticated data exposure",
-                "CWE-200",
-                8.5,
-                "high",
-                "PII data leak",
-                "api/users endpoint",
-            )
-
-            self.analyzer.add_vulnerability(
-                "CORS misconfiguration",
-                "CWE-94",
-                6.5,
-                "medium",
-                "Cross-origin attacks",
-                "API headers",
-            )
-
-            # Detect chains
-            chains = self.analyzer.detect_chains()
-
-            # Calculate threat score
-            threat = self.analyzer.threat_score()
-
+        findings = list(engine.findings)
+        if not findings:
             return self.result(
                 True,
                 data={
                     "target": target,
-                    "vulnerabilities": self.analyzer.vulns,
-                    "attack_chains": chains,
+                    "vulnerabilities": [],
+                    "attack_chains": [],
                     "threat_level": {
-                        "level": threat.level,
-                        "score": threat.score,
-                        "factors": threat.factors,
-                        "remediation": threat.remediation,
+                        "level": "info", "score": 0, "factors": [], "remediation": [],
                     },
                 },
-                meta={"analysis_type": "correlation", "chains_detected": len(chains)},
+                meta={
+                    "analysis_type": "correlation", "chains_detected": 0,
+                    "note": "no findings recorded; run an assessment first (e.g. /api/assess)",
+                },
             )
-        except Exception as e:
-            return self.result(False, error=f"Analysis failed: {str(e)}")
+
+        for finding in findings:
+            self.analyzer.add_vulnerability(
+                finding.title,
+                _finding_cwe(finding) or "CWE-unknown",
+                0.0,
+                finding.severity or "info",
+                finding.evidence or "",
+                finding.target,
+            )
+
+        chains = self.analyzer.detect_chains()
+        threat = self.analyzer.threat_score()
+        return self.result(
+            True,
+            data={
+                "target": target,
+                "vulnerabilities": self.analyzer.vulns,
+                "attack_chains": chains,
+                "threat_level": {
+                    "level": threat.level,
+                    "score": threat.score,
+                    "factors": threat.factors,
+                    "remediation": threat.remediation,
+                },
+            },
+            meta={"analysis_type": "correlation", "chains_detected": len(chains)},
+        )
 
 
 class BugBountyAgent(Agent):
-    """Bug bounty assessment workflow."""
+    """Bug bounty assessment driven by real engine executions."""
 
     name = "bugbounty_pro"
     desc = "Professional bug bounty assessment"
@@ -137,42 +214,72 @@ class BugBountyAgent(Agent):
         self.assessment = None
 
     def execute(self, engine, params: dict[str, Any]) -> dict:
-        """Run bug bounty assessment."""
+        """Run the assessment phases that have registered tools; skip the rest."""
         target = params.get("target", "")
         scope = params.get("scope", {})
-
         if not target:
             return self.result(False, error="Target required")
+        if engine is None:
+            return self.result(False, error="engine required")
+        host = _hostname(target)
 
-        try:
-            self.assessment = BugBountyAssessment(target)
-            self.assessment.set_scope(
-                scope.get("in_scope", [target]),
-                scope.get("out_of_scope", []),
+        self.assessment = BugBountyAssessment(target)
+        self.assessment.set_scope(
+            scope.get("in_scope", [target]),
+            scope.get("out_of_scope", []),
+        )
+
+        runs = {
+            "recon": lambda: engine.recon(host),
+            "subdomain_enum": lambda: engine.run_tool(
+                "subfinder_enum", {"domain": host}
+            ),
+            "port_scan": lambda: engine.portscan(host),
+            "web_scan": lambda: engine.webscan(target),
+        }
+
+        completed: list[str] = []
+        for phase, run in runs.items():
+            before = len(engine.findings)
+            self.assessment.start_phase(phase)
+            result = run()
+            delta = len(engine.findings) - before
+            if result.get("ok"):
+                self.assessment.complete_phase(phase, delta)
+                completed.append(phase)
+            else:
+                self.assessment.phases[phase]["status"] = "failed"
+                self.assessment.phases[phase]["error"] = (
+                    result.get("error") or "run failed"
+                )
+
+        for phase in ("api_test", "auth_test", "business_logic"):
+            self.assessment.phases[phase]["status"] = "skipped"
+            self.assessment.phases[phase]["note"] = (
+                "no registered tool for this phase; test manually"
             )
 
-            # Simulate phase execution
-            phases = ["recon", "subdomain_enum", "port_scan", "web_scan", "api_test", "auth_test", "business_logic"]
-
-            for phase in phases:
-                self.assessment.start_phase(phase)
-                self.assessment.complete_phase(phase, findings=len(phases) - phases.index(phase))
-
-            return self.result(
-                True,
-                data={
-                    "target": target,
-                    "assessment": self.assessment.to_dict(),
-                    "priority_areas": self.assessment.get_priority_findings(),
-                },
-                meta={"phases_completed": len(phases), "total_findings": sum(p["findings"] for p in self.assessment.phases.values())},
-            )
-        except Exception as e:
-            return self.result(False, error=f"Assessment failed: {str(e)}")
+        total_findings = sum(
+            p.get("findings", 0)
+            for p in self.assessment.phases.values()
+            if p.get("status") == "completed"
+        )
+        return self.result(
+            True,
+            data={
+                "target": target,
+                "assessment": self.assessment.to_dict(),
+                "priority_areas": self.assessment.get_priority_findings(),
+            },
+            meta={
+                "phases_completed": len(completed),
+                "total_findings": total_findings,
+            },
+        )
 
 
 class CTFSolverAgent(Agent):
-    """CTF challenge analysis and solving."""
+    """CTF challenge guidance: tool recommendations filtered by what is installed."""
 
     name = "ctf_solver"
     desc = "CTF challenge analyzer and solver"
@@ -181,39 +288,46 @@ class CTFSolverAgent(Agent):
         super().__init__(ctx or None)
 
     def execute(self, engine, params: dict[str, Any]) -> dict:
-        """Analyze CTF challenge."""
+        """Recommend installed tools and generic hints for the challenge type."""
+        from nexhunter.core import tools as T
+
         challenge_type = params.get("type", "web")
         challenge_name = params.get("name", "Unknown")
+        analyzer = CTFChallengeAnalyzer(challenge_type)
 
-        try:
-            analyzer = CTFChallengeAnalyzer(challenge_type)
+        hints_map = {
+            "web": ["Check for SQL injection", "Inspect network requests", "Look for hardcoded credentials"],
+            "crypto": ["Analyze hash algorithm", "Check for weak encryption", "Look for key reuse"],
+            "forensics": ["Extract metadata", "Check file signatures", "Look for hidden files"],
+            "pwn": ["Analyze binary", "Check protections", "Look for buffer overflow"],
+            "recon": ["Enumerate services", "Check SSL certificates", "Scan for subdomains"],
+        }
+        for hint in hints_map.get(challenge_type, []):
+            analyzer.add_hint(hint)
 
-            # Add hints based on type
-            hints_map = {
-                "web": ["Check for SQL injection", "Inspect network requests", "Look for hardcoded credentials"],
-                "crypto": ["Analyze hash algorithm", "Check for weak encryption", "Look for key reuse"],
-                "forensics": ["Extract metadata", "Check file signatures", "Look for hidden files"],
-                "pwn": ["Analyze binary", "Check protections", "Look for buffer overflow"],
-                "recon": ["Enumerate services", "Check SSL certificates", "Scan for subdomains"],
-            }
+        installed = []
+        missing = []
+        for name in analyzer.get_recommended_tools():
+            spec = T.get_tool_spec(name)
+            (installed if (spec and spec.available) else missing).append(name)
+        analyzer.tools[challenge_type] = installed
 
-            for hint in hints_map.get(challenge_type, []):
-                analyzer.add_hint(hint)
-
-            return self.result(
-                True,
-                data={
-                    "challenge": challenge_name,
-                    "analysis": analyzer.to_dict(),
-                },
-                meta={"type": challenge_type, "recommended_tools": len(analyzer.get_recommended_tools())},
-            )
-        except Exception as e:
-            return self.result(False, error=f"Analysis failed: {str(e)}")
+        return self.result(
+            True,
+            data={
+                "challenge": challenge_name,
+                "analysis": analyzer.to_dict(),
+            },
+            meta={
+                "type": challenge_type,
+                "recommended_tools_installed": len(installed),
+                "recommended_tools_missing": len(missing),
+            },
+        )
 
 
 class ThreatIntelAgent(Agent):
-    """Threat intelligence and risk assessment."""
+    """Threat intelligence derived from findings the engine recorded."""
 
     name = "threat_intel"
     desc = "Threat intelligence and risk assessment"
@@ -223,37 +337,68 @@ class ThreatIntelAgent(Agent):
         self.intel = ThreatIntelligence()
 
     def execute(self, engine, params: dict[str, Any]) -> dict:
-        """Assess threat and risk."""
+        """Extract real IOCs, TTPs, and MITRE techniques from engine findings."""
         target = params.get("target", "")
         if not target:
             return self.result(False, error="Target required")
+        if engine is None:
+            return self.result(False, error="engine required")
 
-        try:
-            # Add sample indicators
-            self.intel.add_ioc("IP", "192.168.1.100", "Internal scan")
-            self.intel.add_ioc("Domain", "malicious.com", "DNS sinkhole")
-            self.intel.add_ioc("Hash", "abc123def456", "Malware database")
-
-            # Add TTPs
-            self.intel.add_ttp("Reconnaissance", "Active Scanning", "Port scanning detected")
-            self.intel.add_ttp("Exploitation", "Exploit Public-Facing Application", "SQL injection attempts")
-            self.intel.add_ttp("Exfiltration", "Exfiltration Over C2 Channel", "Data theft pattern")
-
-            # Add MITRE techniques
-            self.intel.add_mitre_technique("T1046", "Network Service Discovery", "high")
-            self.intel.add_mitre_technique("T1190", "Exploit Public-Facing Application", "critical")
-            self.intel.add_mitre_technique("T1020", "Automated Exfiltration", "high")
-
+        findings = list(engine.findings)
+        if not findings:
             return self.result(
                 True,
                 data={
                     "target": target,
                     "threat_intelligence": self.intel.to_dict(),
                 },
-                meta={"ioc_count": 3, "ttp_count": 3, "mitre_techniques": 3},
+                meta={
+                    "ioc_count": 0, "ttp_count": 0, "mitre_techniques": 0,
+                    "note": "no findings recorded; run an assessment first",
+                },
             )
-        except Exception as e:
-            return self.result(False, error=f"Assessment failed: {str(e)}")
+
+        ips: set[str] = set()
+        cves: set[str] = set()
+        hosts: set[str] = set()
+        tool_severity: dict[str, str] = {}
+        for finding in findings:
+            blob = f"{finding.title} {finding.evidence or ''} {finding.target}"
+            ips.update(_IP_RE.findall(blob))
+            cves.update(match.upper() for match in _CVE_RE.findall(blob))
+            if finding.target:
+                hosts.add(_hostname(finding.target) or finding.target)
+            tool = finding.tool or "unknown"
+            tool_severity.setdefault(tool, finding.severity or "info")
+
+        for ip in sorted(ips):
+            self.intel.add_ioc("IP", ip, "assessment findings")
+        for cve in sorted(cves):
+            self.intel.add_ioc("CVE", cve, "assessment findings")
+        for host in sorted(hosts):
+            self.intel.add_ioc("HOST", host, "assessment findings")
+
+        for tool in sorted(tool_severity):
+            mapping = _TOOL_TTPS.get(tool)
+            if mapping:
+                technique_id, technique_name, tactic = mapping
+                self.intel.add_ttp(tactic, technique_name)
+                self.intel.add_mitre_technique(
+                    technique_id, technique_name, tool_severity[tool]
+                )
+
+        return self.result(
+            True,
+            data={
+                "target": target,
+                "threat_intelligence": self.intel.to_dict(),
+            },
+            meta={
+                "ioc_count": len(self.intel.indicators["iocs"]),
+                "ttp_count": len(self.intel.indicators["ttps"]),
+                "mitre_techniques": len(self.intel.indicators["mitre_techniques"]),
+            },
+        )
 
 
 # Register enhanced agents

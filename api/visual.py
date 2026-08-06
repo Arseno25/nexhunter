@@ -376,7 +376,7 @@ class VulnerabilityCard:
         cvss_score: float | None = None,
         poc: str = "",
     ):
-        self.id = f"vuln_{int(time.time() * 1000)}"
+        self.id = f"vuln_{time.time_ns()}"
         self.title = title
         self.type = vuln_type
         self.severity = severity
