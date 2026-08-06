@@ -136,7 +136,10 @@ shell environment, so use the full interpreter path for your OS:
         "-m", "nexhunter.api.mcp",
         "--server", "http://127.0.0.1:8888",
         "--profile", "nexhunter-core"
-      ]
+      ],
+      "enabled": true,
+      "timeout": 600000,
+      "alwaysAllow": []
     }
   }
 }
@@ -154,7 +157,10 @@ shell environment, so use the full interpreter path for your OS:
         "-m", "nexhunter.api.mcp",
         "--server", "http://127.0.0.1:8888",
         "--profile", "nexhunter-core"
-      ]
+      ],
+      "enabled": true,
+      "timeout": 600000,
+      "alwaysAllow": []
     }
   }
 }
@@ -163,8 +169,9 @@ shell environment, so use the full interpreter path for your OS:
 **Virtualenv**
 
 Use `/path/to/.venv/bin/python` on Linux/macOS, or `.venv\Scripts\python.exe`
-on Windows — same `args` as above. If the exact path is wrong, the client shows
-no tools; verify by running the command by hand first.
+on Windows — same `args` as above, plus the `enabled`, `timeout` and
+`alwaysAllow` fields shown in the other examples. If the exact path is wrong,
+the client shows no tools; verify by running the command by hand first.
 
 ### Profiles
 
