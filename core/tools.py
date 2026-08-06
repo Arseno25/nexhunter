@@ -1752,6 +1752,7 @@ _tool_specs = {
         description="PowerShell post-exploitation framework",
         params={"listener": "http"},
         timeout=120,
+        risk_level="intrusive",
         builder=lambda p: ["empire", "-l", p["listener"]],
     ),
     "cobalt_strike": ToolSpec(
@@ -1760,6 +1761,7 @@ _tool_specs = {
         description="Adversary simulation framework",
         params={"profile": None},
         timeout=120,
+        risk_level="intrusive",
         builder=lambda p: ["cobaltstrike", p["profile"]],
     ),
     "havoc": ToolSpec(
@@ -1768,6 +1770,7 @@ _tool_specs = {
         description="C2 framework",
         params={"profile": None},
         timeout=120,
+        risk_level="intrusive",
         builder=lambda p: ["havoc", p["profile"]],
     ),
     # "sliver" (C2 framework) was registered as a generic command passthrough.
@@ -2029,6 +2032,7 @@ _tool_specs = {
         description="Linux kernel exploit",
         params={"binary": None},
         timeout=60,
+        risk_level="destructive",
         builder=lambda p: ["./dirty_cow", p["binary"]],
     ),
     # ==================== DATA EXFILTRATION ====================
@@ -2080,6 +2084,7 @@ _tool_specs = {
         description="Empire persistence module",
         params={"module": "persistence/userland/registry_run"},
         timeout=120,
+        risk_level="intrusive",
         builder=lambda p: ["empire", "-m", p["module"]],
     ),
     # ==================== FORENSICS & INCIDENT RESPONSE ====================
