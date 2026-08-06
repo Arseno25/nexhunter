@@ -2,9 +2,9 @@
 
 import uuid
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
-from typing import Any, Dict, Optional
+from typing import Any
 
 
 class ExecutionStatus(Enum):
@@ -36,7 +36,7 @@ _TERMINAL_STATES = {
 
 # Only these transitions are legal. Anything else is a bug in the caller and
 # raises rather than silently corrupting the record.
-_ALLOWED_TRANSITIONS: Dict[ExecutionStatus, frozenset] = {
+_ALLOWED_TRANSITIONS: dict[ExecutionStatus, frozenset] = {
     ExecutionStatus.QUEUED: frozenset({ExecutionStatus.VALIDATING, ExecutionStatus.BLOCKED, ExecutionStatus.FAILED}),
     ExecutionStatus.VALIDATING: frozenset({ExecutionStatus.AUTHORIZED, ExecutionStatus.BLOCKED, ExecutionStatus.FAILED}),
     ExecutionStatus.AUTHORIZED: frozenset({ExecutionStatus.RUNNING, ExecutionStatus.BLOCKED, ExecutionStatus.FAILED}),
@@ -64,21 +64,21 @@ class ExecutionRecord:
     tool_name: str
     id: str = field(default_factory=lambda: uuid.uuid4().hex)
     status: ExecutionStatus = ExecutionStatus.QUEUED
-    target: Optional[str] = None
+    target: str | None = None
     risk_level: str = "active"
-    redacted_parameters: Dict[str, Any] = field(default_factory=dict)
+    redacted_parameters: dict[str, Any] = field(default_factory=dict)
     redacted_command: list = field(default_factory=list)
-    created_at: datetime = field(default_factory=datetime.utcnow)
-    started_at: Optional[datetime] = None
-    completed_at: Optional[datetime] = None
-    exit_code: Optional[int] = None
-    error_code: Optional[str] = None
-    error_message: Optional[str] = None
-    workspace_path: Optional[str] = None
+    created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
+    exit_code: int | None = None
+    error_code: str | None = None
+    error_message: str | None = None
+    workspace_path: str | None = None
     stdout_bytes: int = 0
     stderr_bytes: int = 0
     truncated: bool = False
-    pid: Optional[int] = None
+    pid: int | None = None
 
     def transition(self, new_status: ExecutionStatus) -> None:
         """Move to a new status, rejecting illegal transitions."""
@@ -88,19 +88,19 @@ class ExecutionRecord:
 
         self.status = new_status
         if new_status is ExecutionStatus.RUNNING:
-            self.started_at = datetime.utcnow()
+            self.started_at = datetime.now(timezone.utc)
         elif new_status.is_terminal:
-            self.completed_at = datetime.utcnow()
+            self.completed_at = datetime.now(timezone.utc)
 
     @property
-    def duration_seconds(self) -> Optional[float]:
+    def duration_seconds(self) -> float | None:
         """Wall-clock runtime, once the execution has started."""
         if not self.started_at:
             return None
-        end = self.completed_at or datetime.utcnow()
+        end = self.completed_at or datetime.now(timezone.utc)
         return round((end - self.started_at).total_seconds(), 3)
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Dashboard-ready view. Contains no unredacted parameters."""
         return {
             "id": self.id,

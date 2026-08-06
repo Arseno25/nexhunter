@@ -2,11 +2,10 @@
 
 import importlib
 import pkgutil
-from typing import Dict, Type
 
 from nexhunter.agents.base import Agent
 
-AGENTS: Dict[str, Type[Agent]] = {}
+AGENTS: dict[str, type[Agent]] = {}
 
 
 def _discover_agents():
@@ -17,7 +16,7 @@ def _discover_agents():
             for _obj in vars(_mod).values():
                 if isinstance(_obj, type) and issubclass(_obj, Agent) and _obj is not Agent and _obj.name:
                     AGENTS[_obj.name] = _obj
-        except ImportError as e:
+        except ImportError:
             # Log but don't fail discovery if one module has issues
             pass
 
@@ -25,7 +24,7 @@ def _discover_agents():
 _discover_agents()
 
 
-def run_agent(engine, name: str, params: dict = None) -> dict:
+def run_agent(engine, name: str, params: dict | None = None) -> dict:
     """Run agent by name with standardized error handling."""
     params = params or {}
     cls = AGENTS.get(name)

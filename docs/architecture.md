@@ -34,8 +34,10 @@ flowchart LR
 ```
 
 An AI client is a caller like any other. It can propose a tool and parameters;
-it cannot propose a command line. The autonomous orchestrator sits on top of
-the same service and may only execute what its risk ceiling permits.
+it cannot propose a command line — except through the two gated freeform tools
+(`execute_command`, `execute_python_script`), which are intrusive, recorded, and withheld
+from autonomous runs. The autonomous orchestrator sits on top of the same
+service and may only execute what its risk ceiling permits.
 
 ## Layers
 
@@ -100,7 +102,7 @@ sequenceDiagram
     S->>S: validate parameters (typed, secret-aware)
     Note over S: record created: QUEUED → VALIDATING
 
-    S->>S: build argv from ToolSpec (no shell)
+    S->>S: build command from ToolSpec (argv-only; shell only for a ShellCommand builder)
     S->>S: redact secrets from params and command
     S->>S: create isolated workspace
     Note over S: AUTHORIZED → RUNNING
@@ -146,8 +148,11 @@ Execution safety lives in the parameter contract, not in a policy layer:
   validation rule (`core/params.py`). A value that is not a valid target, port,
   or enum is refused before a command is ever built.
 - **No passthrough.** No parameter carries a command line, no builder splits a
-  string into argv, and no execution path uses a shell. A free-form command
-  parameter is an arbitrary-command API and is a regression test failure.
+  string into argv, and no execution path uses a shell — except the one
+  sanctioned builder contract: `execute_command` returns a `ShellCommand` whose
+  entire content is the command string (intrusive, uncacheable, withheld from
+  autonomy). Any other free-form command parameter is an arbitrary-command API
+  and is a regression test failure.
 - **Secret redaction.** Parameters whose names match secret patterns are
   redacted in records, logs, and responses (`security/redaction.py`).
 - **Artifact containment.** Workspaces live under `NEXHUNTER_DATA_DIR/executions/
@@ -195,17 +200,17 @@ The bridge decides what a client is *shown*. The service decides what is
 
 ```mermaid
 flowchart LR
-    REG[(Tool registry<br/>~252 tools)] --> F{Profile filter<br/>category · risk · maturity}
-    F --> C[core · 12]
-    F --> RC[recon · 24]
-    F --> W[web · 37]
+    REG[(Tool registry<br/>~257 tools)] --> F{Profile filter<br/>category · risk · maturity}
+    F --> C[core · 15]
+    F --> RC[recon · 25]
+    F --> W[web · 38]
     F --> AP[api · 7]
     F --> CD[code · 16]
     F --> CL[cloud · 8]
     F --> CT[container · 14]
     F --> FR[forensics · 28]
-    F --> CTF[ctf · 91]
-    F --> FU[full · 250]
+    F --> CTF[ctf · 89]
+    F --> FU[full · 255]
 
     C --> CLIENT[AI client]
     CLIENT -.->|every call still| SVC[ExecutionService]
@@ -215,10 +220,13 @@ Six more specialty profiles (osint, wireless, privesc, payloads, vulnscan,
 mobile) slice the same registry the same way; the full list with counts is in
 the README.
 
-Without a `--profile` flag the bridge defaults to `nexhunter-full` (250 tools,
+Without a `--profile` flag the bridge defaults to `nexhunter-full` (255 tools,
 everything non-destructive). A focused profile cuts initialization payload and
 token cost and stops a model choosing blindly between near-identical tools —
-`nexhunter-core`, for example, exposes 12 passive stable checks.
+`nexhunter-core`, for example, exposes 17 tools (15 passive stable checks plus
+the two freeform tools). Every profile surfaces `execute_command` and
+`execute_python_script` — like the workflow tools, since they serve any engagement —
+and a profile can opt out with `include_freeform_tools=False`.
 
 ## Artifact containment
 
@@ -231,25 +239,52 @@ NEXHUNTER_DATA_DIR/
         └── <tool artifacts>
 ```
 
+## Result caching and live processes
+
+Both sit on the one execution path and add no way to reach the OS.
+
+- **Result cache** (`execution/cache.py`). Keyed by the tool name and its
+  *normalized* parameters, it stores only deterministic terminal outcomes
+  (completed or failed); a timeout or termination is never cached. A hit returns
+  the original execution's result with `cached: true` and mints no new record,
+  so the state machine is never asked for an illegal jump. Values are hashed
+  into the key, so no parameter — secret or otherwise — is recoverable from it.
+  `no_cache` on a request forces a fresh run.
+- **Live processes.** A "process" is just an execution in `running` state that
+  has been assigned an OS pid (recorded the moment the child spawns). There is
+  no separate process table and no second way to spawn or kill: terminating by
+  pid resolves to the owning execution and goes through the same cancellation
+  path as `terminate`, ending in `terminated` — never a raw `kill`.
+
 ## Deliberate non-goals
 
 - **No autonomous attack decisions.** Intrusive and destructive actions are
   withheld by the orchestrator's risk ceiling; autonomy is bounded to passive
   and active steps.
-- **No arbitrary command execution.** No parameter carries a command line, no
-  builder splits a string into argv, no path uses a shell.
+- **No arbitrary command execution.** No parameter carries a command line and
+  no builder splits a string into argv. The sole exception is `execute_command`:
+  its builder returns a `ShellCommand` whose content is the entire command,
+  executed through the OS shell — gated as intrusive (never auto-executed by
+  the orchestrator), uncacheable, and recorded.
 - **No binary installation.** Missing tools are reported, never fetched.
-- **No offensive capability added.** Tools that only make sense for attack (C2
-  frameworks) are not registered.
+- **No off-the-shelf attack automation.** Attack-only tools (payload
+  generation, C2 integration, freeform execution) are registered but
+  intrusive: gated by `NEXHUNTER_INTRUSIVE_TOOLS_ENABLED`, never auto-executed
+  by the orchestrator, and withheld from autonomous runs.
 
 ## Module map
 
 | Path | Contents |
 |---|---|
+| `api/server.py` | REST interface (Flask); the only external entry to the service |
+| `api/mcp.py` | FastMCP bridge with profile filtering and tool limits |
+| `api/visual.py` | Vulnerability cards, dashboards, progress bars (ANSI/ASCII) |
+| `agents/browser.py` | Selenium page analysis with stdlib fallback |
 | `execution/models.py` | ExecutionRecord and its state machine |
 | `execution/workspace.py` | Per-execution isolated directories |
 | `execution/runner.py` | Process spawning, tree termination, output caps |
 | `execution/registry.py` | Concurrency-safe, bounded record store |
+| `execution/cache.py` | LRU+TTL cache of deterministic terminal results |
 | `execution/service.py` | The single execution path |
 | `core/params.py` | Typed parameter validation and secret naming |
 | `core/risk.py` | Risk levels shared by registry and orchestrator |

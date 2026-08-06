@@ -136,6 +136,8 @@ logs/
 .env.*.local
 secrets/
 credentials.json
+.ruff_cache/
+nexhunter_data/
 
 # OS
 Thumbs.db

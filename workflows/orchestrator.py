@@ -20,16 +20,23 @@ finding an open TLS port pulls in a TLS check. The AI does not choose what
 runs against the OS -- the planner does, from evidence.
 """
 
+import logging
 import threading
 import uuid
 from dataclasses import dataclass, field
-from datetime import datetime
+from typing import Any
+from datetime import datetime, timezone
 from enum import Enum
-from typing import Any, Dict, List, Optional, Sequence
+from collections.abc import Sequence
 
 from nexhunter.core import tools as T
 from nexhunter.core.risk import RiskLevel
 from nexhunter.agents.profiler import Profiler, TargetProfile
+from nexhunter.agents.selector import ToolSelector
+from nexhunter.agents.param_optimizer import ParameterOptimizer
+from nexhunter.api.visual import format_step, supports_color, COLORS
+
+log = logging.getLogger("nexhunter.workflows")
 
 _RISK_ORDER = {
     RiskLevel.PASSIVE: 0,
@@ -101,7 +108,9 @@ def review_plan(target: str, steps, risk_ceiling: str = "active") -> dict:
     """
     ceiling = _coerce_ceiling(risk_ceiling)
 
-    approved, withheld, invalid = [], [], []
+    approved: list[dict[str, Any]] = []
+    withheld: list[dict[str, Any]] = []
+    invalid: list[dict[str, Any]] = []
     for step in steps or []:
         if not isinstance(step, dict):
             invalid.append({"tool": str(step), "reason": "step must be an object with tool and params"})
@@ -208,10 +217,10 @@ class AdaptivePlanner:
         profile: TargetProfile,
         already_run: Sequence[str],
         risk_ceiling: RiskLevel,
-    ) -> List[PlannedStep]:
+    ) -> list[PlannedStep]:
         """Return the tools worth running next, given current knowledge."""
         done = set(already_run)
-        steps: List[PlannedStep] = []
+        steps: list[PlannedStep] = []
         seen = set()
 
         for phase, tool_name, reason, gate in self.METHODOLOGY:
@@ -243,8 +252,8 @@ class AdaptivePlanner:
         profile = Profiler().new_profile(target)
         steps = self.plan(profile, [], ceiling)
 
-        phases: Dict[str, List[dict]] = {}
-        withheld: List[dict] = []
+        phases: dict[str, list[dict]] = {}
+        withheld: list[dict] = []
         for step in steps:
             entry = {"tool": step.tool, "reason": step.reason, "risk_level": step.risk_level}
             if _RISK_ORDER[RiskLevel(step.risk_level)] > _RISK_ORDER[ceiling]:
@@ -269,15 +278,23 @@ class RunRecord:
     status: RunStatus = RunStatus.RUNNING
     risk_ceiling: str = RiskLevel.ACTIVE.value
     max_steps: int = 20
+    # methodology = fixed, reviewed phase walk (default). select = scoring-driven
+    # selection over the full registry, capped by the objective's breadth.
+    strategy: str = "methodology"
+    objective: str = "standard"
+    # direct runs every step through the in-process path
+    # (no per-tool execution records or workspaces) while keeping cache,
+    # redaction, the risk ceiling and result absorption. Default on.
+    direct: bool = True
     current_phase: str = "starting"
     steps_taken: int = 0
-    executions: List[dict] = field(default_factory=list)
-    withheld: List[dict] = field(default_factory=list)   # above the ceiling
-    errors: List[dict] = field(default_factory=list)
-    plan: Optional[List[dict]] = None                    # AI-proposed, approved steps
-    profile: Optional[dict] = None
-    started_at: datetime = field(default_factory=datetime.utcnow)
-    completed_at: Optional[datetime] = None
+    executions: list[dict] = field(default_factory=list)
+    withheld: list[dict] = field(default_factory=list)   # above the ceiling
+    errors: list[dict] = field(default_factory=list)
+    plan: list[dict] | None = None                    # AI-proposed, approved steps
+    profile: dict | None = None
+    started_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    completed_at: datetime | None = None
 
     @property
     def progress(self) -> int:
@@ -291,6 +308,9 @@ class RunRecord:
             "target": self.target,
             "status": self.status.value,
             "risk_ceiling": self.risk_ceiling,
+            "strategy": self.strategy,
+            "objective": self.objective,
+            "direct": self.direct,
             "current_phase": self.current_phase,
             "progress": self.progress,
             "steps_taken": self.steps_taken,
@@ -308,19 +328,36 @@ class RunRecord:
 class AutonomousOrchestrator:
     """Run an adaptive assessment, every step within the risk ceiling."""
 
-    def __init__(self, execution_service, finding_store=None, planner=None, profiler=None):
+    def __init__(self, execution_service, finding_store=None, planner=None,
+                 profiler=None, optimizer=None):
         self.exec = execution_service
         self.findings = finding_store
         self.planner = planner or AdaptivePlanner()
         self.profiler = profiler or Profiler()
-        self._runs: Dict[str, RunRecord] = {}
+        # Turns a target + profile into the parameters each tool should run
+        # with, so a selected tool is invoked correctly rather than fed the raw
+        # target and rejected.
+        self.optimizer = optimizer or ParameterOptimizer()
+        self._runs: dict[str, RunRecord] = {}
         self._lock = threading.RLock()
 
-    def list_runs(self) -> List[RunRecord]:
+    def _params_for(self, spec, record, profile):
+        """Optimized parameters for a tool, with a safe fallback."""
+        if spec is None:
+            return {}
+        try:
+            return self.optimizer.optimize(spec, record.target, profile, record.objective)
+        except Exception:  # noqa: BLE001 - never let tuning abort a run
+            params = {}
+            if spec.target_param:
+                params[spec.target_param] = record.target
+            return params
+
+    def list_runs(self) -> list[RunRecord]:
         with self._lock:
             return sorted(self._runs.values(), key=lambda r: r.started_at, reverse=True)
 
-    def get_run(self, run_id: str) -> Optional[RunRecord]:
+    def get_run(self, run_id: str) -> RunRecord | None:
         with self._lock:
             return self._runs.get(run_id)
 
@@ -341,20 +378,61 @@ class AutonomousOrchestrator:
         """
         return AdaptivePlanner().recommend(target, risk_ceiling)
 
+    @staticmethod
+    def select_plan(
+        target: str, objective: str = "standard", risk_ceiling: str = "active"
+    ) -> dict:
+        """Scoring-driven shortlist for a target, without running anything.
+
+        This is the plan-first answer the AI reviews: a small, ranked set of the
+        tools actually worth running against this target -- with the reason for
+        each pick and the tools held back above the ceiling -- drawn from the
+        whole registry rather than a fixed methodology list. The AI (or a human)
+        chooses a subset from here, then start(steps=...) runs only that subset.
+        """
+        ceiling = _coerce_ceiling(risk_ceiling)
+        profile = Profiler().new_profile(target)
+        result = ToolSelector().select(profile, objective, ceiling)
+        payload = result.to_dict()
+
+        # Attach the exact parameters each selected tool would run with, so the
+        # shortlist is not just "which tools" but "which tools, invoked how".
+        optimizer = ParameterOptimizer()
+        for entry in payload["selected"]:
+            spec = T.get_tool_spec(entry["tool"])
+            if spec is not None:
+                entry["params"] = optimizer.optimize(spec, target, profile, objective)
+        return payload
+
     def start(
         self,
         target: str,
         risk_ceiling: str = "active",
         max_steps: int = 20,
         run_async: bool = True,
-        steps: Optional[Sequence[dict]] = None,
+        steps: Sequence[dict] | None = None,
+        strategy: str = "methodology",
+        objective: str = "standard",
+        direct: bool = True,
     ) -> RunRecord:
         """Begin an autonomous run. Returns the record immediately when async.
 
         With `steps`, the AI's own plan is executed: every step is validated
         and ceiling-filtered again at run time (review_plan already did so; a
         second pass keeps a race from slipping one through). Without `steps`,
-        the adaptive loop plans from observed evidence.
+        the loop plans from observed evidence -- `strategy` chooses how:
+
+          methodology  the fixed, reviewed phase walk (default, deterministic)
+          select       scoring-driven selection over the whole registry,
+                       capped by `objective` (quick|standard|comprehensive|
+                       stealth); leans on ToolSelector so only high-value tools
+                       for the observed profile actually run
+
+        `direct=True` (the default) runs every step through the
+        in-process path: no per-tool execution records or
+        workspaces are minted, while the cache, redaction, risk ceiling and
+        result absorption all stay on. Set direct=False (or per-step
+        "direct": false) for fully tracked step execution.
         """
         ceiling = _coerce_ceiling(risk_ceiling)
 
@@ -363,6 +441,9 @@ class AutonomousOrchestrator:
             target=target,
             risk_ceiling=ceiling.value,
             max_steps=max(1, min(max_steps, 50)),
+            strategy="select" if strategy == "select" else "methodology",
+            objective=objective,
+            direct=bool(direct),
         )
         with self._lock:
             self._runs[record.id] = record
@@ -385,12 +466,24 @@ class AutonomousOrchestrator:
 
         With a plan, the loop executes exactly the approved steps instead.
         """
+        total = (
+            min(record.max_steps, len(record.plan))
+            if record.plan is not None else record.max_steps
+        )
+        c = COLORS if supports_color() else {k: "" for k in COLORS}
+        log.info(
+            "%s🚀 AUTONOMOUS START%s  %s  ceiling=%s  budget=%d steps",
+            c["GREEN"] + c["BOLD"], c["RESET"], record.target,
+            record.risk_ceiling, total,
+        )
         try:
             profile = self.profiler.new_profile(record.target)
-            already_run: List[str] = []
+            already_run: list[str] = []
 
             if record.plan is not None:
-                self._run_plan(record, ceiling, profile)
+                self._run_plan(record, ceiling, profile, total)
+            elif record.strategy == "select":
+                self._run_select(record, ceiling, profile, total)
             else:
                 while record.steps_taken < record.max_steps:
                     steps = self.planner.plan(profile, already_run, ceiling)
@@ -413,9 +506,12 @@ class AutonomousOrchestrator:
                         record.steps_taken += 1
                         progressed = True
 
+                        self._emit_step(record, total, step.tool, step.phase or "recon")
+                        spec = T.get_tool_spec(step.tool)
                         result = self.exec.execute(
                             tool_name=step.tool,
-                            params={self._target_param(step.tool): record.target},
+                            params=self._params_for(spec, record, profile),
+                            direct=record.direct,
                         )
                         self._absorb(record, profile, step, result)
 
@@ -429,10 +525,25 @@ class AutonomousOrchestrator:
             record.status = RunStatus.FAILED
         finally:
             record.current_phase = "done"
-            record.completed_at = datetime.utcnow()
+            record.completed_at = datetime.now(timezone.utc)
+            done_ok = record.status is RunStatus.COMPLETED
+            elapsed = (record.completed_at - record.started_at).total_seconds()
+            tone = c["GREEN"] if done_ok else c["RED"]
+            log.info(
+                "%s🏁 AUTONOMOUS DONE%s   %s  status=%s  steps=%d/%d  %.1fs",
+                tone + c["BOLD"], c["RESET"], record.target,
+                record.status.value, record.steps_taken, total, elapsed,
+            )
 
-    def _run_plan(self, record, ceiling, profile):
+    def _emit_step(self, record, total: int, tool: str, phase: str) -> None:
+        """Log one step progress line for an autonomous run."""
+        log.info(format_step(
+            record.steps_taken, total, tool=tool, target=record.target, phase=phase,
+        ))
+
+    def _run_plan(self, record, ceiling, profile, total=None):
         """Execute the AI-approved plan, re-validating every step."""
+        total = total or record.max_steps
         for step in record.plan or []:
             if record.steps_taken >= record.max_steps:
                 break
@@ -443,6 +554,12 @@ class AutonomousOrchestrator:
             if spec is None:
                 record.errors.append({"tool": tool, "error": f"unknown tool: {tool}"})
                 continue
+
+            # Fill anything the AI left out with optimized defaults, but never
+            # override what it explicitly set -- its plan wins -- then validate
+            # the completed parameter set.
+            optimized = self._params_for(spec, record, profile)
+            params = {**optimized, **params}
 
             ok, err = spec.validate(params)
             if not ok:
@@ -460,18 +577,74 @@ class AutonomousOrchestrator:
                 ], ceiling)
                 continue
 
-            # A plan step without the target parameter gets the run target,
-            # the same default the adaptive loop applies.
-            if spec.target_param and spec.target_param not in params:
-                params[spec.target_param] = record.target
-
             record.current_phase = f"running {tool}"
             record.steps_taken += 1
-            result = self.exec.execute(tool_name=tool, params=params)
+            self._emit_step(record, total, tool, "ai-plan")
+            result = self.exec.execute(tool_name=tool, params=params,
+                                       direct=bool(step.get("direct", record.direct)))
             self._absorb(record, profile,
                          PlannedStep(tool=tool, reason="from the AI plan",
                                      risk_level=spec.risk_level),
                          result)
+
+    def _run_select(self, record, ceiling, profile, total):
+        """Scoring-driven loop: run only the tools the selector ranks worth it.
+
+        Re-selects each pass as evidence accumulates, so a web surface found in
+        recon pulls in web tooling on the next round -- the same adaptive feel
+        as the methodology loop, but drawing on the whole registry instead of a
+        fixed list, and capped by the objective so it never runs everything.
+        """
+        selector = ToolSelector()
+        already: list[str] = []
+        while record.steps_taken < record.max_steps:
+            result = selector.select(profile, record.objective, ceiling)
+            self._record_withheld_selection(record, result.withheld, ceiling)
+
+            pending = [s for s in result.selected if s.name not in already]
+            if not pending:
+                break
+
+            progressed = False
+            for st in pending:
+                if record.steps_taken >= record.max_steps:
+                    break
+                spec = T.get_tool_spec(st.name)
+                already.append(st.name)
+                if spec is None:
+                    continue
+                record.current_phase = f"running {st.name}"
+                record.steps_taken += 1
+                progressed = True
+
+                self._emit_step(record, total, st.name, st.phase)
+                params = self._params_for(spec, record, profile)
+                exec_result = self.exec.execute(tool_name=st.name, params=params,
+                                            direct=record.direct)
+                self._absorb(record, profile, PlannedStep(
+                    tool=st.name,
+                    reason=f"selected by scoring ({st.score:.2f})",
+                    risk_level=st.risk_level,
+                    phase=st.phase,
+                ), exec_result)
+
+            if not progressed:
+                break
+
+    def _record_withheld_selection(self, record, withheld, ceiling):
+        """Surface scored tools above the ceiling as recommendations."""
+        for st in withheld:
+            if any(w["tool"] == st.name for w in record.withheld):
+                continue
+            record.withheld.append({
+                "tool": st.name,
+                "reason": f"selected by scoring ({st.score:.2f})",
+                "risk_level": st.risk_level,
+                "withheld_because": (
+                    f"{st.risk_level} exceeds the autonomous ceiling "
+                    f"({ceiling.value}); requires human approval"
+                ),
+            })
 
     def _within_ceiling(self, step: PlannedStep, ceiling: RiskLevel) -> bool:
         try:

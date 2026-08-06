@@ -25,12 +25,12 @@ not a security control.
 python -m nexhunter.api.server --port 8888
 ```
 
-Binds to `127.0.0.1` by default. See [../deployment.md](../deployment.md) before
-exposing it anywhere else.
+Binds to `127.0.0.1` by default. See the production configuration section of
+[security-model.md](../security-model.md) before exposing it anywhere else.
 
 ## 2. Pick a profile
 
-Listing all ~252 registered tools to every client makes for a large
+Listing all ~257 registered tools to every client makes for a large
 initialization payload, a large token cost on every session, and a model
 choosing between near-identical tools with no basis to pick. A profile narrows
 that to one job.
@@ -58,6 +58,11 @@ python -m nexhunter.api.mcp --list-profiles
 | `nexhunter-ctf` | One-stop CTF profile: Web Exploitation, Cryptography, Reverse Engineering & Pwn, Forensics, OSINT |
 | `nexhunter-full` | **Default (no `--profile`).** Every non-destructive tool. Large payload; prefer a focused profile when you know the job |
 
+Every profile also surfaces the two freeform tools — `execute_command` (raw
+shell command strings, free-form style) and `execute_python_script` (Python snippets).
+Both are intrusive, recorded, and withheld from autonomous runs; a profile can
+opt out with `include_freeform_tools=False`.
+
 No profile lists a destructive tool. Reaching one takes explicit, separately
 configured setup.
 
@@ -67,21 +72,15 @@ non-destructive tool. If your client shows too many tools, narrow it with
 
 ## 3. Configure your client
 
-Per-client instructions:
-
-- [Claude Desktop](claude-desktop.md)
-- [Claude Code](claude-code.md)
-- [Cursor](cursor.md)
-- [VS Code](vscode.md)
-- [Roo Code](roo-code.md)
-- [OpenCode](opencode.md)
-
-All of them take the same shape:
+Every supported client (Claude Desktop, Claude Code, Cursor, VS Code, Roo
+Code, OpenCode) uses the same configuration shape — only the interpreter path
+differs. The JSON below works in all of them:
 
 ```json
 {
   "mcpServers": {
     "nexhunter": {
+      "type": "local",
       "command": "python",
       "args": [
         "-m", "nexhunter.api.mcp",
@@ -117,7 +116,8 @@ without spending a tool call:
 ## What the model cannot do
 
 - **Run an arbitrary command.** There is no command parameter anywhere in the
-  registry, and no execution path uses a shell. Model output is a tool name
+  registry except the sanctioned `execute_command` — intrusive, withheld from
+  autonomous runs, and off every default profile. Model output is a tool name
   plus typed parameters; it is never a command line.
 - **Send invalid parameters.** Values are type-checked server-side; a value
   that is not a valid target, port, or enum is refused before a command is

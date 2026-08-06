@@ -118,12 +118,12 @@ def test_choice_validation():
 def test_external_bind_requires_opt_in():
     """Binding off loopback without opting in is a startup error."""
     print("[TEST] External bind requires opt-in...")
-    with _CleanEnv(NEXHUNTER_BIND_HOST="0.0.0.0") as config:
+    with _CleanEnv(NEXHUNTER_BIND_HOST="0.0.0.0") as config:  # noqa: S104 - test input, not a real bind
         errors = config.validate()
         assert any("EXTERNAL_BIND_ALLOWED" in e for e in errors), errors
 
     with _CleanEnv(
-        NEXHUNTER_BIND_HOST="0.0.0.0",
+        NEXHUNTER_BIND_HOST="0.0.0.0",  # noqa: S104 - test input, not a real bind
         NEXHUNTER_EXTERNAL_BIND_ALLOWED="true",
     ) as config:
         assert config.validate() == [], "an opted-in external bind is allowed"
@@ -157,12 +157,12 @@ def test_validate_or_raise_reports_every_problem():
     print("[TEST] All problems reported together...")
     with _CleanEnv(
         NEXHUNTER_ENVIRONMENT="production",
-        NEXHUNTER_BIND_HOST="0.0.0.0",
+        NEXHUNTER_BIND_HOST="0.0.0.0",  # noqa: S104 - test input, not a real bind
         NEXHUNTER_DESTRUCTIVE_TOOLS_ENABLED="true",
     ) as config:
         try:
             config.validate_or_raise()
-            assert False, "expected ConfigError"
+            raise AssertionError("expected ConfigError")
         except ConfigError as exc:
             message = str(exc)
             assert message.count("-") >= 2, f"expected several problems listed:\n{message}"

@@ -1,8 +1,7 @@
 """Enhanced security features - advanced workflows, OSINT, threat analysis."""
 
-import json
 import time
-from typing import Dict, List, Any, Optional
+from typing import Any
 from dataclasses import dataclass
 
 
@@ -11,9 +10,9 @@ class ThreatLevel:
     """Threat level assessment."""
     level: str  # critical, high, medium, low, info
     score: float  # 0-100
-    factors: List[str]
-    remediation: List[str]
-    timestamp: float = None
+    factors: list[str]
+    remediation: list[str]
+    timestamp: float | None = None
 
     def __post_init__(self):
         if self.timestamp is None:
@@ -50,11 +49,11 @@ class OsintCollector:
         """Add DNS record."""
         self.data["dns_records"].append({"type": record_type, "value": value, "ttl": ttl})
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary."""
         return self.data
 
-    def summary(self) -> Dict[str, int]:
+    def summary(self) -> dict[str, int]:
         """Get summary counts."""
         return {
             "subdomains": len(self.data["subdomains"]),
@@ -95,9 +94,9 @@ class VulnerabilityAnalyzer:
             }
         )
 
-    def detect_chains(self) -> List[Dict[str, Any]]:
+    def detect_chains(self) -> list[dict[str, Any]]:
         """Detect vulnerability chains/attack paths."""
-        chains = []
+        chains: list[dict[str, Any]] = []
         if not self.vulns:
             return chains
 
@@ -177,7 +176,7 @@ class BugBountyAssessment:
 
     def __init__(self, target: str):
         self.target = target
-        self.scope = {"in_scope": [], "out_of_scope": []}
+        self.scope: dict[str, list[str]] = {"in_scope": [], "out_of_scope": []}
         self.phases = {
             "recon": {"status": "pending", "findings": 0},
             "subdomain_enum": {"status": "pending", "findings": 0},
@@ -194,7 +193,7 @@ class BugBountyAssessment:
             "remediation_timeline": "",
         }
 
-    def set_scope(self, in_scope: List[str], out_of_scope: List[str] = None):
+    def set_scope(self, in_scope: list[str], out_of_scope: list[str] | None = None):
         """Set assessment scope."""
         self.scope["in_scope"] = in_scope
         self.scope["out_of_scope"] = out_of_scope or []
@@ -210,7 +209,7 @@ class BugBountyAssessment:
             self.phases[phase]["status"] = "completed"
             self.phases[phase]["findings"] = findings
 
-    def get_priority_findings(self) -> List[Dict[str, Any]]:
+    def get_priority_findings(self) -> list[dict[str, Any]]:
         """Get high-priority findings for bug bounty."""
         return [
             {
@@ -235,7 +234,7 @@ class BugBountyAssessment:
             },
         ]
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary."""
         return {
             "target": self.target,
@@ -250,17 +249,17 @@ class CTFChallengeAnalyzer:
 
     def __init__(self, challenge_type: str):
         self.type = challenge_type  # web, crypto, forensics, pwn, recon
-        self.hints = []
-        self.tools = {
+        self.hints: list[dict[str, Any]] = []
+        self.tools: dict[str, list[str]] = {
             "web": ["burp", "ffuf", "nuclei", "sqlmap", "dalfox"],
             "crypto": ["hashid", "john", "hashcat", "openssl", "python-crypto"],
             "forensics": ["strings", "exiftool", "binwalk", "foremost", "steghide"],
             "pwn": ["gdb", "checksec", "radare2", "pwntools", "ida-pro"],
             "recon": ["nmap", "subfinder", "amass", "shodan", "whois"],
         }
-        self.progress = {"discovered": [], "solved_parts": []}
+        self.progress: dict[str, list[Any]] = {"discovered": [], "solved_parts": []}
 
-    def get_recommended_tools(self) -> List[str]:
+    def get_recommended_tools(self) -> list[str]:
         """Get tools recommended for this challenge type."""
         return self.tools.get(self.type, [])
 
@@ -272,7 +271,7 @@ class CTFChallengeAnalyzer:
         """Mark challenge part as solved."""
         self.progress["solved_parts"].append(part)
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary."""
         return {
             "type": self.type,
@@ -311,7 +310,7 @@ class ThreatIntelligence:
             {"id": technique_id, "name": name, "severity": severity}
         )
 
-    def assess_risk(self) -> Dict[str, Any]:
+    def assess_risk(self) -> dict[str, Any]:
         """Assess overall risk level."""
         ioc_count = len(self.indicators["iocs"])
         ttp_count = len(self.indicators["ttps"])
@@ -338,6 +337,6 @@ class ThreatIntelligence:
             "mitre_techniques": mitre_count,
         }
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary."""
         return {"indicators": self.indicators, "risk_assessment": self.assess_risk()}

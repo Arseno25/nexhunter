@@ -1,7 +1,7 @@
 """Secret detection and redaction for logs and output."""
 
 import re
-from typing import Any, Dict, List, Optional
+from typing import Any
 from dataclasses import dataclass
 
 
@@ -10,7 +10,7 @@ class RedactionPattern:
     """Pattern for detecting secrets."""
 
     name: str
-    patterns: List[str]  # Regex patterns to match
+    patterns: list[str]  # Regex patterns to match
     mask: str = "[REDACTED]"
 
     def matches(self, value: str) -> bool:
@@ -91,12 +91,12 @@ class SecretRedactor:
                 r"\b\d{4}[\s\-]?\d{4}[\s\-]?\d{4}[\s\-]?\d{4}\b",
             ],
         ),
-        RedactionPattern(
-            name="EMAIL",
-            patterns=[
-                r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b",
-            ],
-        ),
+        # Email addresses are deliberately NOT redacted: in this tool they are
+        # normal output -- the very findings an OSINT or recon run exists to
+        # surface (theHarvester, whois, subdomain enumeration). Masking them
+        # would destroy results, not protect a secret. Credentials that happen
+        # to contain an email are still caught by the key-name and secret-value
+        # paths above.
         RedactionPattern(
             name="SLACK_TOKEN",
             patterns=[
@@ -112,7 +112,7 @@ class SecretRedactor:
         "auth", "authorization", "credential", "session", "cookie",
     )
 
-    def __init__(self, patterns: List[RedactionPattern] = None):
+    def __init__(self, patterns: list[RedactionPattern] | None = None):
         """Initialize with patterns."""
         self.patterns = patterns or self.PATTERNS
 
@@ -133,12 +133,12 @@ class SecretRedactor:
 
         return result
 
-    def redact_dict(self, data: Dict[str, Any], recursive: bool = True) -> Dict[str, Any]:
+    def redact_dict(self, data: dict[str, Any], recursive: bool = True) -> dict[str, Any]:
         """Redact secrets from dictionary (keys and values)."""
         if not isinstance(data, dict):
             return data
 
-        redacted = {}
+        redacted: dict[str, Any] = {}
         for key, value in data.items():
             # Check key for secrets
             redacted_key = self.redact_string(str(key))
@@ -160,12 +160,12 @@ class SecretRedactor:
 
         return redacted
 
-    def redact_list(self, data: List[Any], recursive: bool = True) -> List[Any]:
+    def redact_list(self, data: list[Any] | tuple[Any, ...], recursive: bool = True) -> list[Any]:
         """Redact secrets from list."""
         if not isinstance(data, (list, tuple)):
             return data
 
-        redacted = []
+        redacted: list[Any] = []
         for item in data:
             if isinstance(item, str):
                 redacted.append(self.redact_string(item))
@@ -213,7 +213,7 @@ class SecretRedactor:
     }
 
     @classmethod
-    def _short_secret_flags(cls, argv: List[str]) -> set:
+    def _short_secret_flags(cls, argv: list[str]) -> set:
         """Short flags that carry a secret for the binary being invoked."""
         if not argv:
             return set()
@@ -222,7 +222,7 @@ class SecretRedactor:
             binary = binary[:-4]
         return cls.SHORT_SECRET_FLAGS_BY_TOOL.get(binary, set())
 
-    def is_secret_flag(self, arg: str, short_flags: Optional[set] = None) -> bool:
+    def is_secret_flag(self, arg: str, short_flags: set | None = None) -> bool:
         """Check if a command-line flag introduces a secret value.
 
         Long flags match on their name rather than an exact list, so
@@ -240,9 +240,9 @@ class SecretRedactor:
 
     def redact_command(
         self,
-        cmd_args: List[str],
-        secret_values: Optional[List[str]] = None,
-    ) -> List[str]:
+        cmd_args: list[str],
+        secret_values: list[str] | None = None,
+    ) -> list[str]:
         """Redact secret values from an argument list.
 
         `secret_values` are the exact values a tool's schema declared secret.
@@ -250,7 +250,7 @@ class SecretRedactor:
         guess; the name and pattern heuristics below stay as a backstop for
         callers that have no schema to hand.
         """
-        redacted: List[str] = []
+        redacted: list[str] = []
         skip_next = False
         short_flags = self._short_secret_flags(cmd_args)
         known_secrets = {str(v) for v in (secret_values or []) if str(v)}

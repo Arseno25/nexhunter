@@ -1,14 +1,16 @@
 {
   "mcpServers": {
     "nexhunter": {
-      "command": "python3",
+      "type": "local",
+      "command": "python",
       "args": [
         "-m",
         "nexhunter.api.mcp",
         "--server",
         "http://127.0.0.1:8888"
       ],
-      "timeout": 300,
+      "enabled": true,
+      "timeout": 600000,
       "alwaysAllow": []
     }
   }

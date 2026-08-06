@@ -12,7 +12,6 @@ running with an unintended security posture is worse than not starting.
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import List, Optional
 
 TRUE_VALUES = {"1", "true", "yes", "on"}
 FALSE_VALUES = {"0", "false", "no", "off"}
@@ -44,7 +43,7 @@ def _flag(name: str, default: bool) -> bool:
     )
 
 
-def _integer(name: str, default: int, minimum: int = 0, maximum: Optional[int] = None) -> int:
+def _integer(name: str, default: int, minimum: int = 0, maximum: int | None = None) -> int:
     raw = _get(name)
     if not raw:
         return default
@@ -135,9 +134,9 @@ class Config:
             ),
         )
 
-    def validate(self) -> List[str]:
+    def validate(self) -> list[str]:
         """Return configuration errors that must stop startup."""
-        errors: List[str] = []
+        errors: list[str] = []
 
         if self.binds_externally and not self.external_bind_allowed:
             errors.append(
@@ -154,9 +153,9 @@ class Config:
 
         return errors
 
-    def warnings(self) -> List[str]:
+    def warnings(self) -> list[str]:
         """Non-fatal issues worth printing at startup."""
-        notes: List[str] = []
+        notes: list[str] = []
 
         if self.binds_externally:
             notes.append(f"Server binds to {self.bind_host}, which is reachable from other hosts")
@@ -199,7 +198,7 @@ class Config:
         }
 
 
-_cached: Optional[Config] = None
+_cached: Config | None = None
 
 
 def load(refresh: bool = False) -> Config:

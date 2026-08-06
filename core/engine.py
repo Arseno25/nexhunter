@@ -33,7 +33,7 @@ class Finding:
     def signature(self) -> str:
         """Generate unique signature for deduplication."""
         msg = f"{self.tool}:{self.target}:{self.title}".encode()
-        return hashlib.md5(msg).hexdigest()
+        return hashlib.sha256(msg).hexdigest()
 
     def to_dict(self) -> dict:
         """Convert to dictionary."""
@@ -45,7 +45,7 @@ class WorkflowContext:
 
     def __init__(self, target: str):
         self.target = target
-        self.phases = {}
+        self.phases: dict[str, dict] = {}
         self.started = time.time()
 
     def set_phase(self, name: str, result: Any):
@@ -118,9 +118,9 @@ class Engine:
         self._tool_stats[name] = self._tool_stats[name][-20:]
         return res
 
-    def parallel(self, jobs: dict[str, callable]) -> dict:
+    def parallel(self, jobs: dict[str, Any]) -> dict:
         """Execute multiple functions in parallel."""
-        out = {}
+        out: dict[str, Any] = {}
         max_workers = min(MAX_PARALLEL_WORKERS, len(jobs) or 1)
         with ThreadPoolExecutor(max_workers=max_workers) as ex:
             futs = {ex.submit(fn): n for n, fn in jobs.items()}
@@ -248,10 +248,10 @@ class Engine:
         if T.which("amass"):
             jobs["amass"] = lambda: self.run_tool("amass_enum", {"domain": domain})
         results = self.parallel(jobs)
-        subs = set()
+        subs: set[str] = set()
         for name in ("subfinder", "amass"):
             if results.get(name, {}).get("ok"):
-                subs.update(l.strip() for l in results[name]["stdout"].splitlines() if l.strip())
+                subs.update(line.strip() for line in results[name]["stdout"].splitlines() if line.strip())
         for s in sorted(subs):
             self.add(Finding(tool="recon", target=domain, title=f"subdomain: {s}", severity="info"))
         return {"ok": True, "domain": domain, "tools_run": sorted(results), "subdomains": sorted(subs)}
@@ -304,7 +304,7 @@ class Engine:
 
     def summary(self) -> dict:
         """Summary of findings by severity."""
-        by_sev = {}
+        by_sev: dict[str, int] = {}
         for f in self.findings:
             by_sev[f.severity] = by_sev.get(f.severity, 0) + 1
         return {"total": len(self.findings), "by_severity": by_sev}

@@ -1,7 +1,6 @@
 """Enhanced security agents - OSINT, threat analysis, bug bounty."""
 
-import json
-from typing import Dict, Any, Optional
+from typing import Any
 from nexhunter.agents.base import Agent
 from nexhunter.api.security_features import (
     OsintCollector,
@@ -22,7 +21,7 @@ class OsintAgent(Agent):
         super().__init__(ctx or None)
         self.collector = OsintCollector()
 
-    def execute(self, engine, params: Dict[str, Any]) -> dict:
+    def execute(self, engine, params: dict[str, Any]) -> dict:
         """Execute OSINT collection."""
         target = params.get("target", "")
         if not target:
@@ -67,7 +66,7 @@ class VulnerabilityAnalysisAgent(Agent):
         super().__init__(ctx or None)
         self.analyzer = VulnerabilityAnalyzer()
 
-    def execute(self, engine, params: Dict[str, Any]) -> dict:
+    def execute(self, engine, params: dict[str, Any]) -> dict:
         """Analyze vulnerabilities."""
         target = params.get("target", "")
         if not target:
@@ -137,7 +136,7 @@ class BugBountyAgent(Agent):
         super().__init__(ctx or None)
         self.assessment = None
 
-    def execute(self, engine, params: Dict[str, Any]) -> dict:
+    def execute(self, engine, params: dict[str, Any]) -> dict:
         """Run bug bounty assessment."""
         target = params.get("target", "")
         scope = params.get("scope", {})
@@ -181,7 +180,7 @@ class CTFSolverAgent(Agent):
     def __init__(self, ctx=None):
         super().__init__(ctx or None)
 
-    def execute(self, engine, params: Dict[str, Any]) -> dict:
+    def execute(self, engine, params: dict[str, Any]) -> dict:
         """Analyze CTF challenge."""
         challenge_type = params.get("type", "web")
         challenge_name = params.get("name", "Unknown")
@@ -223,7 +222,7 @@ class ThreatIntelAgent(Agent):
         super().__init__(ctx or None)
         self.intel = ThreatIntelligence()
 
-    def execute(self, engine, params: Dict[str, Any]) -> dict:
+    def execute(self, engine, params: dict[str, Any]) -> dict:
         """Assess threat and risk."""
         target = params.get("target", "")
         if not target:

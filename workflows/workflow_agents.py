@@ -1,6 +1,6 @@
 """Workflow agents for comprehensive assessments."""
 
-from typing import Dict, Any
+from typing import Any
 from nexhunter.agents.base import Agent
 from nexhunter.workflows.security_workflows import WORKFLOW_TYPES
 
@@ -11,9 +11,9 @@ class WorkflowAgent(Agent):
     def __init__(self, ctx=None, workflow_type: str = "bugbounty"):
         super().__init__(ctx or None)
         self.workflow_type = workflow_type
-        self.workflow = None
+        self.workflow: Any = None
 
-    def execute(self, engine, params: Dict[str, Any]) -> dict:
+    def execute(self, engine, params: dict[str, Any]) -> dict:
         """Execute workflow."""
         target = params.get("target", "")
         if not target:
@@ -54,7 +54,7 @@ class BugBountyWorkflowAgent(Agent):
     def __init__(self, ctx=None):
         super().__init__(ctx or None)
 
-    def execute(self, engine, params: Dict[str, Any]) -> dict:
+    def execute(self, engine, params: dict[str, Any]) -> dict:
         """Execute bug bounty workflow."""
         target = params.get("target", "")
         if not target:
@@ -89,7 +89,7 @@ class PentestWorkflowAgent(Agent):
     def __init__(self, ctx=None):
         super().__init__(ctx or None)
 
-    def execute(self, engine, params: Dict[str, Any]) -> dict:
+    def execute(self, engine, params: dict[str, Any]) -> dict:
         """Execute pentest workflow."""
         target = params.get("target", "")
         if not target:
@@ -120,7 +120,7 @@ class ApiSecurityWorkflowAgent(Agent):
     def __init__(self, ctx=None):
         super().__init__(ctx or None)
 
-    def execute(self, engine, params: Dict[str, Any]) -> dict:
+    def execute(self, engine, params: dict[str, Any]) -> dict:
         """Execute API security workflow."""
         target = params.get("target", "")
         if not target:
@@ -151,7 +151,7 @@ class CloudSecurityWorkflowAgent(Agent):
     def __init__(self, ctx=None):
         super().__init__(ctx or None)
 
-    def execute(self, engine, params: Dict[str, Any]) -> dict:
+    def execute(self, engine, params: dict[str, Any]) -> dict:
         """Execute cloud security workflow."""
         target = params.get("target", "")
         if not target:
@@ -182,7 +182,7 @@ class MobileSecurityWorkflowAgent(Agent):
     def __init__(self, ctx=None):
         super().__init__(ctx or None)
 
-    def execute(self, engine, params: Dict[str, Any]) -> dict:
+    def execute(self, engine, params: dict[str, Any]) -> dict:
         """Execute mobile security workflow."""
         target = params.get("target", "")
         if not target:
@@ -213,7 +213,7 @@ class DevSecOpsWorkflowAgent(Agent):
     def __init__(self, ctx=None):
         super().__init__(ctx or None)
 
-    def execute(self, engine, params: Dict[str, Any]) -> dict:
+    def execute(self, engine, params: dict[str, Any]) -> dict:
         """Execute DevSecOps workflow."""
         target = params.get("target", "")
         if not target:

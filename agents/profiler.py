@@ -8,10 +8,24 @@ worse than none, because the next decision is made from it.
 """
 
 import ipaddress
+import os
 import re
 from dataclasses import dataclass, field
-from datetime import datetime
-from typing import Any, Dict, List, Optional
+from datetime import datetime, timezone
+from typing import Any
+
+# Target modality detection. A target string tells us which kind of assessment
+# is even possible: a URL is a web app, a file is a binary or a capture, a
+# directory is a codebase, an interface is wireless. This is what lets the
+# selector reach file/cloud/code/wireless tooling instead of only network tools.
+_BINARY_EXTS = (".elf", ".bin", ".so", ".o", ".a", ".exe", ".dll", ".macho",
+                ".out", ".ko", ".axf", ".sys")
+_MOBILE_EXTS = (".apk", ".ipa", ".aab", ".dex")
+_FORENSICS_EXTS = (".pcap", ".pcapng", ".cap", ".mem", ".dmp", ".raw", ".vmem",
+                   ".e01", ".dd", ".lime", ".img")
+_CLOUD_MARKERS = ("arn:aws:", "amazonaws.com", "s3://", "gs://", "azure://",
+                  "blob.core.windows.net", "googleapis.com", ".azurewebsites.net")
+_IFACE_RE = re.compile(r"^(wlan|mon|wlp|ath|ra)\d")
 
 
 @dataclass
@@ -56,16 +70,16 @@ class TargetProfile:
 
     target: str
     target_type: str = "unknown"   # web_application | host | network | domain
-    resolved_addresses: List[str] = field(default_factory=list)
-    technologies: List[Observation] = field(default_factory=list)
-    services: List[Observation] = field(default_factory=list)
-    observations: List[Observation] = field(default_factory=list)
-    updated_at: datetime = field(default_factory=datetime.utcnow)
+    resolved_addresses: list[str] = field(default_factory=list)
+    technologies: list[Observation] = field(default_factory=list)
+    services: list[Observation] = field(default_factory=list)
+    observations: list[Observation] = field(default_factory=list)
+    updated_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
-    def technology_names(self) -> List[str]:
+    def technology_names(self) -> list[str]:
         return sorted({o.value.lower() for o in self.technologies})
 
-    def open_ports(self) -> List[int]:
+    def open_ports(self) -> list[int]:
         ports = set()
         for service in self.services:
             match = re.search(r"\b(\d{1,5})\b", service.value)
@@ -83,7 +97,7 @@ class TargetProfile:
             return True
         return bool(self.technologies)
 
-    def recommended_safe_workflows(self) -> List[str]:
+    def recommended_safe_workflows(self) -> list[str]:
         """Passive-first workflow suggestions, grounded in what was observed."""
         recommendations = []
         if self.has_web_surface():
@@ -94,7 +108,7 @@ class TargetProfile:
             recommendations.append("recon-passive")
         return recommendations
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "target": self.target,
             "target_type": self.target_type,
@@ -118,15 +132,56 @@ class Profiler:
 
     def new_profile(self, target: str) -> TargetProfile:
         profile = TargetProfile(target=target)
-        if target.startswith(("http://", "https://")):
-            profile.target_type = "web_application"
-        elif self._looks_like_ip(target):
-            profile.target_type = "host"
-        elif "/" in target:
-            profile.target_type = "network"
-        else:
-            profile.target_type = "domain"
+        profile.target_type = self._classify(target)
         return profile
+
+    @staticmethod
+    def _classify(target: str) -> str:
+        """Infer the target's modality, which decides what tooling applies."""
+        t = (target or "").strip()
+        low = t.lower()
+
+        if low.startswith(("http://", "https://")):
+            return "web_application"
+        if any(marker in low for marker in _CLOUD_MARKERS):
+            return "cloud"
+
+        kind = Profiler._file_kind(t, low)
+        if kind:
+            return kind
+        if Profiler._is_dir(t):
+            return "code"
+        if _IFACE_RE.match(low) or low.endswith("mon"):
+            return "wireless"
+        if Profiler._looks_like_ip(t):
+            return "host"
+        if "/" in t:
+            return "network"
+        return "domain"
+
+    @staticmethod
+    def _file_kind(target: str, low: str) -> str | None:
+        """Classify a file target by extension, or by being a real file."""
+        if low.endswith(_MOBILE_EXTS):
+            return "mobile"
+        if low.endswith(_FORENSICS_EXTS):
+            return "forensics"
+        if low.endswith(_BINARY_EXTS):
+            return "binary"
+        # A real file with no telling extension is treated as a binary artifact.
+        try:
+            if os.path.isfile(os.path.expanduser(target)):
+                return "binary"
+        except (OSError, ValueError):
+            pass
+        return None
+
+    @staticmethod
+    def _is_dir(target: str) -> bool:
+        try:
+            return os.path.isdir(os.path.expanduser(target))
+        except (OSError, ValueError):
+            return False
 
     def observe(
         self,
@@ -142,7 +197,7 @@ class Profiler:
         handler = getattr(self, f"_from_{self._family(tool_name)}", None)
         if handler:
             handler(profile, tool_name, parsed, execution_id)
-        profile.updated_at = datetime.utcnow()
+        profile.updated_at = datetime.now(timezone.utc)
         return profile
 
     # -- per-tool-family extraction ----------------------------------------

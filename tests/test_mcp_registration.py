@@ -8,7 +8,6 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from nexhunter.api import mcp as M
 from nexhunter.api import mcp_profiles as P
-from nexhunter.core import tools as T
 
 
 def _tool_names():

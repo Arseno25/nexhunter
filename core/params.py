@@ -13,10 +13,11 @@ an attacker chose.
 import ipaddress
 import os
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
-from typing import Any, Optional, Sequence, Tuple
+from typing import Any
+from collections.abc import Sequence
 from urllib.parse import urlparse, urlunparse
 
 
@@ -24,6 +25,10 @@ class ParamType(Enum):
     """Declared type of a tool parameter."""
 
     STRING = "string"
+    # Free-form text: newlines and shell syntax allowed, null bytes not. Used
+    # only by tools whose entire parameter IS the payload (execute_command,
+    # execute_python_script), where control characters are meaningful, not injection.
+    TEXT = "text"
     BOOLEAN = "boolean"
     INTEGER = "integer"
     ENUM = "enum"
@@ -88,9 +93,9 @@ class ParamSpec:
     required: bool = False
     default: Any = None
     description: str = ""
-    choices: Tuple[str, ...] = ()
-    minimum: Optional[int] = None
-    maximum: Optional[int] = None
+    choices: tuple[str, ...] = ()
+    minimum: int | None = None
+    maximum: int | None = None
     max_length: int = MAX_VALUE_LENGTH
     # Marks a value as a credential, so redaction masks it wherever it appears.
     secret: bool = False
@@ -124,7 +129,8 @@ class ParamSpec:
                 raise ValidationError(
                     f"{self.name} exceeds {self.max_length} characters"
                 )
-            _reject_control_characters(value)
+            if self.type is not ParamType.TEXT:
+                _reject_control_characters(value)
 
         try:
             return _VALIDATORS[self.type](self, value)
@@ -138,6 +144,21 @@ class ParamSpec:
 
 def _validate_string(spec: ParamSpec, value: Any) -> str:
     text = str(value).strip()
+    _reject_option_injection(text)
+    return text
+
+
+def _validate_text(spec: ParamSpec, value: Any) -> str:
+    """Free-form text: newlines and shell syntax pass through unmolested.
+
+    The value is executed in full (execute_command) or as the sole script body
+    (execute_python_script), so it is never embedded in a larger argv where a newline
+    could re-split arguments. Null bytes still truncate inside C-level APIs,
+    so they stay rejected.
+    """
+    text = str(value).strip()
+    if "\x00" in text:
+        raise ValidationError("value contains a null byte")
     _reject_option_injection(text)
     return text
 
@@ -388,6 +409,7 @@ def _validate_duration(spec: ParamSpec, value: Any) -> str:
 
 _VALIDATORS = {
     ParamType.STRING: _validate_string,
+    ParamType.TEXT: _validate_text,
     ParamType.BOOLEAN: _validate_boolean,
     ParamType.INTEGER: _validate_integer,
     ParamType.ENUM: _validate_enum,
@@ -472,7 +494,7 @@ def validate_params(
     specs: Sequence[ParamSpec],
     supplied: dict,
     reject_unknown: bool = True,
-) -> Tuple[Optional[dict], Optional[str]]:
+) -> tuple[dict | None, str | None]:
     """Validate a whole parameter set.
 
     Returns (normalized values, None) or (None, error message). Unknown

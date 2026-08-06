@@ -38,6 +38,7 @@ from fastmcp import FastMCP
 
 from nexhunter.core import tools as T
 from nexhunter.api import mcp_profiles
+from nexhunter.api.logging_setup import InterceptHandler
 
 log = logging.getLogger("nexhunter.mcp")
 
@@ -76,15 +77,17 @@ mcp = FastMCP(
 
 def api(path, payload=None, timeout=600):
     url = SERVER + path
+    if not url.lower().startswith(("http://", "https://")):
+        return {"ok": False, "error": f"refusing non-http server URL: {url}"}
     headers = {"Content-Type": "application/json"}
-    req = urllib.request.Request(
+    req = urllib.request.Request(  # noqa: S310 - scheme guard above
         url,
         data=json.dumps(payload or {}).encode() if payload is not None else None,
         headers=headers,
         method="POST" if payload is not None else "GET",
     )
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as r:
+        with urllib.request.urlopen(req, timeout=timeout) as r:  # nosec B310 - scheme guard above
             return json.load(r)
     except Exception as e:
         return {"ok": False, "error": f"server unreachable at {SERVER}: {e}"}
@@ -132,9 +135,9 @@ def _trim_json(data, max_field=None, max_items=MAX_ITEMS):
     return data
 
 
-def _render(data) -> str:
+def _render(data, indent: int = 1) -> str:
     """Serialize an API response with token-economy trimming applied."""
-    return json.dumps(_trim_json(data), indent=1)
+    return json.dumps(_trim_json(data), indent=indent)
 
 
 @mcp.tool()
@@ -188,14 +191,201 @@ def optimize_parameters(tool: str) -> str:
 
 
 @mcp.tool()
-def run_tool(tool: str, params: str = "{}", async_run: bool = False) -> str:
+def cve_monitor(days: int = 7, severity: str = "", keyword: str = "",
+                limit: int = 20) -> str:
+    """Recent NVD CVEs (window in days, optional severity/keyword filter)
+    ranked by exploitability (kind, CVSS, PoC hints)."""
+    return _render(api("/api/agents/cve_watch", {
+        "days": days, "severity": severity, "keyword": keyword, "limit": limit,
+    }), indent=1)
+
+
+@mcp.tool()
+def run_tool(tool: str, params: str = "{}", async_run: bool = False, direct: bool = True) -> str:
     """Run a registered tool by name with JSON params (async_run=True returns pid immediately).
+
+    Direct by default (in-process, no execution record);
+    pass direct=False for tracked execution with history and workspaces.
 
     Raw shell command execution is not supported; only tools in the registry
     may run.
     """
     parsed = json.loads(params) if params else {}
-    return _render(api("/api/command", {"tool": tool, "params": parsed, "async": async_run}), indent=1)
+    return _render(api("/api/command", {"tool": tool, "params": parsed, "async": async_run, "direct": direct}), indent=1)
+
+
+@mcp.tool()
+def run_with_recovery(tool: str, params: str = "{}", max_attempts: int = 3) -> str:
+    """Run a registered tool with automatic failure recovery.
+
+    On failure the run is retried along the cheapest viable path:
+    reduced scope (fewer threads/gentler timing/smaller port range), then
+    backoff, then an equivalent alternative tool. Returns the final result
+    with a 'recovery' trail of attempts.
+    """
+    parsed = json.loads(params) if params else {}
+    return _render(api("/api/recover", {"tool": tool, "params": parsed, "max_attempts": max_attempts}), indent=1)
+
+
+@mcp.tool()
+def http_repeater(request: str) -> str:
+    """Fire one hand-tuned HTTP request and return the full response.
+
+    request = JSON: {"method": "GET", "url": "https://x/", "headers": {}, "body": ""}
+    """
+    return _render(api("/api/web/repeater", {"request": json.loads(request) if request else {}}), indent=1)
+
+
+@mcp.tool()
+def http_intruder(request: str, payloads: str) -> str:
+    """Sniper-style parameter fuzzing on an authorized target.
+
+    Mark injection points in the URL/body with '§' (e.g.
+    /user?id=§1§); each payload replaces every marker. payloads = JSON list
+    of strings. Returns status distribution and anomalies.
+    """
+    try:
+        req = json.loads(request) if request else {}
+        pays = json.loads(payloads) if payloads else []
+    except json.JSONDecodeError:
+        return json.dumps({"ok": False, "error": "request/payloads must be valid JSON"})
+    return _render(api("/api/web/intruder", {"request": req, "payloads": pays}), indent=1)
+
+
+@mcp.tool()
+def http_spider(url: str, max_pages: int = 50) -> str:
+    """Crawl a site from a seed URL (same-origin only) and list pages found."""
+    return _render(api("/api/web/spider", {"url": url, "max_pages": max_pages}), indent=1)
+
+
+@mcp.tool()
+def proxy_start(port: int = 8080, rules: str = "[]") -> str:
+    """Start the localhost-only logging proxy (match-replace rules = JSON list
+    of {"match": "regex", "replace": "..."})."""
+    try:
+        parsed_rules = json.loads(rules) if rules else []
+    except json.JSONDecodeError:
+        return json.dumps({"ok": False, "error": "rules must be valid JSON"})
+    return _render(api("/api/web/proxy/start", {"port": port, "rules": parsed_rules}), indent=1)
+
+
+@mcp.tool()
+def proxy_stop(port: int = 8080) -> str:
+    """Stop the localhost-only logging proxy."""
+    return _render(api("/api/web/proxy/stop", {"port": port}), indent=1)
+
+
+@mcp.tool()
+def proxy_logs(port: int = 8080) -> str:
+    """Requests seen by the localhost-only logging proxy."""
+    return _render(api("/api/web/proxy/logs", {"port": port}), indent=1)
+
+
+@mcp.tool()
+def browser_analyze(url: str) -> str:
+    """Full browser analysis of a URL: DOM artifacts, security headers,
+    cookie flags, technology fingerprint, JS errors. Selenium when installed,
+    stdlib fallback otherwise."""
+    return _render(api("/api/browser/analyze", {"url": url}), indent=1)
+
+
+@mcp.tool()
+def browser_screenshot(url: str) -> str:
+    """Take a screenshot of a URL with a headless browser and save it into
+    the execution workspace. Selenium must be installed."""
+    return _render(api("/api/browser/screenshot", {"url": url}), indent=1)
+
+
+@mcp.tool()
+def browser_network(url: str) -> str:
+    """Capture the requests a page makes while loading (XHR, fetch, scripts,
+    resources) with types and sizes. Selenium when installed."""
+    return _render(api("/api/browser/network", {"url": url}), indent=1)
+
+
+@mcp.tool()
+def browser_discover(url: str) -> str:
+    """JS-aware link discovery on a target (same-origin links rendered by
+    JavaScript). Selenium when installed, static fallback otherwise."""
+    return _render(api("/api/browser/crawl", {"url": url}), indent=1)
+
+
+@mcp.tool()
+def browser_forms(url: str) -> str:
+    """Enumerate forms on a page: actions, methods, and input fields.
+    Selenium when installed."""
+    return _render(api("/api/browser/forms", {"url": url}), indent=1)
+
+
+@mcp.tool()
+def vulnerability_card(
+    title: str,
+    severity: str = "info",
+    endpoint: str = "",
+    impact: str = "",
+    remediation: str = "",
+    vuln_type: str = "Unknown",
+    cvss_score: float | None = None,
+    poc: str = "",
+) -> str:
+    """Format a vulnerability card (title, severity, endpoint, impact, fix,
+    CVSS, PoC) into a structured record for reporting."""
+    return _render(api("/api/visual/vulnerability-card", {
+        "title": title, "severity": severity, "endpoint": endpoint,
+        "impact": impact, "remediation": remediation, "type": vuln_type,
+        "cvss_score": cvss_score, "poc": poc,
+    }), indent=1)
+
+
+@mcp.tool()
+def dashboard() -> str:
+    """Server dashboard metrics: requests, findings, processes, cache."""
+    data = api("/api/visual/dashboard?format=box")
+    box = data.get("box") if isinstance(data, dict) else None
+    return box or _render(data, indent=1)
+
+
+@mcp.tool()
+def visual_vulnerabilities() -> str:
+    """All recorded findings with severity statistics."""
+    return _render(api("/api/visual/vulnerabilities"), indent=1)
+
+
+@mcp.tool()
+def attack_chain(chain: str, target: str, domain: str = "", host: str = "",
+                 username: str = "", wordlist: str = "") -> str:
+    """Build a named attack chain (each step: tool, params, gate, availability)
+    scored with a success probability. Call with chain='' to list patterns.
+    Patterns include recon_sweep, web_rce, ssrf_internal, credential_capture,
+    api_abuse. Nothing executes; this is planning only."""
+    return _render(api("/api/attack-chain", {
+        "chain": chain, "target": target, "domain": domain, "host": host,
+        "username": username, "wordlist": wordlist,
+    }), indent=1)
+
+
+@mcp.tool()
+def file_list(path: str = "") -> str:
+    """List a readable directory (defaults to the lab allow root)."""
+    return _render(api("/api/file/list", {"path": path}), indent=1)
+
+
+@mcp.tool()
+def file_read(path: str) -> str:
+    """Read a file, capped at max_bytes."""
+    return _render(api("/api/file/read", {"path": path}), indent=1)
+
+
+@mcp.tool()
+def file_write(path: str, content: str) -> str:
+    """Write a file under the allow root only (lab sandbox)."""
+    return _render(api("/api/file/write", {"path": path, "content": content}), indent=1)
+
+
+@mcp.tool()
+def python_run(code: str, timeout: int = 60) -> str:
+    """Run a short Python snippet in an isolated scratch cwd (capped output)."""
+    return _render(api("/api/python/run", {"code": code, "timeout": timeout}), indent=1)
 
 
 @mcp.tool()
@@ -214,6 +404,18 @@ def process_status(pid: int) -> str:
 def process_terminate(pid: int) -> str:
     """Kill a tracked process."""
     return _render(api(f"/api/processes/terminate/{pid}", {}), indent=1)
+
+
+@mcp.tool()
+def process_pause(pid: int) -> str:
+    """Pause a running process (SIGSTOP). Use for long scans; the run timeout still applies."""
+    return _render(api(f"/api/processes/pause/{pid}", {}), indent=1)
+
+
+@mcp.tool()
+def process_resume(pid: int) -> str:
+    """Resume a paused process (SIGCONT)."""
+    return _render(api(f"/api/processes/resume/{pid}", {}), indent=1)
 
 
 @mcp.tool()
@@ -270,6 +472,36 @@ def report(fmt: str = "markdown") -> str:
     return _render(api("/api/report", {"fmt": fmt}), indent=1)
 
 
+@mcp.tool()
+def create_file(filename: str, content: str, binary: bool = False) -> str:
+    """Create a file with specified content on the server. Confined to sandbox root."""
+    return _render(api("/api/files/create", {"filename": filename, "content": content, "binary": binary}), indent=1)
+
+
+@mcp.tool()
+def modify_file(filename: str, content: str, append: bool = False) -> str:
+    """Modify an existing file on the server (append or overwrite). Confined to sandbox."""
+    return _render(api("/api/files/modify", {"filename": filename, "content": content, "append": append}), indent=1)
+
+
+@mcp.tool()
+def delete_file(filename: str) -> str:
+    """Delete a file or directory on the server. Confined to sandbox."""
+    return _render(api("/api/files/delete", {"filename": filename}), indent=1)
+
+
+@mcp.tool()
+def list_files(directory: str = ".") -> str:
+    """List files in a directory on the server. Confined to sandbox."""
+    return _render(api("/api/files/list", {"directory": directory}), indent=1)
+
+
+@mcp.tool()
+def install_python_package(package: str, env_name: str = "default") -> str:
+    """Install a Python package in the environment on the server."""
+    return _render(api("/api/python/install", {"package": package, "env_name": env_name}), indent=1)
+
+
 def _register(name, spec):
     """Dynamically register tool as MCP tool."""
     def fn(**kwargs):
@@ -299,7 +531,7 @@ def _register(name, spec):
     mcp.tool()(fn)
 
 
-def _select_for_limit(selected: dict, tool_limit: int) -> dict:
+def _select_for_limit(selected: dict, tool_limit: int | None) -> dict:
     """Cull a profile's tools down to tool_limit, stable and installed first.
 
     A dropped tool is not hidden from the server -- it just is not listed to
@@ -315,7 +547,7 @@ def _select_for_limit(selected: dict, tool_limit: int) -> dict:
     return {s.name: s for s in ranked[:tool_limit]}
 
 
-def register_profile_tools(profile_name: str = None, tool_limit: int = None) -> int:
+def register_profile_tools(profile_name: str | None = None, tool_limit: int | None = None) -> int:
     """Register the registry tools this profile exposes. Returns the count.
 
     Generating from the registry keeps MCP and REST in step: a tool added,
@@ -454,30 +686,87 @@ def recommend_plan(target: str, risk_ceiling: str = "active") -> str:
 
 
 @mcp.tool()
+def plan_assessment(
+    target: str, objective: str = "standard", risk_ceiling: str = "active"
+) -> str:
+    """Get a SCORED shortlist of the tools worth running against a target, WITHOUT running anything.
+
+    This is the plan-first step: instead of considering all 252 registered
+    tools, the selector scores every tool against the target profile (its type,
+    technologies, web/TLS surface), its category relevance, maturity, and
+    whether the binary is installed -- then returns only the high-value few,
+    ranked, each with the reasons behind the pick.
+
+    objective controls breadth:
+      quick          top ~5, highest-value only
+      standard       top ~12 (default)
+      comprehensive  up to ~30, everything above a low threshold
+      stealth        passive tools only
+
+    Returns 'selected' (recommended, within the ceiling), grouped into phases,
+    plus 'withheld' (above the ceiling, needs human approval) and 'considered'
+    (how many tools were weighed). Review this, choose the subset you actually
+    want, then pass those to propose_plan / autonomous_assess. This is how you
+    ensure only the necessary tools run, not the whole registry.
+    """
+    payload = {"target": target, "objective": objective, "risk_ceiling": risk_ceiling}
+    return _render(api("/api/plan/select", payload), indent=1)
+
+
+@mcp.tool()
+def optimize_tool(tool: str, target: str, objective: str = "standard") -> str:
+    """Show how one tool would be invoked against a target, WITHOUT running it.
+
+    Derives the parameters the tool should run with -- the right target form
+    (bare hostname vs full URL vs host/IP), an installed wordlist where one is
+    required, web ports for a web target -- and returns them together with the
+    exact command line they build and whether it is runnable. Use this to check
+    that a selected tool is actually going to work before executing it, or to
+    see the tuned parameters to hand to propose_plan / autonomous_assess.
+    """
+    payload = {"tool": tool, "target": target, "objective": objective}
+    return _render(api("/api/tools/optimize", payload), indent=1)
+
+
+@mcp.tool()
 def autonomous_assess(
     target: str,
     risk_ceiling: str = "active",
     max_steps: int = 20,
-    steps: list = None,
+    steps: list | None = None,
+    strategy: str = "methodology",
+    objective: str = "standard",
+    direct: bool = True,
 ) -> str:
     """Run an autonomous assessment of a target.
 
     Without steps, the orchestrator plans tools from what it observes, runs
     them, folds the results back into a target profile, and re-plans -- adapting
-    in real time.
+    in real time. `strategy` chooses how it plans:
+      methodology  fixed, reviewed phase walk (default, deterministic)
+      select       scoring-driven selection over the whole registry, capped by
+                   `objective` (quick|standard|comprehensive|stealth) so only
+                   high-value tools for the observed profile run
 
-    With steps (the AI's own plan, e.g. the 'approved' list from propose_plan),
-    exactly those steps are executed: each is typed-validated and ceiling-
-    filtered again before it runs; anything above the ceiling is withheld.
+    With steps (the AI's own plan, e.g. the 'approved' list from propose_plan,
+    or a subset chosen from plan_assessment), exactly those steps are executed:
+    each is typed-validated and ceiling-filtered again before it runs; anything
+    above the ceiling is withheld.
 
     risk_ceiling caps what runs automatically (passive or active) and is
     clamped regardless of what is asked. Intrusive and destructive tools are
     never auto-executed; they are returned under 'recommended_next' for a human
     to approve. Returns a run id to poll with autonomous_status.
+
+    `direct=True` (the default) runs each step through the
+    in-process path: no per-tool execution records or workspaces, while cache,
+    redaction, the risk ceiling and result absorption stay on. Pass
+    direct=False for fully tracked step execution.
     """
     payload = {
         "target": target, "risk_ceiling": risk_ceiling, "max_steps": max_steps,
-        "async": True,
+        "async": True, "strategy": strategy, "objective": objective,
+        "direct": bool(direct),
     }
     if steps is not None:
         payload["steps"] = steps
@@ -547,8 +836,9 @@ def main():
         register_profile_tools(PROFILE_NAME, limit)
 
     logging.basicConfig(
+        handlers=[InterceptHandler()],
         level=logging.DEBUG if args.debug else logging.INFO,
-        format="[nexhunter-mcp] %(levelname)s %(message)s",
+        force=True,
     )
     log.info(
         "server=%s profile=%s tools=%d limit=%s max_output=%d",

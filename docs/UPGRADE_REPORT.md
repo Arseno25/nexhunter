@@ -3,6 +3,36 @@
 **Baseline:** `b19f979` · **Date:** 2026-08-05
 **Diff (initial upgrade):** 69 files changed, 10,014 insertions, 199 deletions
 
+> This report is a point-in-time snapshot of the security upgrade. It is kept
+> verbatim as history; later work is tracked in the addendum at the bottom.
+> Current numbers (tools, tests, profiles) live in the [README](../README.md).
+
+## Addendum (2026-08-06)
+
+Since this report was written:
+
+- **Browser engine** (`agents/browser.py`): Selenium-backed page analysis,
+  screenshots, network capture, crawl, and form discovery, with a stdlib
+  fallback when Selenium/Chrome is absent. Exposed as `/api/browser/*`.
+- **Visual engine** (`api/visual.py`): Pentester-style severity cards, live
+  dashboard, progress bars; ANSI with ASCII degradation and `NO_COLOR`.
+- **REST rewrite**: the server moved from Werkzeug to Flask; one HTTP server
+  now hosts REST + MCP + the visual endpoints.
+- **Registry grew** to 257 tools (29 stable / 206 beta / 22 experimental) with
+  16 MCP profiles; `nexhunter-full` (default) exposes 255.
+- **Freeform execution** (`execute_command`, `execute_python_script`): Freeform-style
+  raw command execution restored as two registry tools — intrusive, recorded,
+  uncacheable, withheld from autonomous runs, and surfaced by every profile
+  (they serve any engagement; opt out per profile).
+- **Zero-noise toolchain**: 263 ruff errors → 0, 70 mypy errors → 0, the suite
+  runs at **327 passing tests with no warnings** (previously 304 + a collection
+  error + a warning). `test_selector.py` collection was broken (bad package
+  import) and hid one failing test that is now fixed; the CI `mypy` step was
+  pointing at a path that never resolved.
+- The old report's "remaining risks" 6 and 7 (`CI unverified`, `utcnow`
+  deprecation) are now the only unremediated items; risk 4 (hand-maintained
+  short-flag map) was deliberately retained.
+
 ## Executive Summary
 
 NexHunter was a capable tool orchestrator with a modular layout and no
@@ -123,16 +153,19 @@ Every caller enters through `ExecutionService`. Diagrams in
   (`core/params.py`). A value that is not a valid target, port, or enum is
   refused before a command is ever built.
 - No parameter carries a command line; no builder splits a string into argv;
-  no execution path uses a shell. Regression tests fail if any of that is
-  reintroduced.
+  no execution path uses a shell — except the single sanctioned
+  `execute_command` builder contract (a `ShellCommand` string), gated as
+  intrusive. Regression tests fail if anything else is reintroduced.
 - Secret-shaped parameters are redacted by name (with per-binary short-flag
   resolution, so `-p` is a password to hydra and a port list to nmap) in
   records, logs, and responses.
 
 ## Execution Security
 
-- Argument arrays, `shell=False`, verified by a test that greps every non-test
-  module for `shell=True`.
+- Argument arrays by default; `shell=True` never appears in the codebase —
+  shell mode exists only as the builder's `ShellCommand` contract, derived at
+  the runner's single spawn site, verified by a test that greps every
+  non-test module.
 - Isolated workspace per execution under
   `DATA_DIR/executions/<exec>/`.
 - **Process-tree termination.** The old path killed only the direct child. A
@@ -201,6 +234,54 @@ Interfaces: `POST /api/autonomous`, `GET /api/autonomous[/<id>]`, and the MCP
 tools `autonomous_assess` / `autonomous_status`. Walkthrough in
 `docs/how-it-works.md`.
 
+## Exploit Kit (agents/exploit_kit)
+
+Replaced the monolithic `agents/exploit_ai.py` (1,327 lines, one SyntaxError,
+duplicated helpers) with a modular package of eight independent agents,
+auto-registered through the same `agents/` discovery — no server or MCP changes
+were needed. Functionally equivalent to their exploit agents but with
+original names, structure, and payload data (ATM: Amati–Tiru–Modifikasi, not
+1:1 copy).
+
+| Module | Agent | Replaces | Scope |
+|---|---|---|---|
+| `forge.py` | `switchblade` | `payload_gen` | 11 attack types × complexity × tech context |
+| `forge.py` | `ghost_wright` | `payload_advanced` | evasion 4 level + size/quote constraints |
+| `cve.py` | `cve_smith` | `exploit_cve` | NVD fetch → classify → Python exploit builder |
+| `salvo.py` | `fireworks` | `attack_suite` | multi-category suite via real agent orchestration |
+| `impact.py` | `rangefinder` | `payload_tester` | all 7 HTTP methods, data/headers injection |
+| `plan.py` | `blitzplan` | `attack_chain` | objective-based attack chains |
+| `plan.py` | `warroom` | `attack_chains` | web/network/cloud chain templates |
+| `autopilot.py` | `autopilot` | `autonomous_exploit` | optimizer-driven real engine execution |
+
+Design:
+
+- `core.py` is the single source of payload data: 11 attack categories,
+  per-technology contexts, shell payloads (bash/nc/python3/php/powershell/
+  socat), DB error markers for SQLi detection, encoding/obfuscation helpers.
+- `salvo`, `blitzplan`, and `autopilot` call other agents / the engine instead
+  of re-implementing their logic, so payload knowledge lives in exactly one
+  place.
+- `autopilot` runs tools only through `get_tool_spec` availability checks and
+  the same `RiskLevel` ceiling used by the orchestrator: intrusive tools are
+  skipped unless `authorized=True`, anything above the ceiling is surfaced as
+  `recommended_next` for human approval. Exploitation never runs unattended.
+- `rangefinder` detects reflected payloads, SQL error signatures, SSTI
+  stacktraces, time-based responses, LFI/XXE/SSRF/open-redirect markers.
+- Original bug fixes from the old module carried over: `%{0}` PowerShell
+  templates escaped for `.format()`, missing `target_url` parameter in exploit
+  builders, wrong context constant names.
+
+Tests: `tests/test_exploit_kit.py` — 59 tests covering registration (new
+agents present, old names removed), every attack category, every evasion level,
+constraint application, all HTTP methods against a local echo server, exploit
+code generation per kind, chain plans, and autopilot risk-ceiling behavior.
+
+```
+$ pytest -q tests/test_exploit_kit.py
+59 passed
+```
+
 ## Testing Results
 
 ```
@@ -217,7 +298,8 @@ Notable tests:
 | Test | Guards |
 |---|---|
 | `test_no_builder_splits_a_parameter_into_argv` | The `["aws"] + cmd.split()` class |
-| `test_shell_metacharacters_stay_inert` | Injection payloads stay one argument |
+| `test_shell_metacharacters_rejected_by_typed_validation` | Injection payloads stay one argument |
+| `test_only_sanctioned_builders_emit_shell_commands` | Exactly one builder returns a ShellCommand |
 | `test_no_shell_true_anywhere_in_execution_paths` | Greps every non-test module |
 | `test_runner_timeout_kills_children` | Orphaned grandchildren |
 | `test_registry_concurrent_access` | 8 threads × 50 records |
@@ -237,6 +319,10 @@ Notable tests:
    only in the full profile.
 6. **CI is unverified on a remote.**
 7. **`datetime.utcnow()` deprecation** across several modules.
+8. **Freeform tools are a raw execution surface.** `execute_command` and
+   `execute_python_script` run exactly what a caller types (metacharacters live for
+   `execute_command`). The containment is procedural — intrusive gate, no
+   autonomous runs, operator presence required — not a sandbox.
 
 ## Recommended Next Phase
 
@@ -244,3 +330,32 @@ Notable tests:
 2. Raise coverage on `api/server.py`, `core/engine.py`, and `agents/`.
 3. Verify `pip-audit` / `mypy` advisories.
 4. Replace `datetime.utcnow()` usage with timezone-aware UTC.
+
+## Addendum (2026-08-06) — Freeform execution (Freeform-style)
+
+Restores raw command execution as a *registered, gated capability* rather than
+a raw endpoint:
+
+- `execute_command` and `execute_python_script` registered in `core/tools.py`. There is
+  **no shell flag anywhere**: a builder either returns an argv list (default)
+  or a `ShellCommand` (a str subclass) when the whole payload must run through
+  the OS shell. The ProcessRunner is the only spawn site and derives the mode
+  from that type (`isinstance(cmd, ShellCommand)`); the service layers pass
+  the builder output through untouched.
+- New `ParamType.TEXT` (`core/params.py`): free-form text that allows newlines
+  but still rejects null bytes; used only by the two freeform tools.
+- Both tools are `intrusive`, uncacheable, 120s timeout, recorded on the
+  tracked path, and withheld from autonomous runs by the existing risk ceiling
+  (orchestrator clamps to `active`).
+- **Every MCP profile surfaces both tools** — like the workflow tools, since
+  they serve any engagement. `Profile.include_freeform_tools` (default True)
+  lets a profile opt out; the dedicated `nexhunter-freeform` profile was
+  removed as redundant.
+- Regression updates: `ALLOWED_TEXT_PARAMS` lists `execute_command.command` with
+  a reason; `test_no_shell_true_anywhere_in_execution_paths` stays unchanged
+  (no literal `shell=True` exists in the codebase);
+  `test_only_sanctioned_builders_emit_shell_commands` proves exactly one
+  builder returns a `ShellCommand`.
+- New suite `tests/test_freeform_tools.py` (10 tests); total 327 passing.
+- Earlier addendum entry "Registry grew" reflects 257 tools / 16 profiles /
+  full = 255.

@@ -43,7 +43,7 @@ def test_workspace_rejects_unsafe_ids(base: Path):
     for bad in ["../escape", "..", "a/b", "exec\x00", "", "/abs"]:
         try:
             Workspace.create(bad, base_dir=base)
-            assert False, f"expected rejection of execution id {bad!r}"
+            raise AssertionError(f"expected rejection of execution id {bad!r}")
         except WorkspaceError:
             pass
 
@@ -58,7 +58,7 @@ def test_workspace_artifact_path_traversal(base: Path):
     for bad in ["../outside.txt", "../../etc/passwd", "sub/dir.txt", "a\x00b", "", "/etc/passwd"]:
         try:
             workspace.artifact_path(bad)
-            assert False, f"expected rejection of artifact name {bad!r}"
+            raise AssertionError(f"expected rejection of artifact name {bad!r}")
         except WorkspaceError:
             pass
 
@@ -85,7 +85,7 @@ def test_workspace_symlink_escape(base: Path):
 
     try:
         workspace.artifact_path("leak.txt")
-        assert False, "symlink pointing outside the workspace must be rejected"
+        raise AssertionError("symlink pointing outside the workspace must be rejected")
     except WorkspaceError:
         pass
 
@@ -123,7 +123,7 @@ def test_state_machine_rejects_invalid_transitions():
 
     try:
         record.transition(ExecutionStatus.COMPLETED)  # queued -> completed
-        assert False, "queued should not jump straight to completed"
+        raise AssertionError("queued should not jump straight to completed")
     except InvalidTransition:
         pass
 
@@ -131,7 +131,7 @@ def test_state_machine_rejects_invalid_transitions():
     record.transition(ExecutionStatus.BLOCKED)
     try:
         record.transition(ExecutionStatus.RUNNING)  # terminal -> running
-        assert False, "a terminal record must not restart"
+        raise AssertionError("a terminal record must not restart")
     except InvalidTransition:
         pass
 
@@ -147,7 +147,7 @@ def test_record_dict_has_no_raw_parameters():
         redacted_command=["wpscan", "--api-token", "[REDACTED]"],
     )
     payload = record.to_dict()
-    assert payload["parameters"]["api_token"] == "[REDACTED]"
+    assert payload["parameters"]["api_token"] == "[REDACTED]"  # noqa: S105 - dict key, not a real secret
     assert "[REDACTED]" in payload["command"]
     assert payload["status"] == "queued"
 
@@ -331,7 +331,7 @@ def test_registry_concurrent_access():
 
     def worker(index: int):
         try:
-            for n in range(50):
+            for _n in range(50):
                 record = registry.add(
                     ExecutionRecord(tool_name=f"tool{index}")
                 )
@@ -378,7 +378,10 @@ def test_engine_cache_is_lru(base: Path):
     from nexhunter.core.engine import Engine
 
     engine = Engine()
-    cmd = lambda n: [PYTHON, "-c", f"print({n})"]
+
+    def cmd(n):
+        return [PYTHON, "-c", f"print({n})"]
+
     old_max = engine_module.CACHE_MAX
     engine_module.CACHE_MAX = 8
     try:

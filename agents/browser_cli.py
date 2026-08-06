@@ -19,7 +19,7 @@ import sys
 from html.parser import HTMLParser
 from urllib.parse import urljoin, urlparse
 
-OUT = {
+OUT: dict[str, object] = {
     "ok": False,
     "engine": None,
     "url": None,
@@ -85,7 +85,7 @@ def _static_crawl(url: str, wait: int) -> None:
         return
     req = urllib.request.Request(url, headers={"User-Agent": "nexhunter/2.0 (+https://github.com/Arseno25/nexhunter)"})  # noqa: S310 - scheme validated above
     try:
-        with urllib.request.urlopen(req, timeout=max(10, wait)) as resp:  # noqa: S310
+        with urllib.request.urlopen(req, timeout=max(10, wait)) as resp:  # nosec B310 - http/https only, scheme validated above
             body = resp.read(65536).decode("utf-8", errors="replace")
             OUT["status"] = resp.status
             OUT["headers"] = {k: v for k, v in resp.headers.items()}

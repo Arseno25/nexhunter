@@ -1,6 +1,9 @@
 """Ops agents: recovery, performance monitoring, degradation, correlation."""
 
+from typing import Any
+
 from nexhunter.core import tools as T
+from nexhunter.execution.recovery import ExecutionRecovery
 from nexhunter.agents.base import Agent
 
 FALLBACKS = {
@@ -15,25 +18,34 @@ class FailureRecoverySystem(Agent):
     """Automatic fallback when tool execution fails."""
 
     name = "recovery"
-    desc = "Fallback when tool fails: alternate binary with equivalent job"
-    param_schema = {"tool": (True, str), "params": (False, dict)}
+    desc = "Classify failure and retry: backoff, reduced scope, or an equivalent binary"
+    param_schema = {
+        "tool": (True, str),
+        "params": (False, dict),
+        "max_attempts": (False, int),
+    }
 
-    def run(self, tool: str = "", params: dict = None):
-        """Try tool, fall back to alternative if fails."""
+    def run(self, tool: str = "", params: dict | None = None,
+            max_attempts: int = 3):
+        """Run tool with a recovery loop, then report the recovery trail."""
         params = params or {}
-        res = self.ctx.run_tool(tool, params)
-        applied = []
-
-        if not res.get("ok"):
-            alt = FALLBACKS.get(tool)
-            alt_spec = T.get_tool_spec(alt) if alt else None
-            if alt_spec and T.which(alt_spec.binary):
-                alt_params = {k: params[k] for k in alt_spec.params if k in params}
-                if len(alt_params) == len(alt_spec.params):
-                    applied.append(f"fell back to {alt}")
-                    res = self.ctx.run_tool(alt, alt_params)
-            if not applied:
-                applied.append(f"no fallback for {tool}; treat as degraded")
+        recovery = ExecutionRecovery(
+            run_fn=lambda t, p: self.ctx.run_tool(t, p),
+            max_attempts=int(max_attempts or 3),
+            use_backoff=False,  # agents run in-process; never sleep the server
+        )
+        res = recovery.execute(tool, params, direct=False)
+        applied: list[Any] = [
+            {
+                "attempt": e.get("attempt"),
+                "action": e.get("action", e.get("outcome")),
+                "tool": e.get("tool"),
+                "switched_to": e.get("switched_to"),
+            }
+            for e in res.get("recovery", {}).get("trail", [])
+        ]
+        if not applied:
+            applied.append("no recoveries needed")
 
         return self.result(
             ok=res.get("ok", False),
@@ -43,7 +55,7 @@ class FailureRecoverySystem(Agent):
                 "result": {
                     "ok": res.get("ok"),
                     "error": res.get("error"),
-                    "stdout": (res.get("stdout") or "")[:2000],
+                    "stdout": (res.get("stdout") or res.get("output") or "")[:2000],
                 }
             }
         )
@@ -54,7 +66,7 @@ class PerformanceMonitor(Agent):
 
     name = "performance"
     desc = "Per-tool timing, cache effectiveness, slowest tools"
-    param_schema = {}
+    param_schema: dict = {}
 
     def run(self):
         """Analyze performance metrics."""
@@ -82,7 +94,7 @@ class GracefulDegradation(Agent):
 
     name = "degradation"
     desc = "Capability matrix: what works with installed binaries, degraded mode status"
-    param_schema = {}
+    param_schema: dict = {}
 
     def run(self):
         """Check tool availability and report degradation mode."""
@@ -108,7 +120,7 @@ class VulnerabilityCorrelator(Agent):
 
     name = "correlator"
     desc = "Chain recorded findings into attack paths"
-    param_schema = {}
+    param_schema: dict = {}
 
     def run(self):
         """Correlate findings and build attack chains."""

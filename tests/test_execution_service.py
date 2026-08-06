@@ -21,7 +21,7 @@ def test_unknown_tool_rejected(tmp: Path):
     """An unregistered tool name never reaches a process."""
     print("[TEST] Unknown tool rejected...")
     service = _service(tmp)
-    result = service.execute("definitely_not_a_tool", {"target": "example.com"})
+    result = service.execute("definitely_not_a_tool", {"target": "example.com"}, direct=False)
 
     assert not result["ok"]
     assert result["code"] == "UNKNOWN_TOOL"
@@ -33,7 +33,7 @@ def test_missing_required_param_blocks(tmp: Path):
     """A missing required parameter blocks before any command is built."""
     print("[TEST] Missing required parameter blocked...")
     service = _service(tmp)
-    result = service.execute("nmap_scan", {})  # target is required
+    result = service.execute("nmap_scan", {}, direct=False)  # target is required
 
     assert not result["ok"]
     assert result["code"] == "INVALID_PARAMS"
@@ -61,7 +61,7 @@ def test_successful_execution_records_workspace(tmp: Path):
         builder=lambda p: [sys.executable, "-c", f"print({p['target']!r})"],
     )
     try:
-        result = service.execute("echo_probe", {"target": "example.com"})
+        result = service.execute("echo_probe", {"target": "example.com"}, direct=False)
 
         assert result["ok"], f"expected success, got {result}"
         assert "example.com" in result["output"]
@@ -99,8 +99,8 @@ def test_executions_get_separate_workspaces(tmp: Path):
         builder=lambda p: [sys.executable, "-c", "print('hi')"],
     )
     try:
-        first = service.execute("echo_probe", {"target": "a.example.com"})
-        second = service.execute("echo_probe", {"target": "b.example.com"})
+        first = service.execute("echo_probe", {"target": "a.example.com"}, direct=False)
+        second = service.execute("echo_probe", {"target": "b.example.com"}, direct=False)
 
         path_a = service.registry.get(first["execution_id"]).workspace_path
         path_b = service.registry.get(second["execution_id"]).workspace_path
@@ -116,7 +116,7 @@ def test_secrets_redacted_in_record(tmp: Path):
     print("[TEST] Secrets redacted in the execution record...")
     service = _service(tmp)
 
-    result = service.execute("wpscan_scan", {"url": "https://example.com", "api_token": "s3cr3t-value"})
+    result = service.execute("wpscan_scan", {"url": "https://example.com", "api_token": "s3cr3t-value"}, direct=False)
     record = service.registry.get(result["execution_id"])
 
     stored = str(record.to_dict())

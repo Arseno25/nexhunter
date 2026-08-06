@@ -7,7 +7,6 @@ history without limit.
 
 import threading
 from collections import OrderedDict
-from typing import Dict, List, Optional
 
 from nexhunter.execution.models import ExecutionRecord, ExecutionStatus
 
@@ -19,7 +18,7 @@ class ExecutionRegistry:
 
     def __init__(self, max_records: int = DEFAULT_MAX_RECORDS):
         self._lock = threading.RLock()
-        self._records: "OrderedDict[str, ExecutionRecord]" = OrderedDict()
+        self._records: OrderedDict[str, ExecutionRecord] = OrderedDict()
         self._cancelled: set = set()
         self.max_records = max_records
 
@@ -41,11 +40,11 @@ class ExecutionRegistry:
             else:
                 return  # everything still running; keep them all
 
-    def get(self, execution_id: str) -> Optional[ExecutionRecord]:
+    def get(self, execution_id: str) -> ExecutionRecord | None:
         with self._lock:
             return self._records.get(execution_id)
 
-    def list(self, status: Optional[ExecutionStatus] = None) -> List[ExecutionRecord]:
+    def list(self, status: ExecutionStatus | None = None) -> list[ExecutionRecord]:
         """Newest first, optionally filtered by status."""
         with self._lock:
             records = list(self._records.values())
@@ -53,7 +52,7 @@ class ExecutionRegistry:
             records = [r for r in records if r.status is status]
         return sorted(records, key=lambda r: r.created_at, reverse=True)
 
-    def transition(self, execution_id: str, status: ExecutionStatus) -> Optional[ExecutionRecord]:
+    def transition(self, execution_id: str, status: ExecutionStatus) -> ExecutionRecord | None:
         """Apply a state transition under the lock."""
         with self._lock:
             record = self._records.get(execution_id)
@@ -79,11 +78,11 @@ class ExecutionRegistry:
         with self._lock:
             self._cancelled.discard(execution_id)
 
-    def stats(self) -> Dict[str, int]:
+    def stats(self) -> dict[str, int]:
         """Counts by status, for telemetry and the status endpoint."""
         with self._lock:
             records = list(self._records.values())
-        counts: Dict[str, int] = {}
+        counts: dict[str, int] = {}
         for record in records:
             counts[record.status.value] = counts.get(record.status.value, 0) + 1
         counts["total"] = len(records)

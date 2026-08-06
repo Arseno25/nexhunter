@@ -1,6 +1,8 @@
 """nexhunter.tools - 150+ security tools registry with ToolSpec pattern."""
 
+import importlib.util
 import json
+import re
 import shutil
 import subprocess
 from defusedxml import ElementTree as ET
@@ -40,6 +42,29 @@ def _infer_risk(name: str, binary: str) -> str:
         if any(kw in hay for kw in keywords):
             return level
     return "active"
+
+
+# Chrome/Chromium binary names the Selenium driver can drive, in the order a
+# Linux/macOS/Windows install is likely to expose them.
+_CHROME_BINARIES = (
+    "google-chrome", "google-chrome-stable", "chromium", "chromium-browser",
+    "chrome", "chrome.exe",
+)
+
+
+def browser_engine_available() -> bool:
+    """True when the headless browser crawl can really run.
+
+    browser_crawl shells out to `python -m nexhunter.agents.browser_cli`, so a
+    plain `which python` says nothing about whether it can drive a browser. The
+    real requirements are the Selenium library and a Chrome/Chromium binary; the
+    tool degrades to a static crawl without them, but it is not "available" as a
+    browser engine, and reporting otherwise is the kind of unverified claim the
+    registry avoids.
+    """
+    if importlib.util.find_spec("selenium") is None:
+        return False
+    return any(which(binary) for binary in _CHROME_BINARIES)
 
 
 def _infer_target_param(params: dict[str, Any]) -> str | None:
@@ -119,6 +144,27 @@ STABLE_TOOLS = frozenset({
     "wpscan_scan", "semgrep", "trivy", "testssl",
     "aws_get_caller_identity", "aws_list_s3_buckets", "kubectl_get_pods",
     "kubectl_get_namespaces", "docker_list_containers",
+    # Line/JSON output tools with parsers and tests (see tests/test_tool_parsers.py).
+    "katana_crawl", "gau", "waybackurls", "naabu", "dnsx",
+})
+
+# Registered but not honestly usable as written, so they are not counted as a
+# working capability and drop out of the focused profiles (they remain only in
+# nexhunter-full). Two kinds live here:
+#   * invented/placeholder binaries whose CLI does not exist as invoked, or
+#     GUI/framework tools that cannot run as a one-shot command line;
+#   * builders with hardcoded stand-in arguments (a fixed username/wordlist, a
+#     local script path) that are demos, not real invocations.
+# Promoting one out of here means giving it a real builder, a parser, and a test.
+EXPERIMENTAL_TOOLS = frozenset({
+    # invented / non-existent binaries
+    "cve_search", "nist_tool", "qualys", "censys", "zoomeye", "chimera", "unicorn",
+    # real tools, but not invocable as a single one-shot command as wired
+    "maltego", "spiderfoot", "w3af", "beef", "empire", "cobalt_strike", "havoc",
+    "veil", "evasion", "social_engineer_toolkit", "phishing_framework",
+    "empire_persistence",
+    # builders with hardcoded stand-in arguments (canned demos, not real runs)
+    "hydra", "linpeas", "dirty_cow",
 })
 
 
@@ -129,6 +175,17 @@ def _infer_category(name: str, binary: str) -> str:
         if any(kw in hay for kw in keywords):
             return category
     return "other"
+
+
+class ShellCommand(str):
+    """A command string that must run through the OS shell.
+
+    A builder returns this instead of an argv list to ask for shell semantics
+    (metacharacters live: pipes, redirects, chaining). The ProcessRunner is
+    the only place that honors it; every other builder output stays argv-only.
+    No ToolSpec flag exists -- the execution mode is part of the builder's
+    output contract, the same way the argv itself is.
+    """
 
 
 @dataclass
@@ -150,9 +207,17 @@ class ToolSpec:
     category: str | None = None
     # stable | beta | experimental | disabled. None => derived from STABLE_TOOLS.
     maturity: str | None = None
+    # Whether a deterministic terminal result may be cached. False for tools
+    # that observe live state (packet/traffic capture), where a repeat is a
+    # fresh observation, not the same answer.
+    cacheable: bool = True
     # Typed parameter schemas. None => inferred from the `params` dict, so the
     # several hundred legacy entries gain validation without being rewritten.
     param_specs: tuple | None = None
+    # Custom availability probe. None => the binary is present on PATH. Set this
+    # when the binary alone does not prove the tool can run -- e.g. a wrapper
+    # that shells out to Chrome or imports an optional library at runtime.
+    availability_check: Callable | None = None
 
     def __post_init__(self):
         if self.timeout == DEFAULT_TOOL_TIMEOUT and self.name in TOOL_TIMEOUTS:
@@ -164,7 +229,12 @@ class ToolSpec:
         if self.category is None:
             self.category = _infer_category(self.name, self.binary)
         if self.maturity is None:
-            self.maturity = "stable" if self.name in STABLE_TOOLS else "beta"
+            if self.name in STABLE_TOOLS:
+                self.maturity = "stable"
+            elif self.name in EXPERIMENTAL_TOOLS:
+                self.maturity = "experimental"
+            else:
+                self.maturity = "beta"
         if self.param_specs is None:
             self.param_specs = tuple(
                 P.spec_from_legacy(key, default) for key, default in self.params.items()
@@ -183,7 +253,17 @@ class ToolSpec:
 
     @property
     def available(self) -> bool:
-        """True when the tool's binary is present on PATH."""
+        """True when the tool can actually run.
+
+        By default that means the binary is on PATH; a tool with a custom
+        availability probe (e.g. one needing Chrome and an optional library)
+        defers to that instead.
+        """
+        if self.availability_check is not None:
+            try:
+                return bool(self.availability_check())
+            except Exception:  # noqa: BLE001 - a probe that errors means "not available"
+                return False
         return which(self.binary) is not None
 
     def describe(self) -> dict:
@@ -195,6 +275,7 @@ class ToolSpec:
             "category": self.category,
             "risk_level": self.risk_level,
             "maturity": self.maturity,
+            "cacheable": self.cacheable,
             "timeout_s": self.timeout,
             "parameters": {
                 spec.name: spec.describe() for spec in (self.param_specs or ())
@@ -222,39 +303,136 @@ class ToolSpec:
         """
         return P.validate_params(self.param_specs or (), user_params or {})
 
-    def build_cmd(self, user_params: dict) -> list | None:
-        """Build the argument list from validated parameters."""
+    def build_cmd(self, user_params: dict) -> list | ShellCommand | None:
+        """Build the command from validated parameters.
+
+        The output is the builder's contract: an argv list by default, or a
+        ShellCommand string when the tool's whole payload must run through the
+        OS shell (execute_command). Anything else is None (build refused).
+        """
         normalized, error = self.normalize(user_params)
         if error is not None or not self.builder:
             return None
         return self.builder(normalized)
 
 
+def _build_nmap_advanced(p: dict) -> list:
+    """Build an nmap argv from advanced scan knobs."""
+    argv = ["nmap"]
+    if p.get("aggressive"):
+        argv += ["-A"]
+    else:
+        if p.get("os_detection"):
+            argv += ["-O"]
+        if p.get("version_detection", True):
+            argv += ["-sV"]
+    if p.get("stealth"):
+        argv += ["-sS", "-T1", "-n", "-Pn"]
+    else:
+        argv += [f"-T{p.get('timing', '4')}"]
+    if p.get("nse_scripts"):
+        argv += ["--script", p["nse_scripts"]]
+    if p.get("ports"):
+        argv += ["-p", p["ports"]]
+    argv += ["-oX", "-"]
+    argv += [p["target"]]
+    return argv
+
+
+def _build_masscan_advanced(p: dict) -> list:
+    """Build a masscan argv with rate and thread control."""
+    argv = ["masscan", p["target"], "-p", p["ports"], "-oG", "-",
+            "--rate", str(p["rate"])]
+    if p.get("threads"):
+        argv += ["--threads", str(p["threads"])]
+    return argv
+
+
+def _build_ffuf_advanced(p: dict) -> list:
+    """Build an ffuf argv with one wordlist per comma-separated entry.
+
+    The target URL keeps its FUZZ-style markers; each wordlist is paired with
+    the keyword at the same position, or plain FUZZ when no markers exist.
+    """
+    argv = ["ffuf", "-u", p["target"], "-t", str(p["threads"]), "-s"]
+    wordlists = [w.strip() for w in str(p["wordlists"]).split(",") if w.strip()]
+    for wordlist in wordlists:
+        argv += ["-w", wordlist]
+    if p.get("method"):
+        argv += ["-X", str(p["method"])]
+    if p.get("filter_status"):
+        argv += ["-fs", str(p["filter_status"])]
+    if p.get("matcher_status"):
+        argv += ["-mc", str(p["matcher_status"])]
+    return argv
+
+
 _tool_specs = {
-    # ==================== RECONNAISSANCE (OSINT) ====================
     "nmap_scan": ToolSpec(
         name="nmap_scan", binary="nmap", description="Port/service discovery",
-        params={"target": None, "ports": ""}, timeout=300,
-        builder=lambda p: ["nmap", "-sV", "-T4", "-oX", "-"] + (["-p", p["ports"]] if p["ports"] else []) + [p["target"]]),
+        params={"target": None, "ports": "", "timing": "4"}, timeout=300,
+        builder=lambda p: ["nmap", "-sV", f"-T{p['timing']}", "-oX", "-"] + (["-p", p["ports"]] if p["ports"] else []) + [p["target"]]),
+    "nmap_advanced_scan": ToolSpec(
+        name="nmap_advanced_scan", binary="nmap",
+        description="Nmap with fine control: OS detection, version detection, "
+                    "aggressive, stealth, NSE scripts, and timing",
+        params={
+            "target": None, "ports": "", "timing": "4",
+            "os_detection": False, "version_detection": True,
+            "aggressive": False, "stealth": False,
+            "nse_scripts": "",
+        },
+        timeout=600,
+        param_specs=(
+            P.ParamSpec(name="target", type=P.ParamType.TARGET, required=True),
+            P.ParamSpec(name="ports", type=P.ParamType.PORT_RANGE, default=""),
+            P.ParamSpec(name="timing", type=P.ParamType.STRING, default="4"),
+            P.ParamSpec(name="os_detection", type=P.ParamType.BOOLEAN, default=False),
+            P.ParamSpec(name="version_detection", type=P.ParamType.BOOLEAN, default=True),
+            P.ParamSpec(name="aggressive", type=P.ParamType.BOOLEAN, default=False),
+            P.ParamSpec(name="stealth", type=P.ParamType.BOOLEAN, default=False),
+            P.ParamSpec(name="nse_scripts", type=P.ParamType.STRING, default=""),
+        ),
+        builder=_build_nmap_advanced,
+        category="recon", risk_level="active", maturity="beta", cacheable=True,
+        parser="nmap_xml",
+    ),
     "masscan": ToolSpec(
         name="masscan", binary="masscan", description="Fast port scanner",
-        params={"target": None, "ports": "1-65535"}, timeout=600,
-        builder=lambda p: ["masscan", p["target"], "-p", p["ports"], "-oG", "-"]),
+        params={"target": None, "ports": "1-65535", "rate": 1000}, timeout=600,
+        builder=lambda p: ["masscan", p["target"], "-p", p["ports"], "-oG", "-", "--rate", str(p["rate"])],
+        category="recon", risk_level="active", parser="masscan_grep",
+    ),
+    "masscan_advanced_scan": ToolSpec(
+        name="masscan_advanced_scan", binary="masscan",
+        description="Masscan with rate control and thread tuning",
+        params={"target": None, "ports": "1-65535", "rate": 1000, "threads": ""},
+        timeout=600,
+        param_specs=(
+            P.ParamSpec(name="target", type=P.ParamType.TARGET, required=True),
+            P.ParamSpec(name="ports", type=P.ParamType.PORT_RANGE, default="1-65535"),
+            P.ParamSpec(name="rate", type=P.ParamType.INTEGER, default=1000, minimum=1),
+            P.ParamSpec(name="threads", type=P.ParamType.INTEGER, default=None),
+        ),
+        builder=_build_masscan_advanced,
+        category="recon", risk_level="active", maturity="beta", cacheable=True,
+        parser="masscan_grep",
+    ),
     "rustscan": ToolSpec(
         name="rustscan", binary="rustscan", description="Fast port scanner in Rust",
         params={"target": None}, timeout=300,
         builder=lambda p: ["rustscan", "-a", p["target"], "--", "-sV", "-T4"]),
     "subfinder_enum": ToolSpec(
         name="subfinder_enum", binary="subfinder", description="Passive subdomain enumeration",
-        params={"domain": None}, timeout=60,
+        params={"domain": None}, timeout=60, parser="hosts",
         builder=lambda p: ["subfinder", "-d", p["domain"], "-silent"]),
     "amass_enum": ToolSpec(
         name="amass_enum", binary="amass", description="Passive subdomain enumeration",
-        params={"domain": None}, timeout=120,
+        params={"domain": None}, timeout=120, parser="hosts",
         builder=lambda p: ["amass", "enum", "-passive", "-d", p["domain"]]),
     "assetfinder": ToolSpec(
         name="assetfinder", binary="assetfinder", description="Find subdomains from certificate transparency",
-        params={"domain": None}, timeout=60,
+        params={"domain": None}, timeout=60, parser="hosts",
         builder=lambda p: ["assetfinder", p["domain"]]),
     "dns_lookup": ToolSpec(
         name="dns_lookup", binary="dig", description="DNS query/enumeration",
@@ -276,20 +454,38 @@ _tool_specs = {
     # ==================== WEB SCANNING ====================
     "nuclei_scan": ToolSpec(
         name="nuclei_scan", binary="nuclei", description="Vulnerability scanner with templates",
-        params={"target": None}, timeout=300,
-        builder=lambda p: ["nuclei", "-u", p["target"], "-silent", "-jsonl"]),
+        params={"target": None, "severity": ""}, timeout=300,
+        builder=lambda p: ["nuclei", "-u", p["target"], "-silent", "-jsonl"] + (["-severity", p["severity"]] if p["severity"] else [])),
     "ffuf_scan": ToolSpec(
         name="ffuf_scan", binary="ffuf", description="Web content fuzzer",
-        params={"target": None, "wordlist": None, "filter_status": ""}, timeout=300,
-        builder=lambda p: ["ffuf", "-u", p["target"].rstrip("/") + "/FUZZ", "-w", p["wordlist"]] + (["-fs", p["filter_status"]] if p["filter_status"] else [])),
+        params={"target": None, "wordlist": None, "filter_status": "", "threads": 40}, timeout=300,
+        builder=lambda p: ["ffuf", "-u", p["target"].rstrip("/") + "/FUZZ", "-w", p["wordlist"], "-t", str(p["threads"])] + (["-fs", p["filter_status"]] if p["filter_status"] else [])),
+    "ffuf_advanced_scan": ToolSpec(
+        name="ffuf_advanced_scan", binary="ffuf",
+        description="Ffuf with multiple keyword wordlists (comma-separated), "
+                    "method, and matcher/filter status",
+        params={"target": None, "wordlists": None, "threads": 40, "method": "",
+                "filter_status": "", "matcher_status": ""},
+        timeout=600,
+        param_specs=(
+            P.ParamSpec(name="target", type=P.ParamType.URL, required=True),
+            P.ParamSpec(name="wordlists", type=P.ParamType.STRING, required=True),
+            P.ParamSpec(name="threads", type=P.ParamType.INTEGER, default=40, minimum=1),
+            P.ParamSpec(name="method", type=P.ParamType.STRING, default=""),
+            P.ParamSpec(name="filter_status", type=P.ParamType.STRING, default=""),
+            P.ParamSpec(name="matcher_status", type=P.ParamType.STRING, default=""),
+        ),
+        builder=_build_ffuf_advanced,
+        category="web", risk_level="active", maturity="beta", cacheable=True,
+    ),
     "gobuster_dir": ToolSpec(
         name="gobuster_dir", binary="gobuster", description="Directory brute force",
-        params={"target": None, "wordlist": None}, timeout=300,
-        builder=lambda p: ["gobuster", "dir", "-u", p["target"], "-w", p["wordlist"]]),
+        params={"target": None, "wordlist": None, "extensions": "", "threads": 40}, timeout=300,
+        builder=lambda p: ["gobuster", "dir", "-u", p["target"], "-w", p["wordlist"], "-t", str(p["threads"])] + (["-x", p["extensions"]] if p["extensions"] else [])),
     "gobuster_dns": ToolSpec(
         name="gobuster_dns", binary="gobuster", description="DNS subdomain brute force",
-        params={"domain": None, "wordlist": None}, timeout=300,
-        builder=lambda p: ["gobuster", "dns", "-d", p["domain"], "-w", p["wordlist"]]),
+        params={"domain": None, "wordlist": None, "threads": 40}, timeout=300,
+        builder=lambda p: ["gobuster", "dns", "-d", p["domain"], "-w", p["wordlist"], "-t", str(p["threads"])]),
     "nikto_scan": ToolSpec(
         name="nikto_scan", binary="nikto", description="Web server vulnerability scan",
         params={"target": None}, timeout=300,
@@ -478,11 +674,11 @@ _tool_specs = {
     # ==================== WIRELESS/NETWORK MONITORING ====================
     "airodump": ToolSpec(
         name="airodump", binary="airodump-ng", description="Wireless network sniffer",
-        params={"interface": None}, timeout=30,
+        params={"interface": None}, timeout=30, cacheable=False,
         builder=lambda p: ["airodump-ng", p["interface"]]),
     "aireplay": ToolSpec(
         name="aireplay", binary="aireplay-ng", description="Wireless network traffic injector",
-        params={"interface": None}, timeout=30,
+        params={"interface": None}, timeout=30, cacheable=False,
         builder=lambda p: ["aireplay-ng", "-h", p["interface"]]),
     "aircrack": ToolSpec(
         name="aircrack", binary="aircrack-ng", description="WEP/WPA password cracker",
@@ -490,11 +686,11 @@ _tool_specs = {
         builder=lambda p: ["aircrack-ng", p["capfile"]]),
     "tcpdump": ToolSpec(
         name="tcpdump", binary="tcpdump", description="Packet sniffer",
-        params={"interface": "any"}, timeout=30,
+        params={"interface": "any"}, timeout=30, cacheable=False,
         builder=lambda p: ["tcpdump", "-i", p["interface"], "-n", "-l"]),
     "tshark": ToolSpec(
         name="tshark", binary="tshark", description="Wireshark command-line packet analyzer",
-        params={"interface": "any"}, timeout=30,
+        params={"interface": "any"}, timeout=30, cacheable=False,
         builder=lambda p: ["tshark", "-i", p["interface"]]),
 
     # ==================== VULNERABILITY DATABASES ====================
@@ -1054,7 +1250,7 @@ _tool_specs = {
     # ==================== WIRELESS ====================
     "kismet": ToolSpec(
         name="kismet", binary="kismet", description="Passive wireless network detector and channel capture",
-        params={"capture_file": ""}, timeout=600, risk_level="passive",
+        params={"capture_file": ""}, timeout=600, risk_level="passive", cacheable=False,
         builder=lambda p: ["kismet", "--no-gpsd", "--no-server"] + (["--logfile", p["capture_file"]] if p["capture_file"] else [])),
     "airgeddon": ToolSpec(
         name="airgeddon", binary="bash", description="Multipurpose wireless attack framework (airgeddon.sh)",
@@ -1078,11 +1274,11 @@ _tool_specs = {
     # ==================== VULNERABILITY SCANNERS ====================
     "arachni": ToolSpec(
         name="arachni", binary="arachni", description="Full-featured web application vulnerability scanner",
-        params={"url": None, "report": "/tmp/arachni.html"}, timeout=900,
+        params={"url": None, "report": "arachni-report.html"}, timeout=900,
         builder=lambda p: ["arachni", "--output-verbose", p["url"], "--report-save-path", p["report"]]),
     "skipfish": ToolSpec(
         name="skipfish", binary="skipfish", description="High-speed web application security scanner",
-        params={"url": None, "output_dir": "/tmp/skipfish"}, timeout=900,
+        params={"url": None, "output_dir": "skipfish-out"}, timeout=900,
         builder=lambda p: ["skipfish", "-o", p["output_dir"], p["url"]]),
     "wapiti": ToolSpec(
         name="wapiti", binary="wapiti", description="Web application vulnerability scanner with a crawl engine",
@@ -1108,7 +1304,7 @@ _tool_specs = {
     # ==================== PAYLOADS ====================
     "hoaxshell": ToolSpec(
         name="hoaxshell", binary="python3", description="Generate a PowerShell reverse shell payload (hoaxshell.py)",
-        params={"lhost": "127.0.0.1", "lport": "4444", "output": "/tmp/shell.ps1"}, timeout=60, risk_level="intrusive",
+        params={"lhost": "127.0.0.1", "lport": "4444", "output": "shell.ps1"}, timeout=60, risk_level="intrusive",
         builder=lambda p: ["python3", "hoaxshell.py", "-s", p["lhost"], "-p", p["lport"], "-o", p["output"]]),
 
     # ==================== PRIVILEGE ESCALATION ====================
@@ -1144,15 +1340,15 @@ _tool_specs = {
     # ==================== WEB: CRAWLING & CONTENT DISCOVERY ====================
     "katana_crawl": ToolSpec(
         name="katana_crawl", binary="katana", description="Web crawler with JS rendering",
-        params={"url": None}, timeout=300,
-        builder=lambda p: ["katana", "-u", p["url"], "-silent", "-jc"]),
+        params={"url": None, "depth": 3}, timeout=300, parser="urls",
+        builder=lambda p: ["katana", "-u", p["url"], "-silent", "-jc", "-d", str(p["depth"])]),
     "waybackurls": ToolSpec(
         name="waybackurls", binary="waybackurls", description="Historical URLs from the Wayback Machine",
-        params={"domain": None}, timeout=60,
+        params={"domain": None}, timeout=60, parser="urls",
         builder=lambda p: ["waybackurls", p["domain"]]),
     "gau": ToolSpec(
         name="gau", binary="gau", description="Get all URLs from many archives",
-        params={"domain": None}, timeout=120,
+        params={"domain": None}, timeout=120, parser="urls",
         builder=lambda p: ["gau", p["domain"]]),
     "paramspider": ToolSpec(
         name="paramspider", binary="paramspider", description="Parameter mining from web archives",
@@ -1164,12 +1360,12 @@ _tool_specs = {
         builder=lambda p: ["whatweb", p["url"]]),
     "feroxbuster": ToolSpec(
         name="feroxbuster", binary="feroxbuster", description="Recursive content discovery",
-        params={"url": None, "wordlist": None}, timeout=600,
-        builder=lambda p: ["feroxbuster", "-u", p["url"], "-w", p["wordlist"], "-q"]),
+        params={"url": None, "wordlist": None, "extensions": "", "threads": 40}, timeout=600,
+        builder=lambda p: ["feroxbuster", "-u", p["url"], "-w", p["wordlist"], "-q", "-t", str(p["threads"])] + (["-x", p["extensions"]] if p["extensions"] else [])),
     "dirsearch": ToolSpec(
         name="dirsearch", binary="dirsearch", description="Directory/file discovery",
-        params={"url": None, "extensions": "php,asp,aspx,jsp,html,js"}, timeout=300,
-        builder=lambda p: ["dirsearch", "-u", p["url"], "-e", p["extensions"], "--format", "plain"]),
+        params={"url": None, "extensions": "php,asp,aspx,jsp,html,js", "threads": 40}, timeout=300,
+        builder=lambda p: ["dirsearch", "-u", p["url"], "-e", p["extensions"], "--format", "plain", "-t", str(p["threads"])]),
     "linkfinder": ToolSpec(
         name="linkfinder", binary="linkfinder.py", description="Extract endpoints from JavaScript files",
         params={"url": None}, timeout=60,
@@ -1202,18 +1398,20 @@ _tool_specs = {
         builder=lambda p: ["nosqlmap", "-u", p["url"], "--batch"]),
     "wfuzz": ToolSpec(
         name="wfuzz", binary="wfuzz", description="Web fuzzer",
-        params={"url": None, "wordlist": None}, timeout=600,
-        builder=lambda p: ["wfuzz", "-u", p["url"].rstrip("/") + "/FUZZ", "-w", p["wordlist"], "--hc", "404"]),
+        params={"url": None, "wordlist": None, "threads": 40}, timeout=600,
+        builder=lambda p: ["wfuzz", "-u", p["url"].rstrip("/") + "/FUZZ", "-w", p["wordlist"], "--hc", "404", "-t", str(p["threads"])]),
 
     # ==================== NETWORK: CAPTURE & ENUMERATION ====================
     "tcpdump_capture": ToolSpec(
         name="tcpdump_capture", binary="tcpdump", description="Live packet capture",
-        params={"interface": "any", "count": 100, "port": ""}, timeout=120,
-        builder=lambda p: ["tcpdump", "-i", p["interface"], "-c", str(p["count"])]
-        + (["port", str(p["port"])] if p["port"] else []) + ["-w", "capture.pcap"]),
+        params={"interface": "any", "count": 100, "port": ""}, timeout=120, cacheable=False,
+        # A tcpdump filter expression ("port 80") must come last, after the
+        # options; -w is an option, so the filter follows it.
+        builder=lambda p: ["tcpdump", "-i", p["interface"], "-c", str(p["count"]), "-w", "capture.pcap"]
+        + (["port", str(p["port"])] if p["port"] else [])),
     "tshark_capture": ToolSpec(
         name="tshark_capture", binary="tshark", description="Live packet analysis",
-        params={"interface": "any", "count": 100}, timeout=120,
+        params={"interface": "any", "count": 100}, timeout=120, cacheable=False,
         builder=lambda p: ["tshark", "-i", p["interface"], "-c", str(p["count"])],
     ),
     "enum4linux_ng": ToolSpec(
@@ -1230,12 +1428,12 @@ _tool_specs = {
         builder=lambda p: ["snmp-check", p["host"]]),
     "dnsx": ToolSpec(
         name="dnsx", binary="dnsx", description="DNS resolver and probe",
-        params={"domain": None}, timeout=60,
+        params={"domain": None}, timeout=60, parser="dnsx_resp",
         builder=lambda p: ["dnsx", "-d", p["domain"], "-a", "-resp", "-silent"]),
     "naabu": ToolSpec(
         name="naabu", binary="naabu", description="Fast port scanner",
-        params={"host": None}, timeout=300,
-        builder=lambda p: ["naabu", "-host", p["host"], "-silent"]),
+        params={"host": None, "rate": 1000}, timeout=300, parser="host_port",
+        builder=lambda p: ["naabu", "-host", p["host"], "-silent", "-rate", str(p["rate"])]),
     "dig_axfr": ToolSpec(
         name="dig_axfr", binary="dig", description="DNS zone transfer attempt",
         params={"domain": None}, timeout=30,
@@ -1356,7 +1554,7 @@ _tool_specs = {
     "browser_crawl": ToolSpec(
         name="browser_crawl", binary="python", description="Headless browser crawl: DOM, JS runtime, screenshots",
         params={"url": None, "wait": 3, "screenshot": False, "dom_depth": 0}, timeout=120,
-        category="web", parser="browser_json",
+        category="web", parser="browser_json", availability_check=browser_engine_available,
         builder=lambda p: ["python", "-m", "nexhunter.agents.browser_cli", "-u", p["url"], "--wait", str(p["wait"])]
         + (["--screenshot"] if p["screenshot"] else [])
         + (["--dom-depth", str(p["dom_depth"])] if p["dom_depth"] else [])),
@@ -1378,6 +1576,51 @@ _tool_specs = {
         name="osv_scanner", binary="osv-scanner", description="OSV vulnerability scanner for dependency manifests",
         params={"path": None}, timeout=300,
         builder=lambda p: ["osv-scanner", "-r", p["path"]]),
+
+    # ==================== FREE-FORM EXECUTION (Free-form style) ====================
+    # Two deliberately free-form tools. Every other tool validates values and
+    # builds a fixed argv; these take an entire payload string and execute it.
+    # That is the exact capability a free-form operator wants, kept inside
+    # the registry: intrusive risk (never auto-executed, recorded, redacted,
+    # timeout-capped), and surfaced by every MCP profile like the workflow
+    # tools, since they serve any engagement. execute_command's builder returns a
+    # ShellCommand, so its string executes through the OS shell with live
+    # metacharacters; execute_python_script is a plain argv call.
+    "execute_command": ToolSpec(
+        name="execute_command", binary="sh",
+        description="Run a free-form command string through the system shell "
+                    "(Free-form arbitrary command execution). Pipes, "
+                    "redirects, and chaining are live. Recorded, redacted, "
+                    "timeout-capped, intrusive, and withheld from autonomous "
+                    "runs. Authorized targets only.",
+        params={"command": None, "use_cache": True}, timeout=120, cacheable=False,
+        category="utility", risk_level="intrusive",
+        availability_check=lambda: True,
+        param_specs=(
+            P.ParamSpec(name="command", type=P.ParamType.TEXT, required=True,
+                        description="The shell command string to execute"),
+            P.ParamSpec(name="use_cache", type=P.ParamType.BOOLEAN, required=False, default=True,
+                        description="Whether to use caching (default: True)"),
+        ),
+        builder=lambda p: ShellCommand(p["command"])),
+    "execute_python_script": ToolSpec(
+        name="execute_python_script", binary="python",
+        description="Run a free-form Python snippet with the server's "
+                    "interpreter (Free-form custom scripting). Recorded, "
+                    "redacted, timeout-capped, intrusive, and withheld from "
+                    "autonomous runs. Authorized targets only.",
+        params={"script": None, "env_name": "default", "filename": ""}, timeout=120, cacheable=False,
+        category="utility", risk_level="intrusive",
+        availability_check=lambda: True,
+        param_specs=(
+            P.ParamSpec(name="script", type=P.ParamType.TEXT, required=True,
+                        description="Python source code to execute"),
+            P.ParamSpec(name="env_name", type=P.ParamType.STRING, required=False, default="default",
+                        description="Virtual environment name (default: default)"),
+            P.ParamSpec(name="filename", type=P.ParamType.STRING, required=False, default="",
+                        description="Optional script filename"),
+        ),
+        builder=lambda p: ["python", "-c", p["script"]]),
 }
 
 def _parse_nmap_xml(text):
@@ -1450,11 +1693,84 @@ def _parse_browser_json(text):
         return []
 
 
+def _parse_urls(text):
+    """One URL per line (katana, gau, waybackurls). Deduplicated, order kept."""
+    seen, out = set(), []
+    for line in text.splitlines():
+        url = line.strip()
+        if url and url not in seen:
+            seen.add(url)
+            out.append({"url": url})
+    return out
+
+
+def _parse_hosts(text):
+    """One hostname per line (subfinder, assetfinder, amass). Deduplicated."""
+    seen, out = set(), []
+    for line in text.splitlines():
+        host = line.strip().lower()
+        if host and host not in seen:
+            seen.add(host)
+            out.append({"host": host})
+    return out
+
+
+def _parse_host_port(text):
+    """host:port per line (naabu). IPv4/hostname targets."""
+    out = []
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or ":" not in line:
+            continue
+        host, _, port = line.rpartition(":")
+        if host and port.isdigit():
+            out.append({"host": host, "port": port})
+    return out
+
+
+def _parse_dnsx(text):
+    """dnsx -a -resp lines: "host [1.2.3.4]" -> {host, a:[ips]}."""
+    import re
+    out = []
+    for line in text.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        host = line.split()[0]
+        ips = re.findall(r"\[([0-9A-Fa-f:.]+)\]", line)
+        out.append({"host": host, "a": ips})
+    return out
+
+
+def _parse_masscan_grep(text):
+    """masscan -oG output: "Host: 1.2.3.4 () Ports: 80/open/tcp..."."""
+    out = []
+    for line in text.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        host = None
+        m = re.match(r"Host:\s*([^\s()]+)", line)
+        if m:
+            host = m.group(1)
+        ports = re.findall(r"([0-9]+)/open/", line)
+        for port in ports:
+            out.append({"host": host, "port": port})
+        if host and not ports:
+            out.append({"host": host, "port": "*"})
+    return out
+
+
 PARSERS = {
     "nmap_xml": _parse_nmap_xml,
     "httpx": _parse_httpx,
     "nuclei": _parse_nuclei,
     "browser_json": _parse_browser_json,
+    "urls": _parse_urls,
+    "hosts": _parse_hosts,
+    "host_port": _parse_host_port,
+    "dnsx_resp": _parse_dnsx,
+    "masscan_grep": _parse_masscan_grep,
 }
 
 TOOLS = _tool_specs
@@ -1468,7 +1784,7 @@ def get_tool_spec(name: str) -> ToolSpec | None:
 def risk_of(name: str) -> str:
     """Return the risk level string for a registered tool (default 'active')."""
     spec = TOOLS.get(name)
-    return spec.risk_level if spec else "active"
+    return (spec.risk_level if spec else None) or "active"
 
 
 def parse_output(tool: str, text: str):
