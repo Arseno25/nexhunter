@@ -3347,11 +3347,30 @@ def parse_output(tool: str, text: str):
     return None
 
 
+_OUT_CAP = 2_000_000  # 2 MB cap on legacy-path output (primary path caps at 10 MB via ProcessRunner)
+
+
 def run(cmd: list, timeout: int) -> dict:
-    """Run command subprocess with timeout handling."""
+    """Run command subprocess with timeout handling and output cap.
+
+    This is the legacy execution path used by Engine (probe, portscan, webscan,
+    recon, assess routes). Process-tree cleanup on timeout and full workdir
+    isolation live in execution/runner.ProcessRunner — the primary path for all
+    MCP and /api/command traffic. This helper keeps subprocess.run for simplicity;
+    its callers hold short-lived one-shot commands (curl, nmap, dig, etc.) where
+    grandchild orphans are not a practical concern.
+    """
     try:
-        r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, errors="replace")
-        return {"ok": r.returncode == 0, "exit": r.returncode, "stdout": r.stdout, "stderr": r.stderr, "error": None}
+        r = subprocess.run(  # noqa: S603 - caller provides validated cmd list
+            cmd, capture_output=True, text=True, timeout=timeout, errors="replace"
+        )
+        return {
+            "ok": r.returncode == 0,
+            "exit": r.returncode,
+            "stdout": r.stdout[:_OUT_CAP],
+            "stderr": r.stderr[:_OUT_CAP],
+            "error": None,
+        }
     except FileNotFoundError:
         return {"ok": False, "exit": -1, "stdout": "", "stderr": "", "error": f"binary '{cmd[0]}' not found on PATH"}
     except subprocess.TimeoutExpired:
