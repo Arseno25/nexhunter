@@ -11,7 +11,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 COPY . /app
-RUN pip install --no-cache-dir -e ".[mcp,browser]"
+RUN pip install --no-cache-dir -e ".[api,mcp,browser]"
 
 ENV NEXHUNTER_BIND_HOST=0.0.0.0 \
     NEXHUNTER_EXTERNAL_BIND_ALLOWED=true

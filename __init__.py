@@ -15,7 +15,7 @@ Layout:
     security/   redaction.py (secret hygiene)
 
 Run:
-    pip install -e ".[mcp]"
+    pip install -e ".[api,mcp,browser]"
     nexhunter doctor
     python -m nexhunter.api.server --port 8888
     python -m nexhunter.api.mcp --server http://127.0.0.1:8888

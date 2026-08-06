@@ -26,6 +26,7 @@ def _run(argv) -> tuple:
 # Version detection
 # --------------------------------------------------------------------------
 
+
 def test_version_parsing():
     """Version strings are parsed out of real-world tool output."""
     print("[TEST] Version parsing...")
@@ -85,6 +86,7 @@ def test_python_binary_is_detected():
 # doctor
 # --------------------------------------------------------------------------
 
+
 class _Env:
     """Set environment variables for the duration of a block, then restore."""
 
@@ -143,9 +145,35 @@ def test_doctor_reports_tool_maturity(tmp: Path):
     print("  [OK] Tool availability and risk flags reported")
 
 
+def test_doctor_flags_missing_api_dependency(tmp: Path):
+    """A missing flask must surface in doctor: the server cannot start without it.
+
+    Regression: setup scripts installed only [mcp,browser], the server failed
+    right after a "successful" setup, and doctor did not notice.
+    """
+    from unittest import mock
+
+    print("[TEST] doctor flags missing flask...")
+    real_import = __import__
+
+    def no_flask(name, *args, **kwargs):
+        if name == "flask":
+            raise ImportError("No module named 'flask'")
+        return real_import(name, *args, **kwargs)
+
+    buffer = io.StringIO()
+    with _Env(NEXHUNTER_DATA_DIR=str(tmp)), mock.patch("builtins.__import__", no_flask), redirect_stdout(buffer):
+        code = doctor.run(check_versions=False)
+    assert "flask not installed (API server unavailable)" in buffer.getvalue()
+    assert code == 1, "a broken API install should fail doctor"
+    print("  [OK] missing flask detected and reported")
+    assert "defusedxml not installed" not in buffer.getvalue(), "unrelated deps must stay imported"
+
+
 # --------------------------------------------------------------------------
 # registry / profiles
 # --------------------------------------------------------------------------
+
 
 def test_registry_list_and_filter():
     """registry list works and honors filters."""
@@ -202,6 +230,8 @@ if __name__ == "__main__":
         test_doctor_runs_and_reports(Path(raw))
     with tempfile.TemporaryDirectory() as raw:
         test_doctor_reports_tool_maturity(Path(raw))
+    with tempfile.TemporaryDirectory() as raw:
+        test_doctor_flags_missing_api_dependency(Path(raw))
     test_registry_list_and_filter()
     test_registry_info()
     test_profiles_command()

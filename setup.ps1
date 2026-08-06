@@ -13,9 +13,9 @@ Write-Host "[1/4] creating venv at $Venv"
 
 $PyVenv = Join-Path $Venv "Scripts\python.exe"
 
-Write-Host "[2/4] installing nexhunter with mcp + browser extras"
+Write-Host "[2/4] installing nexhunter with api + mcp + browser extras"
 & $PyVenv -m pip install --upgrade pip
-& $PyVenv -m pip install -e ".[mcp,browser]"
+& $PyVenv -m pip install -e ".[api,mcp,browser]"
 
 Write-Host "[3/4] verifying the installation"
 & $PyVenv -m nexhunter.cli.client doctor

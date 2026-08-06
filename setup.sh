@@ -18,12 +18,12 @@ else
     PY_VENV="$VENV/bin/python"
 fi
 
-echo "[2/4] installing nexhunter with mcp + browser extras"
+echo "[2/4] installing nexhunter with api + mcp + browser extras"
 "$PY_VENV" -m pip install --upgrade pip
-"$PY_VENV" -m pip install -e ".[mcp,browser]"
+"$PY_VENV" -m pip install -e ".[api,mcp,browser]"
 
 echo "[3/4] verifying the installation"
-"$PY_VENV" -m nexhunter.cli.client doctor || true
+"$PY_VENV" -m nexhunter.cli.client doctor
 
 echo "[4/4] done"
 cat <<'EOF'
