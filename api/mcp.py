@@ -529,6 +529,7 @@ def _register(name, spec):
         f"Params: {', '.join(spec.params)}"
     )
     mcp.tool()(fn)
+    _REGISTRY_TOOLS.add(name)
 
 
 def _select_for_limit(selected: dict, tool_limit: int | None) -> dict:
@@ -547,6 +548,12 @@ def _select_for_limit(selected: dict, tool_limit: int | None) -> dict:
     return {s.name: s for s in ranked[:tool_limit]}
 
 
+# Registry-generated tools that are currently registered on `mcp`. Workflow
+# tools (decorated with @mcp.tool directly) are never in this set, so a
+# re-registration can never remove them.
+_REGISTRY_TOOLS: set[str] = set()
+
+
 def register_profile_tools(profile_name: str | None = None, tool_limit: int | None = None) -> int:
     """Register the registry tools this profile exposes. Returns the count.
 
@@ -557,10 +564,25 @@ def register_profile_tools(profile_name: str | None = None, tool_limit: int | No
     tool_limit caps how many tools are registered. When the profile exposes
     more than the limit, the tools most likely to matter are kept first:
     stable maturity beats beta, installed binaries beat missing ones, and the
-    rest are dropped (see _select_for_limit).
+    rest are dropped (see _select_for_limit). Called again (e.g. by main()
+    after a --profile/--tool-limit flag), it replaces the previous selection:
+    tools no longer selected are unregistered, so the cap is real, not
+    cosmetic.
     """
     profile = mcp_profiles.get_profile(profile_name or PROFILE_NAME)
     selected = _select_for_limit(mcp_profiles.tools_for(profile), tool_limit)
+
+    manager = mcp._tool_manager
+    try:
+        from fastmcp.settings import DuplicateBehavior
+
+        manager.duplicate_behavior = DuplicateBehavior.REPLACE
+        for name in list(manager._tools):
+            if name in _REGISTRY_TOOLS and name not in selected:
+                manager._tools.pop(name, None)
+    except (ImportError, AttributeError):  # pragma: no cover - fastmcp layout guard
+        log.warning("fastmcp tool replacement unsupported; --profile/--tool-limit will be ignored")
+
     for name, spec in selected.items():
         _register(name, spec)
     return len(selected)

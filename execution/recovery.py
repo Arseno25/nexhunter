@@ -239,7 +239,6 @@ class ExecutionRecovery:
             consumed = used_plan.get(error_type, 0)
             actions = recovery_plan(error_type, consumed)
             action = actions[0]
-            action = actions[0]
             entry: dict = {
                 "attempt": attempts, "tool": current_tool,
                 "error_type": error_type.value,

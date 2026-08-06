@@ -40,10 +40,12 @@ def test_registration_generated_from_registry():
 
     The default profile is nexhunter-full, so a focused profile's tools are
     already exposed; the contract is that registration is registry-driven
-    (the returned count matches the profile) and idempotent (no duplicates).
+    (the returned count matches the profile) and that a re-registration
+    replaces the previous selection instead of stacking on top of it.
     """
     print("[TEST] Registration is registry-driven...")
     before = _tool_names()
+    helpers = before - set(M._REGISTRY_TOOLS)
 
     count = M.register_profile_tools("nexhunter-recon")
     after = _tool_names()
@@ -53,11 +55,14 @@ def test_registration_generated_from_registry():
     for name in expected:
         assert name in after, f"{name} in the recon profile but missing from MCP"
 
-    # With the full default, a focused profile adds nothing new and no duplicates.
-    assert after == before, "registering a subset profile should not add or duplicate tools"
+    # A re-registration replaces the selection: the recon tools plus the
+    # hand-written helpers remain, registry tools outside the profile do not.
+    assert after == set(expected) | helpers, (
+        "registering a focused profile should replace, not stack, the selection"
+    )
     assert "subfinder_enum" in after, "a recon tool should be exposed"
 
-    print(f"  [OK] {count} recon tools covered, registry-driven and idempotent")
+    print(f"  [OK] {count} recon tools covered, registry-driven and replacing")
 
 
 def test_no_raw_command_tool():
