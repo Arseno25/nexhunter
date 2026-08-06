@@ -87,6 +87,7 @@ import dataclasses
 import json
 import logging
 import os
+import shlex
 import sys
 import time
 
@@ -121,8 +122,10 @@ from nexhunter.execution.http_lab import (
 
 log = logging.getLogger("nexhunter.server")
 
-ENGINE = Engine()
 FINDINGS = FindingStore()
+# Engine mirrors every finding it records into FINDINGS, and reads the store
+# back for summaries and reports: one registry, whichever path produced it.
+ENGINE = Engine(finding_store=FINDINGS)
 # Single execution path shared with the MCP server: validate, build, run,
 # record. Nothing else in this module spawns a process.
 EXEC = ExecutionService()
@@ -154,7 +157,7 @@ class Telemetry:
             "cache_entries": len(ENGINE._cache),
             "cache_hits": ENGINE.cache_hits,
             "cache_evictions": ENGINE.cache_evictions,
-            "findings": len(ENGINE.findings),
+            "findings": len(FINDINGS.list()),
             "processes": len(EXEC.list_processes()),
         }
 
@@ -553,8 +556,8 @@ def process_status(pid):
 @app.get("/api/visual/dashboard")
 def visual_dashboard():
     metrics = DashboardMetrics()
-    metrics.requests = getattr(TEL, "total_requests", 0)
-    metrics.findings = len(ENGINE.findings) if hasattr(ENGINE, "findings") else 0
+    metrics.requests = TEL.count
+    metrics.findings = len(FINDINGS.list())
     metrics.processes = len(EXEC.list_processes())
     if _query("format", "json") == "box":
         box = create_live_dashboard(
@@ -566,7 +569,7 @@ def visual_dashboard():
 
 @app.get("/api/visual/vulnerabilities")
 def visual_vulnerabilities():
-    findings = ENGINE.findings if hasattr(ENGINE, "findings") else []
+    findings = FINDINGS.list()
     vuln_list = [f.to_dict() if hasattr(f, "to_dict") else f for f in findings]
     return jsonify({"vulnerabilities": vuln_list, "count": len(vuln_list)})
 
@@ -764,25 +767,23 @@ def python_execute_compat():
 
 @app.post("/api/python/install")
 def python_install_compat():
-    import subprocess
-    import sys
     body = _body()
     package = body.get("package", "")
     if not package:
         return jsonify({"success": False, "error": "package name is required"})
-    try:
-        proc = subprocess.run(
-            [sys.executable, "-m", "pip", "install", package],
-            capture_output=True, text=True, timeout=120
-        )
-        return jsonify({
-            "success": proc.returncode == 0,
-            "stdout": proc.stdout,
-            "stderr": proc.stderr,
-            "exit_code": proc.returncode,
-        })
-    except Exception as e:
-        return jsonify({"success": False, "error": str(e)})
+    # Same path as every other tool: validated, tracked, output redacted.
+    result = EXEC.execute(
+        "execute_command",
+        {"command": f"{shlex.quote(sys.executable)} -m pip install {shlex.quote(package)}"},
+        direct=False,
+    )
+    return jsonify({
+        "success": bool(result.get("ok")),
+        "stdout": result.get("stdout") or "",
+        "stderr": result.get("stderr") or "",
+        "exit_code": result.get("exit"),
+        "execution_id": result.get("execution_id"),
+    })
 
 
 @app.post("/api/autonomous")
@@ -983,7 +984,7 @@ def report():
 
 @app.post("/api/clear")
 def clear():
-    ENGINE.findings.clear()
+    ENGINE.clear()
     return jsonify({"ok": True})
 
 
@@ -1007,9 +1008,10 @@ def visual_vulnerability_card():
 
 @app.post("/api/visual/vulnerabilities")
 def visual_vulnerabilities_post():
+    findings = FINDINGS.list()
     return jsonify({
-        "vulnerabilities": [f.to_dict() if hasattr(f, "to_dict") else f for f in ENGINE.findings],
-        "stats": {"total": len(ENGINE.findings), "critical": sum(1 for f in ENGINE.findings if getattr(f, "severity", "") == "critical")},
+        "vulnerabilities": [f.to_dict() for f in findings],
+        "stats": {"total": len(findings), "critical": sum(1 for f in findings if f.severity.value == "critical")},
     })
 
 
