@@ -653,7 +653,7 @@ def register_profile_tools(profile_name: str | None = None, tool_limit: int | No
             if name not in selected:
                 try:
                     _remove(name)
-                except Exception:  # pragma: no cover - already gone / version skew
+                except Exception:  # noqa: S110 - pragma: no cover - already gone / version skew
                     pass
                 _REGISTRY_TOOLS.discard(name)
 

@@ -68,7 +68,7 @@ flowchart TB
     end
 
     subgraph registry [Registry]
-        E1[core/tools.py<br/>ToolSpec]
+        E1[core/tools/<br/>ToolSpec, per-category]
         E2[core/availability.py]
         E3[api/mcp_profiles.py]
     end
@@ -102,7 +102,7 @@ sequenceDiagram
     S->>S: validate parameters (typed, secret-aware)
     Note over S: record created: QUEUED → VALIDATING
 
-    S->>S: build command from ToolSpec (argv-only; shell only for a ShellCommand builder)
+    S->>S: build command from ToolSpec (argv-only, shell only for a ShellCommand builder)
     S->>S: redact secrets from params and command
     S->>S: create isolated workspace
     Note over S: AUTHORIZED → RUNNING
@@ -200,17 +200,17 @@ The bridge decides what a client is *shown*. The service decides what is
 
 ```mermaid
 flowchart LR
-    REG[(Tool registry<br/>~257 tools)] --> F{Profile filter<br/>category · risk · maturity}
-    F --> C[core · 15]
-    F --> RC[recon · 25]
-    F --> W[web · 38]
-    F --> AP[api · 7]
-    F --> CD[code · 16]
-    F --> CL[cloud · 8]
-    F --> CT[container · 14]
-    F --> FR[forensics · 28]
-    F --> CTF[ctf · 89]
-    F --> FU[full · 255]
+    REG[(Tool registry<br/>268 tools)] --> F{Profile filter<br/>category · risk · maturity}
+    F --> C[core · 17]
+    F --> RC[recon · 30]
+    F --> W[web · 45]
+    F --> AP[api · 9]
+    F --> CD[code · 18]
+    F --> CL[cloud · 10]
+    F --> CT[container · 16]
+    F --> FR[forensics · 31]
+    F --> CTF[ctf · 101]
+    F --> FU[full · 265]
 
     C --> CLIENT[AI client]
     CLIENT -.->|every call still| SVC[ExecutionService]
@@ -220,7 +220,7 @@ Six more specialty profiles (osint, wireless, privesc, payloads, vulnscan,
 mobile) slice the same registry the same way; the full list with counts is in
 the README.
 
-Without a `--profile` flag the bridge defaults to `nexhunter-full` (255 tools,
+Without a `--profile` flag the bridge defaults to `nexhunter-full` (265 tools,
 everything non-destructive). A focused profile cuts initialization payload and
 token cost and stops a model choosing blindly between near-identical tools —
 `nexhunter-core`, for example, exposes 17 tools (15 passive stable checks plus
@@ -288,7 +288,7 @@ Both sit on the one execution path and add no way to reach the OS.
 | `execution/service.py` | The single execution path |
 | `core/params.py` | Typed parameter validation and secret naming |
 | `core/risk.py` | Risk levels shared by registry and orchestrator |
-| `core/tools.py` | ToolSpec registry and command builders |
+| `core/tools/` | ToolSpec registry and command builders, one module per category |
 | `core/availability.py` | Binary presence and version detection |
 | `security/redaction.py` | Secret detection for logs, records, output |
 | `workflows/orchestrator.py` | Adaptive planner and bounded autonomy loop |

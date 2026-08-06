@@ -142,10 +142,10 @@ PROFILES: dict[str, Profile] = {
     "nexhunter-ctf": Profile(
         name="nexhunter-ctf",
         description="Capture-the-flag one-stop profile: Web Exploitation (web, api), "
-                    "Cryptography (crypto), Reverse Engineering & Pwn (binary), "
-                    "Forensics (forensics), and OSINT (osint). Intrusive web scanners "
-                    "included; the autonomy ceiling still clamps them.",
-        categories=("ctf", "crypto", "binary", "forensics", "osint", "web", "api"),
+                    "Cryptography and hash cracking (crypto, auth), Reverse Engineering "
+                    "& Pwn (binary), Forensics (forensics), and OSINT (osint). Intrusive "
+                    "web scanners included; the autonomy ceiling still clamps them.",
+        categories=("ctf", "crypto", "auth", "binary", "forensics", "osint", "web", "api"),
         risk_levels=("passive", "active", "intrusive"),
     ),
     "nexhunter-full": Profile(

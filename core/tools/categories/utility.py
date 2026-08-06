@@ -1,0 +1,240 @@
+"""General shell utilities tool specs."""
+
+from .._spec import ToolSpec, ShellCommand
+from nexhunter.core import params as P
+
+
+TOOLS = {
+    "xxd":     ToolSpec(
+            name="xxd",
+            binary="xxd",
+            description="Hexdump utility",
+            params={"file": None},
+            timeout=10,
+            builder=lambda p: ["xxd", p["file"]],
+        ),
+    "hexdump":     ToolSpec(
+            name="hexdump",
+            binary="hexdump",
+            description="ASCII hexdump",
+            params={"file": None},
+            timeout=10,
+            builder=lambda p: ["hexdump", "-C", p["file"]],
+        ),
+    "file_type":     ToolSpec(
+            name="file_type",
+            binary="file",
+            description="Detect file type",
+            params={"file": None},
+            timeout=10,
+            builder=lambda p: ["file", p["file"]],
+        ),
+    "nm":     ToolSpec(
+            name="nm",
+            binary="nm",
+            description="List symbols from object files",
+            params={"file": None},
+            timeout=10,
+            category="utility",
+            builder=lambda p: ["nm", p["file"]],
+        ),
+    "ldd":     ToolSpec(
+            name="ldd",
+            binary="ldd",
+            description="List dynamic dependencies",
+            params={"file": None},
+            timeout=10,
+            builder=lambda p: ["ldd", p["file"]],
+        ),
+    "ltrace":     ToolSpec(
+            name="ltrace",
+            binary="ltrace",
+            description="Library call tracer",
+            params={"file": None},
+            timeout=30,
+            builder=lambda p: ["ltrace", p["file"]],
+        ),
+    "ping":     ToolSpec(
+            name="ping",
+            binary="ping",
+            description="ICMP ping host",
+            params={"host": None},
+            timeout=10,
+            builder=lambda p: ["ping", "-c", "4", p["host"]],
+        ),
+    "traceroute":     ToolSpec(
+            name="traceroute",
+            binary="traceroute",
+            description="Trace route to host",
+            params={"host": None},
+            timeout=30,
+            builder=lambda p: ["traceroute", p["host"]],
+        ),
+    "mtr":     ToolSpec(
+            name="mtr",
+            binary="mtr",
+            description="Network diagnostic tool",
+            params={"host": None},
+            timeout=30,
+            builder=lambda p: ["mtr", "-c", "4", p["host"]],
+        ),
+    "netstat":     ToolSpec(
+            name="netstat",
+            binary="netstat",
+            description="Network statistics",
+            params={},
+            timeout=10,
+            builder=lambda p: ["netstat", "-tuln"],
+        ),
+    "ss":     ToolSpec(
+            name="ss",
+            binary="ss",
+            description="Socket statistics",
+            params={},
+            timeout=10,
+            category="utility",
+            builder=lambda p: ["ss", "-tuln"],
+        ),
+    "nping":     ToolSpec(
+            name="nping",
+            binary="nping",
+            description="Network packet generation",
+            params={"target": None},
+            timeout=30,
+            builder=lambda p: ["nping", "--count", "4", p["target"]],
+        ),
+    "grep":     ToolSpec(
+            name="grep",
+            binary="grep",
+            description="Text search",
+            params={"pattern": None, "file": None},
+            timeout=30,
+            builder=lambda p: ["grep", p["pattern"], p["file"]],
+        ),
+    "awk":     ToolSpec(
+            name="awk",
+            binary="awk",
+            description="Text processing",
+            params={"pattern": None},
+            timeout=30,
+            builder=lambda p: ["awk", p["pattern"]],
+        ),
+    "sed":     ToolSpec(
+            name="sed",
+            binary="sed",
+            description="Stream editor",
+            params={"expression": None, "file": None},
+            timeout=30,
+            builder=lambda p: ["sed", p["expression"], p["file"]],
+        ),
+    "jq":     ToolSpec(
+            name="jq",
+            binary="jq",
+            description="JSON query processor",
+            params={"file": None},
+            timeout=10,
+            builder=lambda p: ["jq", ".", p["file"]],
+        ),
+    "yq":     ToolSpec(
+            name="yq",
+            binary="yq",
+            description="YAML query processor",
+            params={"file": None},
+            timeout=10,
+            builder=lambda p: ["yq", p["file"]],
+        ),
+    "wget":     ToolSpec(
+            name="wget",
+            binary="wget",
+            description="File downloader",
+            params={"url": None},
+            timeout=300,
+            builder=lambda p: ["wget", p["url"]],
+        ),
+    "rsync":     ToolSpec(
+            name="rsync",
+            binary="rsync",
+            description="File synchronization",
+            params={"source": None, "dest": None},
+            timeout=300,
+            builder=lambda p: ["rsync", "-av", p["source"], p["dest"]],
+        ),
+    "tar":     ToolSpec(
+            name="tar",
+            binary="tar",
+            description="Archive manager",
+            params={"file": None},
+            timeout=60,
+            builder=lambda p: ["tar", "-tzf", p["file"]],
+        ),
+    "zip":     ToolSpec(
+            name="zip",
+            binary="zip",
+            description="ZIP archive tool",
+            params={"file": None},
+            timeout=60,
+            builder=lambda p: ["zip", "-l", p["file"]],
+        ),
+    "execute_command":     ToolSpec(
+            name="execute_command",
+            binary="sh",
+            description="Run a free-form command string through the system shell "
+            "(Free-form arbitrary command execution). Pipes, "
+            "redirects, and chaining are live. Recorded, redacted, "
+            "timeout-capped, intrusive, and withheld from autonomous "
+            "runs. Authorized targets only.",
+            params={"command": None, "use_cache": True},
+            timeout=120,
+            cacheable=False,
+            category="utility",
+            risk_level="intrusive",
+            availability_check=lambda: True,
+            param_specs=(
+                P.ParamSpec(
+                    name="command", type=P.ParamType.TEXT, required=True, description="The shell command string to execute"
+                ),
+                P.ParamSpec(
+                    name="use_cache",
+                    type=P.ParamType.BOOLEAN,
+                    required=False,
+                    default=True,
+                    description="Whether to use caching (default: True)",
+                ),
+            ),
+            builder=lambda p: ShellCommand(p["command"]),
+        ),
+    "execute_python_script":     ToolSpec(
+            name="execute_python_script",
+            binary="python",
+            description="Run a free-form Python snippet with the server's "
+            "interpreter (Free-form custom scripting). Recorded, "
+            "redacted, timeout-capped, intrusive, and withheld from "
+            "autonomous runs. Authorized targets only.",
+            params={"script": None, "env_name": "default", "filename": ""},
+            timeout=120,
+            cacheable=False,
+            category="utility",
+            risk_level="intrusive",
+            availability_check=lambda: True,
+            param_specs=(
+                P.ParamSpec(
+                    name="script", type=P.ParamType.TEXT, required=True, description="Python source code to execute"
+                ),
+                P.ParamSpec(
+                    name="env_name",
+                    type=P.ParamType.STRING,
+                    required=False,
+                    default="default",
+                    description="Virtual environment name (default: default)",
+                ),
+                P.ParamSpec(
+                    name="filename",
+                    type=P.ParamType.STRING,
+                    required=False,
+                    default="",
+                    description="Optional script filename",
+                ),
+            ),
+            builder=lambda p: ["python", "-c", p["script"]],
+        ),
+}

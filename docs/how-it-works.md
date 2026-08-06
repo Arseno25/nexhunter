@@ -30,7 +30,7 @@ flowchart LR
     C[CLI] --> E
     D[Autonomous loop] --> E
 
-    E -->|1. lookup| R[(Registry - 257 ToolSpecs)]
+    E -->|1. lookup| R[(Registry - 268 ToolSpecs)]
     R -->|2. typed validation| V{valid params?}
     V -->|no| X[refused - nothing runs]
     V -->|yes| G[3. build argv - argv-only]
@@ -63,7 +63,7 @@ exact same code. Follow one call, and you have followed them all.
 The parameters the caller sent and the argv that ran are different things, and
 only the builder — project code, never model output — can produce the second.
 
-## The registry: 257 tools, one shape
+## The registry: 268 tools, one shape
 
 Every tool is a `ToolSpec` with the same anatomy:
 
@@ -71,7 +71,7 @@ Every tool is a `ToolSpec` with the same anatomy:
 |---|---|
 | `params` → `param_specs` | Typed schemas: type, default, validation rule. Refused server-side if violated. |
 | `risk_level` | `passive` / `active` / `intrusive` / `destructive`. The ceiling keys off this. |
-| `category` | One of 20 categories. Drives which MCP profile surfaces the tool. |
+| `category` | One of 21 categories. Drives which MCP profile surfaces the tool. |
 | `maturity` | `stable` (parser + fixture + test), `beta` (registered, less exercised), or `experimental` (registered but not honestly usable as written). |
 | `available` | Whether the binary exists on this host — checked with `shutil.which`, never guessed. |
 | `builder` | The only place a command line can come into being. Returns an argv list by default, or a `ShellCommand` (a str subclass) when the whole payload must run through the OS shell — used by exactly one tool, `execute_command`. |

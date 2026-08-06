@@ -32,7 +32,7 @@ from nexhunter.agents.profiler import TargetProfile
 TARGET_TYPE_CATEGORIES: dict[str, dict[str, float]] = {
     "web_application": {
         "web": 1.0, "vuln_scan": 0.9, "api": 0.8, "recon": 0.55,
-        "crypto": 0.5, "exploitation": 0.4, "payloads": 0.3, "osint": 0.3,
+        "crypto": 0.5, "exploitation": 0.4, "auth": 0.3, "payloads": 0.3, "osint": 0.3,
     },
     "domain": {
         "recon": 1.0, "osint": 0.85, "web": 0.6, "network": 0.45,
@@ -40,10 +40,10 @@ TARGET_TYPE_CATEGORIES: dict[str, dict[str, float]] = {
     },
     "host": {
         "network": 1.0, "recon": 0.85, "vuln_scan": 0.6, "exploitation": 0.45,
-        "privesc": 0.35, "crypto": 0.3,
+        "auth": 0.5, "privesc": 0.35, "crypto": 0.3,
     },
     "network": {
-        "network": 1.0, "recon": 0.9, "vuln_scan": 0.5, "exploitation": 0.35,
+        "network": 1.0, "recon": 0.9, "vuln_scan": 0.5, "auth": 0.45, "exploitation": 0.35,
     },
     "binary": {
         "binary": 1.0, "ctf": 0.75, "utility": 0.6, "crypto": 0.55,
@@ -80,7 +80,7 @@ CATEGORY_PHASE: dict[str, str] = {
     "binary": "assessment", "mobile": "assessment", "ctf": "assessment",
     "ids": "assessment",
     "exploitation": "exploitation", "privesc": "exploitation",
-    "payloads": "exploitation", "wireless": "exploitation",
+    "payloads": "exploitation", "wireless": "exploitation", "auth": "exploitation",
 }
 PHASE_ORDER: list[str] = ["recon", "enumeration", "web_enum", "assessment", "exploitation"]
 

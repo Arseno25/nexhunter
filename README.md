@@ -7,7 +7,7 @@
 
   <p>Safe orchestration of security tools for <em>authorized</em> assessments.</p>
 
-![Version](https://img.shields.io/badge/version-1.0.0-blue) ![Python](https://img.shields.io/badge/python-3.10%2B-green) ![Tests](https://img.shields.io/badge/tests-327%20passing-green)
+![Version](https://img.shields.io/badge/version-1.0.0-blue) ![Python](https://img.shields.io/badge/python-3.10%2B-green) ![Tests](https://img.shields.io/badge/tests-357%20passing-green) ![License](https://img.shields.io/badge/license-MIT-blue)
 </div>
 
 ---
@@ -38,7 +38,7 @@ cannot escalate its own risk ceiling.
   withheld from autonomy). A regression suite enforces the rest.
 - **Bounded autonomy.** The orchestrator's risk ceiling is clamped to `active`;
   intrusive and destructive tools are withheld for human approval.
-- **Honest registry.** 257 tools, each tagged with a maturity level that is
+- **Honest registry.** 268 tools, each tagged with a maturity level that is
   asserted, never guessed — stub tools are labelled `experimental`, not sold as
   working capability.
 - **Browser engine.** Selenium-backed page analysis (tech fingerprint, security
@@ -58,7 +58,7 @@ flowchart LR
     B[MCP / AI client] --> E
     C[CLI] --> E
     D[Autonomous loop] --> E
-    E --> R[Registry - 257 tools]
+    E --> R[Registry - 268 tools]
     E --> G[validate + build argv]
     E --> S[run isolated + record]
     style E fill:#0e7490,stroke:#06b6d4,stroke-width:3px,color:#f8fafc
@@ -66,7 +66,7 @@ flowchart LR
 
 1. **One execution path** — every caller walks the same code: lookup → typed
    validation → build argv → isolated run → record.
-2. **The registry** — 257 `ToolSpec`s with typed params, risk, category, and
+2. **The registry** — 268 `ToolSpec`s with typed params, risk, category, and
    maturity; MCP profiles slice it per client.
 3. **The loop** — autonomous assessment: profiler evidence → planner → bounded
    by a clamped risk ceiling and a step budget.
@@ -175,28 +175,28 @@ the client shows no tools; verify by running the command by hand first.
 
 ### Profiles
 
-Listing all 257 tools to every client makes for a large payload, a large token
+Listing all 268 tools to every client makes for a large payload, a large token
 cost, and a model choosing blindly between near-identical tools. A profile
 narrows the registry to one job.
 
 | Profile | Tools | Purpose |
 |---|---:|---|
 | `nexhunter-core` | 17 | Status, findings, executions, passive stable checks only |
-| `nexhunter-recon` | 27 | Host discovery, DNS, subdomains, service identification |
-| `nexhunter-web` | 40 | Content discovery, injection testing, template scanning, TLS, browser crawl |
+| `nexhunter-recon` | 30 | Host discovery, DNS, subdomains, service identification |
+| `nexhunter-web` | 45 | Content discovery, injection testing, template scanning, TLS, browser crawl |
 | `nexhunter-api` | 9 | Schema and parameter discovery (arjun), JWT, GraphQL |
 | `nexhunter-code` | 18 | Static analysis, secret scanning, dependency review |
 | `nexhunter-cloud` | 10 | Read-only cloud posture |
 | `nexhunter-container` | 16 | Container and Kubernetes review |
-| `nexhunter-forensics` | 30 | Offline artifact, steganography, and binary analysis |
+| `nexhunter-forensics` | 31 | Offline artifact, steganography, and binary analysis |
 | `nexhunter-osint` | 7 | OSINT: usernames, emails, footprinting, CVE lookup |
 | `nexhunter-wireless` | 9 | Wireless recon and assessment (destructive withheld) |
 | `nexhunter-privesc` | 7 | Local privilege escalation discovery |
-| `nexhunter-payloads` | 5 | Payload generation, C2 integration (never auto-executed) |
+| `nexhunter-payloads` | 4 | Payload generation, C2 integration (never auto-executed) |
 | `nexhunter-vulnscan` | 10 | Vulnerability scanners and IDS tooling |
 | `nexhunter-mobile` | 8 | APK inspection, decompilation, runtime exploration |
-| `nexhunter-ctf` | 89 | All CTF domains: web, crypto, RE/pwn, forensics, OSINT |
-| `nexhunter-full` | 255 | **Default (no `--profile`).** Everything non-destructive, incl. experimental |
+| `nexhunter-ctf` | 101 | All CTF domains: web, crypto, auth/hash-cracking, RE/pwn, forensics, OSINT |
+| `nexhunter-full` | 265 | **Default (no `--profile`).** Everything non-destructive, incl. experimental |
 
 Every profile also surfaces the two freeform tools — `execute_command` and
 `execute_python_script` (intrusive, withheld from autonomous runs) — since they serve
@@ -383,7 +383,7 @@ Stable tools (8/29 installed)
   [OK] curl_headers (curl)
   [MISSING] 21 other stable tools not installed (--all to list)
 
-Registry availability (38/257 tools on PATH)
+Registry availability (38/268 tools on PATH)
   [OK] web: 8/38 available
   [MISSING] network: 0/21 available
 ```
@@ -430,15 +430,15 @@ other binding unless `NEXHUNTER_EXTERNAL_BIND_ALLOWED` is set.
 
 ## Tool registry & maturity
 
-257 tools across 20 categories. Maturity is asserted per tool, never guessed.
+268 tools across 21 categories. Maturity is asserted per tool, never guessed.
 
 | Level | Meaning | Count |
 |---|---:|---:|
 | **stable** | Command builder, availability check, parser (where applicable), tests | 29 |
-| **beta** | Registered and validated, less exercised | 206 |
+| **beta** | Registered and validated, less exercised | 217 |
 | **experimental** | Registered but not honestly usable as written (placeholder binary or hardcoded stand-in args); kept out of the focused profiles | 22 |
 
-Risk levels: 56 passive · 166 active · 31 intrusive · 2 destructive. Cloud,
+Risk levels: 59 passive · 168 active · 38 intrusive · 3 destructive. Cloud,
 container, and orchestration access is exposed as fixed read-only actions
 (`aws_get_caller_identity`, `kubectl_get_pods`, `docker_list_containers`), never
 as a CLI passthrough.
@@ -464,14 +464,22 @@ See [.env.example](.env.example).
 ## Testing
 
 ```bash
-pytest                                                    # 327 tests
+pytest                                                    # 358 tests
 pytest --cov=nexhunter --cov-report=term-missing          # coverage
 ruff check .                                              # zero lint errors
-mypy --explicit-package-bases .                           # zero type errors
+mypy --explicit-package-bases .                           # 5 known errors, see below
 ```
 
-The lint and type gates are clean; the CI matrix runs Python 3.10–3.13 on
-Ubuntu and Windows with the same commands.
+The CI matrix runs Python 3.10–3.13 on Ubuntu and Windows with the same
+commands. Known gaps, not silently claimed clean:
+
+- One test failure: `test_registration_generated_from_registry` — MCP profile
+  filtering is unsupported on FastMCP 3.x, `--profile`/`--tool-limit` are
+  silently ignored (see [docs/mcp/](docs/mcp/)).
+- Five mypy errors, pre-existing and unrelated to each other: two missing
+  `list[...]` annotations in `agents/enhanced.py`, an `Optional[bool]` passed
+  where `bool` is expected in `api/visual.py`, and an `Optional[dict]` passed
+  where `dict` is expected in `agents/browser.py`.
 
 Coverage is measured, not claimed. The execution and findings layers are the
 best covered; legacy agent and engine code is thinner.
@@ -498,6 +506,7 @@ best covered; legacy agent and engine code is thinner.
 | [docs/architecture.md](docs/architecture.md) | Layers, execution flow, state machine, diagrams |
 | [docs/security-model.md](docs/security-model.md) | Threat model, guarantees, non-guarantees |
 | [docs/how-it-works.md](docs/how-it-works.md) | One execution path, call trace, the loop, the can/cannot boundary |
+| [docs/workflows.md](docs/workflows.md) | Phased tool-execution sequences, how a workflow stays within scope |
 | [docs/mcp/](docs/mcp/) | MCP setup per client |
 
 ## Contributing
@@ -506,6 +515,10 @@ Adding a tool means adding a `ToolSpec` with a command builder that takes
 discrete values — never a command string. Maturing one to `stable` means giving
 it a parser and a test. See [docs/architecture.md](docs/architecture.md); the
 regression suite in `tests/test_no_passthrough.py` will reject a passthrough.
+
+## License
+
+[MIT](LICENSE) — Copyright (c) 2026 Arseno25.
 
 ---
 
