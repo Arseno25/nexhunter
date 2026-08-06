@@ -22,7 +22,9 @@ runs against the OS -- the planner does, from evidence.
 
 import logging
 import threading
+import time
 import uuid
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from typing import Any
 from datetime import datetime, timezone
@@ -30,6 +32,8 @@ from enum import Enum
 from collections.abc import Sequence
 
 from nexhunter.core import tools as T
+from nexhunter.core.config import MAX_PARALLEL_WORKERS, WORKFLOW_TIMEOUT
+from nexhunter.execution.recovery import ExecutionRecovery
 from nexhunter.core.risk import RiskLevel
 from nexhunter.agents.profiler import Profiler, TargetProfile
 from nexhunter.agents.selector import ToolSelector
@@ -329,7 +333,7 @@ class AutonomousOrchestrator:
     """Run an adaptive assessment, every step within the risk ceiling."""
 
     def __init__(self, execution_service, finding_store=None, planner=None,
-                 profiler=None, optimizer=None):
+                 profiler=None, optimizer=None, recover=True, recovery_backoff=True):
         self.exec = execution_service
         self.findings = finding_store
         self.planner = planner or AdaptivePlanner()
@@ -338,8 +342,19 @@ class AutonomousOrchestrator:
         # with, so a selected tool is invoked correctly rather than fed the raw
         # target and rejected.
         self.optimizer = optimizer or ParameterOptimizer()
+        # Self-healing: a transient failure (timeout, rate limit, network) is
+        # retried with backoff / reduced scope / an alternative tool instead of
+        # being abandoned. This is what makes the autonomous run "intelligent".
+        self.recover = recover
+        self.recovery = ExecutionRecovery(service=self.exec, use_backoff=recovery_backoff)
         self._runs: dict[str, RunRecord] = {}
         self._lock = threading.RLock()
+
+    def _run_one(self, tool: str, params: dict, direct: bool) -> dict:
+        """Execute one tool, with automatic recovery when enabled."""
+        if self.recover:
+            return self.recovery.execute(tool, params, direct=direct)
+        return self.exec.execute(tool_name=tool, params=params, direct=direct)
 
     def _params_for(self, spec, record, profile):
         """Optimized parameters for a tool, with a safe fallback."""
@@ -479,13 +494,20 @@ class AutonomousOrchestrator:
         try:
             profile = self.profiler.new_profile(record.target)
             already_run: list[str] = []
+            # Whole-run wall-clock ceiling; checked before every pass so a run
+            # cannot silently outlive WORKFLOW_TIMEOUT. Partial work is kept.
+            deadline = time.monotonic() + WORKFLOW_TIMEOUT if WORKFLOW_TIMEOUT else None
+            hit_deadline = False
 
             if record.plan is not None:
-                self._run_plan(record, ceiling, profile, total)
+                hit_deadline = self._run_plan(record, ceiling, profile, total, deadline)
             elif record.strategy == "select":
-                self._run_select(record, ceiling, profile, total)
+                hit_deadline = self._run_select(record, ceiling, profile, total, deadline)
             else:
                 while record.steps_taken < record.max_steps:
+                    if self._past(deadline):
+                        hit_deadline = True
+                        break
                     steps = self.planner.plan(profile, already_run, ceiling)
                     if not steps:
                         break
@@ -497,29 +519,36 @@ class AutonomousOrchestrator:
                     if not runnable:
                         break
 
-                    progressed = False
-                    for step in runnable:
-                        if record.steps_taken >= record.max_steps:
-                            break
-                        already_run.append(step.tool)
-                        record.current_phase = f"running {step.tool}"
-                        record.steps_taken += 1
-                        progressed = True
-
-                        self._emit_step(record, total, step.tool, step.phase or "recon")
-                        spec = T.get_tool_spec(step.tool)
-                        result = self.exec.execute(
-                            tool_name=step.tool,
-                            params=self._params_for(spec, record, profile),
-                            direct=record.direct,
-                        )
-                        self._absorb(record, profile, step, result)
-
-                    if not progressed:
+                    remaining = record.max_steps - record.steps_taken
+                    batch = runnable[:remaining] if remaining > 0 else []
+                    if not batch:
                         break
 
+                    # Prepare params on the main thread (reads the profile),
+                    # then fan the whole batch out concurrently.
+                    jobs = []
+                    for idx, step in enumerate(batch):
+                        spec = T.get_tool_spec(step.tool)
+                        already_run.append(step.tool)
+                        record.steps_taken += 1
+                        self._emit_step(record, total, step.tool, step.phase or "recon")
+                        jobs.append((idx, step.tool,
+                                     self._params_for(spec, record, profile), record.direct))
+                    record.current_phase = f"running {len(batch)} tools"
+                    results = self._execute_batch(jobs)
+                    for idx, step in enumerate(batch):
+                        self._absorb(record, profile, step, results[idx])
+
             record.profile = profile.to_dict()
-            record.status = RunStatus.COMPLETED
+            if hit_deadline:
+                record.status = RunStatus.STOPPED
+                record.errors.append({
+                    "phase": record.current_phase,
+                    "error": f"workflow deadline exceeded ({WORKFLOW_TIMEOUT}s); "
+                             f"stopped with partial results",
+                })
+            else:
+                record.status = RunStatus.COMPLETED
         except Exception as exc:  # noqa: BLE001 - recorded, run marked failed
             record.errors.append({"phase": record.current_phase, "error": str(exc)})
             record.status = RunStatus.FAILED
@@ -541,12 +570,53 @@ class AutonomousOrchestrator:
             record.steps_taken, total, tool=tool, target=record.target, phase=phase,
         ))
 
-    def _run_plan(self, record, ceiling, profile, total=None):
-        """Execute the AI-approved plan, re-validating every step."""
+    @staticmethod
+    def _past(deadline: float | None) -> bool:
+        """True once the workflow wall-clock deadline has passed."""
+        return deadline is not None and time.monotonic() >= deadline
+
+    def _execute_batch(self, jobs: list[tuple]) -> dict:
+        """Run independent steps concurrently; return {key: result}.
+
+        Steps within one planning pass have no data dependency on each other
+        (the planner emitted them from the same profile snapshot), so they run
+        in parallel through the shared worker pool instead of serializing.
+        Per-host pacing lives in ExecutionService, so this cannot self-DoS a
+        target. Params are prepared by the caller on the main thread; results
+        are absorbed there too, keeping profile mutation single-threaded.
+        """
+        if len(jobs) <= 1:
+            return {
+                key: self._run_one(tool, params, direct)
+                for key, tool, params, direct in jobs
+            }
+        out: dict = {}
+        workers = min(MAX_PARALLEL_WORKERS, len(jobs))
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            futures = {
+                pool.submit(self._run_one, tool, params, direct): key
+                for key, tool, params, direct in jobs
+            }
+            for future in as_completed(futures):
+                key = futures[future]
+                try:
+                    out[key] = future.result()
+                except Exception as exc:  # noqa: BLE001 - surfaced as a failed step
+                    out[key] = {"ok": False, "code": "EXEC_ERROR",
+                                "error": str(exc), "status": "failed"}
+        return out
+
+    def _run_plan(self, record, ceiling, profile, total=None, deadline=None):
+        """Execute the AI-approved plan, re-validating every step.
+
+        Returns True if the workflow deadline cut the run short.
+        """
         total = total or record.max_steps
         for step in record.plan or []:
             if record.steps_taken >= record.max_steps:
                 break
+            if self._past(deadline):
+                return True
 
             tool = step.get("tool")
             params = dict(step.get("params") or {})
@@ -580,24 +650,29 @@ class AutonomousOrchestrator:
             record.current_phase = f"running {tool}"
             record.steps_taken += 1
             self._emit_step(record, total, tool, "ai-plan")
-            result = self.exec.execute(tool_name=tool, params=params,
-                                       direct=bool(step.get("direct", record.direct)))
+            result = self._run_one(tool, params,
+                                   direct=bool(step.get("direct", record.direct)))
             self._absorb(record, profile,
                          PlannedStep(tool=tool, reason="from the AI plan",
                                      risk_level=spec.risk_level),
                          result)
+        return False
 
-    def _run_select(self, record, ceiling, profile, total):
+    def _run_select(self, record, ceiling, profile, total, deadline=None):
         """Scoring-driven loop: run only the tools the selector ranks worth it.
 
         Re-selects each pass as evidence accumulates, so a web surface found in
         recon pulls in web tooling on the next round -- the same adaptive feel
         as the methodology loop, but drawing on the whole registry instead of a
         fixed list, and capped by the objective so it never runs everything.
+
+        Returns True if the workflow deadline cut the run short.
         """
         selector = ToolSelector()
         already: list[str] = []
         while record.steps_taken < record.max_steps:
+            if self._past(deadline):
+                return True
             result = selector.select(profile, record.objective, ceiling)
             self._record_withheld_selection(record, result.withheld, ceiling)
 
@@ -605,31 +680,36 @@ class AutonomousOrchestrator:
             if not pending:
                 break
 
-            progressed = False
-            for st in pending:
-                if record.steps_taken >= record.max_steps:
-                    break
+            remaining = record.max_steps - record.steps_taken
+            batch = pending[:remaining] if remaining > 0 else []
+            if not batch:
+                break
+
+            jobs = []
+            absorb: dict = {}
+            for idx, st in enumerate(batch):
                 spec = T.get_tool_spec(st.name)
                 already.append(st.name)
                 if spec is None:
                     continue
                 record.current_phase = f"running {st.name}"
                 record.steps_taken += 1
-                progressed = True
-
                 self._emit_step(record, total, st.name, st.phase)
-                params = self._params_for(spec, record, profile)
-                exec_result = self.exec.execute(tool_name=st.name, params=params,
-                                            direct=record.direct)
-                self._absorb(record, profile, PlannedStep(
+                jobs.append((idx, st.name,
+                             self._params_for(spec, record, profile), record.direct))
+                absorb[idx] = PlannedStep(
                     tool=st.name,
                     reason=f"selected by scoring ({st.score:.2f})",
                     risk_level=st.risk_level,
                     phase=st.phase,
-                ), exec_result)
-
-            if not progressed:
+                )
+            if not jobs:
                 break
+
+            results = self._execute_batch(jobs)
+            for idx in sorted(absorb):
+                self._absorb(record, profile, absorb[idx], results[idx])
+        return False
 
     def _record_withheld_selection(self, record, withheld, ceiling):
         """Surface scored tools above the ceiling as recommendations."""

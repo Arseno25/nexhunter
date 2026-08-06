@@ -171,3 +171,17 @@ def test_direct_output_redacted(tmp_path: Path):
         assert "supersecret1" not in result["output"]
     finally:
         T.TOOLS.pop("leak_probe", None)
+
+
+def test_tools_run_contract():
+    """T.run (legacy Engine path) keeps its result dict contract.
+
+    Locks the shape so the delegation to ProcessRunner (tree-kill on the agent
+    path) is a behavior-preserving refactor, not a regression.
+    """
+    ok = T.run([sys.executable, "-c", "print('hello-world')"], timeout=10)
+    assert ok["ok"] is True and ok["exit"] == 0
+    assert "hello-world" in ok["stdout"]
+
+    missing = T.run(["nexhunter-not-a-real-binary-xyz"], timeout=5)
+    assert missing["ok"] is False and missing["error"]

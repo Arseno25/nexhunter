@@ -72,10 +72,9 @@ MAX_PARALLEL_WORKERS = 4
 MAX_PROCESS_OUTPUT_LINES = 200
 MAX_TOOL_OUTPUT_PREVIEW = 2000
 
-# Server settings
-SERVER_HOST = "127.0.0.1"
-SERVER_PORT = 8888
-REQUEST_TIMEOUT = 600
+# Server bind host/port live in the top-level, validated config.py
+# (bind_host/bind_port). Duplicating them here caused two sources of truth, so
+# they were removed. REQUEST_TIMEOUT was dead and is gone too.
 
 # Flow settings
 WORKFLOW_TIMEOUT = 3600  # 1 hour per workflow

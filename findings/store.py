@@ -72,23 +72,27 @@ class FindingStore:
 
     def add(self, finding: Finding) -> Finding:
         """Store a finding, merging it into an existing one if already seen."""
+        with self._lock:
+            result = self._add_locked(finding)
+            self._persist()
+            return result
+
+    def _add_locked(self, finding: Finding) -> Finding:
+        """Insert/merge one finding without persisting. Caller holds the lock."""
         # Evidence comes from the target, which controls it, and routinely
         # contains credentials picked up mid-scan.
         finding.evidence = self.redactor.redact_dict(finding.evidence or {})
         finding.description = self.redactor.redact_string(finding.description or "")
 
-        with self._lock:
-            existing = self._by_fingerprint.get(finding.fingerprint)
-            if existing is not None:
-                existing.merge(finding)
-                self._persist()
-                return existing
+        existing = self._by_fingerprint.get(finding.fingerprint)
+        if existing is not None:
+            existing.merge(finding)
+            return existing
 
-            if len(self._by_fingerprint) >= self.max_findings:
-                self._evict_lowest_locked()
-            self._by_fingerprint[finding.fingerprint] = finding
-            self._persist()
-            return finding
+        if len(self._by_fingerprint) >= self.max_findings:
+            self._evict_lowest_locked()
+        self._by_fingerprint[finding.fingerprint] = finding
+        return finding
 
     def _evict_lowest_locked(self) -> None:
         """Drop the least severe, oldest finding. Caller holds the lock."""
@@ -101,7 +105,11 @@ class FindingStore:
         self._by_fingerprint.pop(victim.fingerprint, None)
 
     def add_many(self, findings: Iterable[Finding]) -> list[Finding]:
-        return [self.add(finding) for finding in findings]
+        """Insert many findings, persisting the file once for the whole batch."""
+        with self._lock:
+            out = [self._add_locked(finding) for finding in findings]
+            self._persist()
+            return out
 
     def list(
         self,
