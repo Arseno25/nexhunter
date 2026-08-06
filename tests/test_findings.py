@@ -389,6 +389,75 @@ def test_sarif_does_not_invent_file_paths():
     print("  [OK] No fabricated file paths")
 
 
+def test_attack_mapping_from_cwe():
+    """CWEs map onto MITRE ATT&CK techniques, deterministically."""
+    print("[TEST] ATT&CK mapping from CWE...")
+
+    assert _finding(cwe_ids=["CWE-89"]).attack_ids == ["T1190"]
+    assert _finding(cwe_ids=["CWE-79"]).attack_ids == ["T1059.007"]
+    assert _finding(cwe_ids=["CWE-918"]).attack_ids == ["T1090"]
+
+    # Multiple CWEs fold in, deduplicated and sorted; unknown CWEs add nothing.
+    assert _finding(cwe_ids=["CWE-89", "CWE-918", "CWE-9999"]).attack_ids == ["T1090", "T1190"]
+
+    # Explicitly set ids are kept; malformed ones are dropped.
+    assert _finding(cwe_ids=["CWE-89"], attack_ids=["T1078"]).attack_ids == ["T1078"]
+    assert _finding(attack_ids=["T12", "nonsense"]).attack_ids == []
+
+    print("  [OK] ATT&CK techniques derived from CWEs")
+
+
+def test_remediation_autofill():
+    """A concrete remediation is filled in when the tool provided none."""
+    print("[TEST] Remediation autofill...")
+
+    sqli = _finding(cwe_ids=["CWE-89"])
+    assert sqli.remediation and "parameterized" in sqli.remediation.lower()
+
+    secret = _finding(category=Category.SECRET.value)
+    assert secret.remediation and "rotate" in secret.remediation
+
+    # A remediation the tool provided is never overwritten.
+    custom = _finding(cwe_ids=["CWE-89"], remediation="custom fix")
+    assert custom.remediation == "custom fix"
+
+    # Observations are facts, not weaknesses; they get no invented fix.
+    observation = _finding(category=Category.OBSERVATION.value)
+    assert observation.remediation is None
+
+    print("  [OK] Remediation knowledge base applied")
+
+
+def test_artifacts_rendered_in_reports():
+    """Evidence files (screenshots, pcaps) surface in every report format."""
+    print("[TEST] Artifacts rendered...")
+    finding = _finding(
+        cwe_ids=["CWE-89"],
+        artifacts=["screenshots/xss-proof.png", "captures/traffic.pcap"],
+    )
+
+    markdown = to_markdown([finding])
+    assert "**Evidence artifacts**" in markdown
+    assert "`screenshots/xss-proof.png`" in markdown
+    assert "MITRE ATT&CK" in markdown
+    assert "T1190 (Exploit Public-Facing Application)" in markdown
+
+    html_report = to_html([finding])
+    assert "screenshots/xss-proof.png" in html_report
+    assert "T1190" in html_report
+
+    sarif = json.loads(to_sarif([finding]))
+    result = sarif["runs"][0]["results"][0]
+    assert result["properties"]["attack_ids"] == ["T1190"]
+    assert result["properties"]["artifacts"] == ["screenshots/xss-proof.png", "captures/traffic.pcap"]
+
+    serialized = finding.to_dict()
+    assert serialized["attack_ids"] == ["T1190"]
+    assert serialized["artifacts"] == ["screenshots/xss-proof.png", "captures/traffic.pcap"]
+
+    print("  [OK] Artifacts and ATT&CK rendered everywhere")
+
+
 def test_unknown_export_format_rejected():
     """An unknown format is an error, not a silent default."""
     print("[TEST] Unknown export format rejected...")
@@ -434,6 +503,9 @@ if __name__ == "__main__":
     test_html_escapes_untrusted_content()
     test_sarif_is_valid_and_complete()
     test_sarif_does_not_invent_file_paths()
+    test_attack_mapping_from_cwe()
+    test_remediation_autofill()
+    test_artifacts_rendered_in_reports()
     test_unknown_export_format_rejected()
     test_empty_export_is_valid()
     print("\n=== All Finding Tests Passed ===\n")
