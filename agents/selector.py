@@ -1,6 +1,6 @@
 """Intelligent tool selection -- rank and cap the registry per target.
 
-The registry holds 252 tools across 20 categories. Running all of them is both
+The registry holds 268 tools across 20 categories. Running all of them is both
 wasteful and reckless. This module is the "only the necessary tools" layer: it
 scores every tool against a target profile, an objective, and a risk ceiling,
 then returns a small, ranked shortlist plus the reasons behind each pick.

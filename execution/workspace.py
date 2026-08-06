@@ -13,6 +13,8 @@ import os
 import re
 from pathlib import Path
 
+from nexhunter.config import _default_data_dir
+
 # Identifiers become directory names, so they are restricted to characters that
 # cannot traverse, escape, or collide case-insensitively on Windows.
 _SAFE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
@@ -28,9 +30,9 @@ class WorkspaceError(Exception):
 
 
 def data_dir() -> Path:
-    """Root data directory, from NEXHUNTER_DATA_DIR or a local default."""
+    """Root data directory, from NEXHUNTER_DATA_DIR or the config default."""
     configured = os.environ.get("NEXHUNTER_DATA_DIR", "").strip()
-    return Path(configured).expanduser() if configured else Path.cwd() / "nexhunter_data"
+    return Path(configured).expanduser() if configured else _default_data_dir()
 
 
 def _check_id(value: str, kind: str) -> str:

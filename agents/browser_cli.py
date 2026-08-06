@@ -10,14 +10,26 @@ ExecutionService. Two engines:
 Output is a single JSON document on stdout so the registry parser
 (browser_json) can consume it. If Selenium is missing the tool degrades
 gracefully: it crawls statically and says so in the JSON.
+
+The engines live in nexhunter.agents.browser; this CLI is a thin wrapper
+that keeps the registry tool's JSON contract (keys below).
 """
 
 import argparse
 import json
-import re
 import sys
-from html.parser import HTMLParser
 from urllib.parse import urljoin, urlparse
+
+from nexhunter.agents.browser import (
+    ANTI_DETECT_JS,
+    _DomParser,
+    _StaticFetcher,
+    _gather_links,
+    _measure_dom_depth,
+    _status_of,
+    _title_of,
+    _wait_settle,
+)
 
 OUT: dict[str, object] = {
     "ok": False,
@@ -35,61 +47,9 @@ OUT: dict[str, object] = {
     "error": None,
 }
 
-# Anti-detection preamble: hides headless automation from window checks that
-# JS frameworks and WAFs use (navigator.webdriver, chrome properties). It also
-# installs the JS runtime collectors so pages that crash under analysis can be
-# diagnosed. Kept as one string; executed via CDP before page scripts run.
-ANTI_DETECT_JS = r"""
-Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
-window.chrome = window.chrome || {runtime: {}};
-Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
-const origQuery = window.navigator.permissions && window.navigator.permissions.query;
-if (origQuery) {
-  window.navigator.permissions.query = (p) =>
-    p && p.name === 'notifications'
-      ? Promise.resolve({state: Notification.permission})
-      : origQuery(p);
-}
-window.__nexhunter_js_errors = [];
-window.__nexhunter_console_warnings = [];
-window.__nxCap = 500;
-window.addEventListener('error', (e) => {
-  if (window.__nexhunter_js_errors.length < window.__nxCap) window.__nexhunter_js_errors.push(String(e.message));
-});
-window.addEventListener('unhandledrejection', (e) => {
-  if (window.__nexhunter_js_errors.length < window.__nxCap)
-    window.__nexhunter_js_errors.push('unhandledrejection: ' + String(e.reason));
-});
-const __nxConsoleError = console.error.bind(console);
-console.error = (...args) => {
-  if (window.__nexhunter_console_warnings.length < window.__nxCap)
-    window.__nexhunter_console_warnings.push(args.map(String).join(' '));
-  __nxConsoleError(...args);
-};
-"""
-
-
-class _LinkParser(HTMLParser):
-    def __init__(self):
-        super().__init__()
-        self.links = []
-        self.scripts = 0
-        self.forms = 0
-
-    def handle_starttag(self, tag, attrs):
-        attrs = dict(attrs)
-        if tag == "a" and attrs.get("href"):
-            self.links.append(attrs["href"])
-        elif tag == "script":
-            self.scripts += 1
-        elif tag == "form":
-            self.forms += 1
-
 
 def _static_crawl(url: str, wait: int) -> None:
     """Fallback engine: urllib + HTMLParser, no JavaScript execution."""
-    import urllib.request
-
     OUT["engine"] = "stdlib"
     OUT["url"] = url
     OUT["note"] = (
@@ -98,22 +58,18 @@ def _static_crawl(url: str, wait: int) -> None:
     if urlparse(url).scheme not in ("http", "https"):
         OUT["error"] = f"refusing non-http(s) url: {url}"
         return
-    req = urllib.request.Request(url, headers={"User-Agent": "nexhunter/2.0 (+https://github.com/Arseno25/nexhunter)"})  # noqa: S310 - scheme validated above
-    try:
-        with urllib.request.urlopen(req, timeout=max(10, wait)) as resp:  # nosec B310 - http/https only, scheme validated above
-            body = resp.read(65536).decode("utf-8", errors="replace")
-            OUT["status"] = resp.status
-            OUT["headers"] = {k: v for k, v in resp.headers.items()}
-    except Exception as exc:  # noqa: BLE001 - degraded path reports, not raises
-        OUT["error"] = f"static fetch failed: {exc}"
+    fetcher = _StaticFetcher(url, timeout=max(10, wait))
+    if not fetcher.fetch():
+        OUT["error"] = fetcher.error or "static fetch failed"
         return
-    parser = _LinkParser()
-    parser.feed(body)
-    m = re.search(r"(?is)<title[^>]*>(.*?)</title>", body)
-    OUT["title"] = m.group(1).strip() if m else ""
+    parser = _DomParser()
+    parser.feed(fetcher.html)
+    OUT["status"] = fetcher.status
+    OUT["headers"] = fetcher.headers
+    OUT["title"] = _title_of(fetcher.html)
     OUT["links"] = [urljoin(url, href) for href in parser.links]
-    OUT["scripts_found"] = parser.scripts
-    OUT["forms_found"] = parser.forms
+    OUT["scripts_found"] = len(parser.scripts)
+    OUT["forms_found"] = len(parser.forms)
     OUT["ok"] = True
 
 
@@ -150,12 +106,13 @@ def _selenium_crawl(url: str, wait: int, screenshot: bool, dom_depth: int) -> No
         # ponytail: real response headers come from a plain HTTP fetch; the
         # Performance API never exposes responseHeaders. BiDi is the upgrade
         # path if live interception is ever needed.
-        OUT["headers"] = _fetch_headers(url, wait)
+        static = _StaticFetcher(url, timeout=max(10, wait))
+        OUT["headers"] = static.headers if static.fetch() else {}
         OUT["links"] = list(dict.fromkeys(h for h in _gather_links(driver) if _is_http(h)))[:500]
         OUT["scripts_found"] = len(driver.find_elements(By.TAG_NAME, "script"))
         OUT["forms_found"] = len(driver.find_elements(By.TAG_NAME, "form"))
         if dom_depth > 0:
-            OUT["dom_depth"] = _measure_dom_depth(driver, dom_depth)
+            OUT["dom_depth"] = _measure_dom_depth(driver)
         if screenshot:
             shot = driver.save_screenshot("screenshot.png")
             OUT["screenshot"] = bool(shot)
@@ -167,87 +124,6 @@ def _selenium_crawl(url: str, wait: int, screenshot: bool, dom_depth: int) -> No
             driver.quit()
         except Exception as exc:  # noqa: BLE001
             sys.stderr.write(f"driver quit failed: {exc}\n")
-
-
-def _wait_settle(driver, stable_ms: int = 3000, max_ms: int = 8000) -> None:
-    """Explicit wait for dynamic content: polls until the resource count
-    stops growing, so SPAs that render after XHRs are captured. Replaces
-    implicit waits/fixed sleeps (Selenium best practice). Stability is
-    measured from the last observed count change, not the start."""
-    try:
-        driver.execute_async_script(
-            "const done = arguments[arguments.length - 1];"
-            "const stableMs = arguments[0];"
-            "const maxMs = arguments[1];"
-            "let last = 0, t0 = Date.now(), lastChange = t0;"
-            "const check = () => {"
-            "  const n = performance.getEntriesByType('resource').length;"
-            "  const now = Date.now();"
-            "  if (n !== last) { last = n; lastChange = now; }"
-            "  if (now - lastChange >= stableMs || now - t0 > maxMs) return done();"
-            "  setTimeout(check, 250);"
-            "};"
-            "check();",
-            stable_ms,
-            max_ms,
-        )
-    except Exception:  # noqa: BLE001, S110 - settle wait is best-effort
-        pass
-
-
-def _fetch_headers(url: str, wait: int) -> dict:
-    """Real response headers for the document, via a plain HTTP request."""
-    import urllib.request
-
-    if urlparse(url).scheme not in ("http", "https"):
-        return {}
-    try:
-        req = urllib.request.Request(  # noqa: S310 - scheme validated above
-            url, headers={"User-Agent": "nexhunter/2.0 (+https://github.com/Arseno25/nexhunter)"}
-        )
-        with urllib.request.urlopen(req, timeout=max(10, wait)) as resp:  # nosec B310 - http/https only, scheme validated above
-            return {k: v for k, v in resp.headers.items()}
-    except Exception:  # noqa: BLE001
-        return {}
-
-
-def _status_of(driver) -> int:
-    try:
-        nav = driver.execute_script("return performance.getEntriesByType('navigation')[0]?.toJSON() || null")
-        if nav and nav.get("responseStatus"):
-            return nav["responseStatus"]
-        for entry in _performance_entries(driver):
-            if entry.get("responseStatus"):
-                return entry["responseStatus"]
-    except Exception:  # noqa: BLE001, S110 - degraded read, default status
-        pass
-    return 0
-
-
-def _performance_entries(driver) -> list:
-    try:
-        return driver.execute_script("return performance.getEntriesByType('resource').map(e => e.toJSON())") or []
-    except Exception:  # noqa: BLE001
-        return []
-
-
-def _gather_links(driver) -> list:
-    try:
-        return driver.execute_script("return Array.from(document.querySelectorAll('a[href]')).map(a => a.href)") or []
-    except Exception:  # noqa: BLE001
-        return []
-
-
-def _measure_dom_depth(driver, limit: int) -> int:
-    try:
-        return int(
-            driver.execute_script(
-                "let d=0;function w(n,l){l++;if(l>d)d=l;for(const c of n.children)w(c,l)}w(document.body,0);return d;"
-            )
-            or 0
-        )
-    except Exception:  # noqa: BLE001
-        return 0
 
 
 def _is_http(href: str) -> bool:
