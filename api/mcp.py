@@ -188,6 +188,16 @@ def optimize_parameters(tool: str) -> str:
 
 
 @mcp.tool()
+def cve_monitor(days: int = 7, severity: str = "", keyword: str = "",
+                limit: int = 20) -> str:
+    """Recent NVD CVEs (window in days, optional severity/keyword filter)
+    ranked by exploitability (kind, CVSS, PoC hints)."""
+    return _render(api("/api/agents/cve_watch", {
+        "days": days, "severity": severity, "keyword": keyword, "limit": limit,
+    }), indent=1)
+
+
+@mcp.tool()
 def run_tool(tool: str, params: str = "{}", async_run: bool = False, direct: bool = True) -> str:
     """Run a registered tool by name with JSON params (async_run=True returns pid immediately).
 
@@ -199,6 +209,110 @@ def run_tool(tool: str, params: str = "{}", async_run: bool = False, direct: boo
     """
     parsed = json.loads(params) if params else {}
     return _render(api("/api/command", {"tool": tool, "params": parsed, "async": async_run, "direct": direct}), indent=1)
+
+
+@mcp.tool()
+def run_with_recovery(tool: str, params: str = "{}", max_attempts: int = 3) -> str:
+    """Run a registered tool with automatic failure recovery.
+
+    On failure the run is retried along the cheapest viable path:
+    reduced scope (fewer threads/gentler timing/smaller port range), then
+    backoff, then an equivalent alternative tool. Returns the final result
+    with a 'recovery' trail of attempts.
+    """
+    parsed = json.loads(params) if params else {}
+    return _render(api("/api/recover", {"tool": tool, "params": parsed, "max_attempts": max_attempts}), indent=1)
+
+
+@mcp.tool()
+def http_repeater(request: str) -> str:
+    """Fire one hand-tuned HTTP request and return the full response.
+
+    request = JSON: {"method": "GET", "url": "https://x/", "headers": {}, "body": ""}
+    """
+    return _render(api("/api/web/repeater", {"request": json.loads(request) if request else {}}), indent=1)
+
+
+@mcp.tool()
+def http_intruder(request: str, payloads: str) -> str:
+    """Sniper-style parameter fuzzing on an authorized target.
+
+    Mark injection points in the URL/body with '§' (e.g.
+    /user?id=§1§); each payload replaces every marker. payloads = JSON list
+    of strings. Returns status distribution and anomalies.
+    """
+    try:
+        req = json.loads(request) if request else {}
+        pays = json.loads(payloads) if payloads else []
+    except json.JSONDecodeError:
+        return json.dumps({"ok": False, "error": "request/payloads must be valid JSON"})
+    return _render(api("/api/web/intruder", {"request": req, "payloads": pays}), indent=1)
+
+
+@mcp.tool()
+def http_spider(url: str, max_pages: int = 50) -> str:
+    """Crawl a site from a seed URL (same-origin only) and list pages found."""
+    return _render(api("/api/web/spider", {"url": url, "max_pages": max_pages}), indent=1)
+
+
+@mcp.tool()
+def proxy_start(port: int = 8080, rules: str = "[]") -> str:
+    """Start the localhost-only logging proxy (match-replace rules = JSON list
+    of {"match": "regex", "replace": "..."})."""
+    try:
+        parsed_rules = json.loads(rules) if rules else []
+    except json.JSONDecodeError:
+        return json.dumps({"ok": False, "error": "rules must be valid JSON"})
+    return _render(api("/api/web/proxy/start", {"port": port, "rules": parsed_rules}), indent=1)
+
+
+@mcp.tool()
+def proxy_stop(port: int = 8080) -> str:
+    """Stop the localhost-only logging proxy."""
+    return _render(api("/api/web/proxy/stop", {"port": port}), indent=1)
+
+
+@mcp.tool()
+def proxy_logs(port: int = 8080) -> str:
+    """Requests seen by the localhost-only logging proxy."""
+    return _render(api("/api/web/proxy/logs", {"port": port}), indent=1)
+
+
+@mcp.tool()
+def attack_chain(chain: str, target: str, domain: str = "", host: str = "",
+                 username: str = "", wordlist: str = "") -> str:
+    """Build a named attack chain (each step: tool, params, gate, availability)
+    scored with a success probability. Call with chain='' to list patterns.
+    Patterns include recon_sweep, web_rce, ssrf_internal, credential_capture,
+    api_abuse. Nothing executes; this is planning only."""
+    return _render(api("/api/attack-chain", {
+        "chain": chain, "target": target, "domain": domain, "host": host,
+        "username": username, "wordlist": wordlist,
+    }), indent=1)
+
+
+@mcp.tool()
+def file_list(path: str = "") -> str:
+    """List a readable directory (defaults to the lab allow root)."""
+    return _render(api("/api/file/list", {"path": path}), indent=1)
+
+
+@mcp.tool()
+def file_read(path: str) -> str:
+    """Read a file, capped at max_bytes."""
+    return _render(api("/api/file/read", {"path": path}), indent=1)
+
+
+@mcp.tool()
+def file_write(path: str, content: str) -> str:
+    """Write a file under the allow root only (lab sandbox)."""
+    return _render(api("/api/file/write", {"path": path, "content": content}), indent=1)
+
+
+@mcp.tool()
+def python_run(code: str, timeout: int = 60) -> str:
+    """Run a short Python snippet in an isolated scratch cwd (capped output)."""
+    return _render(api("/api/python/run", {"code": code, "timeout": timeout}), indent=1)
 
 
 @mcp.tool()
@@ -217,6 +331,18 @@ def process_status(pid: int) -> str:
 def process_terminate(pid: int) -> str:
     """Kill a tracked process."""
     return _render(api(f"/api/processes/terminate/{pid}", {}), indent=1)
+
+
+@mcp.tool()
+def process_pause(pid: int) -> str:
+    """Pause a running process (SIGSTOP). Use for long scans; the run timeout still applies."""
+    return _render(api(f"/api/processes/pause/{pid}", {}), indent=1)
+
+
+@mcp.tool()
+def process_resume(pid: int) -> str:
+    """Resume a paused process (SIGCONT)."""
+    return _render(api(f"/api/processes/resume/{pid}", {}), indent=1)
 
 
 @mcp.tool()

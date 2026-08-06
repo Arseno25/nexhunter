@@ -30,7 +30,7 @@ flowchart LR
     C[CLI] --> E
     D[Autonomous loop] --> E
 
-    E -->|1. lookup| R[(Registry - 252 ToolSpecs)]
+    E -->|1. lookup| R[(Registry - 255 ToolSpecs)]
     R -->|2. typed validation| V{valid params?}
     V -->|no| X[refused - nothing runs]
     V -->|yes| G[3. build argv - no shell]
@@ -63,7 +63,7 @@ exact same code. Follow one call, and you have followed them all.
 The parameters the caller sent and the argv that ran are different things, and
 only the builder — project code, never model output — can produce the second.
 
-## The registry: 252 tools, one shape
+## The registry: 255 tools, one shape
 
 Every tool is a `ToolSpec` with the same anatomy:
 
@@ -82,6 +82,22 @@ asks for stable, passive tools only. Without a `--profile` flag the bridge
 defaults to `nexhunter-full` — the whole non-destructive registry. A client is
 shown the slice for its job when one is chosen; with the default it sees
 everything.
+
+### Fine-grained variants: `*_advanced_scan`
+
+Three registered tools expose scan tuning as discrete typed parameters instead
+of a free-form command line — the same no-passthrough contract as everything
+else in the registry:
+
+| Tool | Added knobs (all typed) | Output |
+|---|---|---|
+| `nmap_advanced_scan` | `os_detection`, `version_detection`, `aggressive`, `stealth`, `nse_scripts`, `ports`, `timing` | `-oX -` parsed by the `nmap_xml` parser |
+| `masscan_advanced_scan` | `rate`, `threads`, `ports` | `-oG -` parsed by the new `masscan_grep` parser |
+| `ffuf_advanced_scan` | `wordlists` (comma-separated, one `-w` each), `method`, `filter_status`, `matcher_status`, `threads` | silent mode |
+
+There is deliberately no `--additional-args` passthrough: each flag is a named
+boolean/integer/string parameter validated server-side, so the builder output
+stays a fixed argv in every case.
 
 ## The loop: autonomous assessment
 

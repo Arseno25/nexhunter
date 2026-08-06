@@ -46,6 +46,24 @@ Key Endpoints:
     GET  /api/processes/list              Active processes
     GET  /api/processes/status/<pid>      Process status
     POST /api/processes/terminate/<pid>   Kill process
+    POST /api/processes/pause/<id>        Pause a running process (SIGSTOP)
+    POST /api/processes/resume/<id>       Resume a paused process (SIGCONT)
+  Resilience:
+    POST /api/recover                     Run tool with auto-recovery (classify
+                                          -> reduced scope -> backoff -> switch)
+  HTTP Lab (Burp-style helpers):
+    POST /api/web/repeater               One hand-tuned request, full response
+    POST /api/web/intruder               Sniper fuzz over §marked§ positions
+    POST /api/web/spider                 Same-origin crawl from a seed URL
+    POST /api/web/proxy/start|stop       Localhost logging proxy (+/rules)
+    GET  /api/web/proxy/logs             Requests the proxy saw
+  Planning & Intelligence:
+    POST /api/attack-chain               Named attack chain, scored for this box
+    POST /api/agents/cve_watch           Recent NVD CVEs ranked by exploitability
+    GET  /api/intelligence/analyze-target
+  Lab Utilities:
+    POST /api/file/list|read|write       Files (writes confined to allow root)
+    POST /api/python/run                 Run a snippet in an isolated cwd
 
 Run:
     python -m nexhunter.api.server [--port 8888]
@@ -79,6 +97,12 @@ from nexhunter.findings.store import FindingStore
 from nexhunter.workflows.orchestrator import AutonomousOrchestrator
 from nexhunter.agents.param_optimizer import optimize_preview
 from nexhunter import config as nexhunter_config
+from nexhunter.execution.http_lab import (
+    repeater as http_repeater,
+    intruder as http_intruder,
+    spider as http_spider,
+    LabProxy,
+)
 
 log = logging.getLogger("nexhunter.server")
 
@@ -148,6 +172,107 @@ def _analyze_target(target):
         "cve_lookup": cve.get("cves_by_tech", {}),
         "top_critical": cve.get("top_critical", []),
     }
+
+
+def _build_attack_chain(body):
+    """Build a named attack chain, scored for this box."""
+    from nexhunter.execution.attack_chain import build_chain
+
+    name = body.get("chain", body.get("name", ""))
+    if not name:
+        from nexhunter.execution.attack_chain import list_patterns
+
+        return {"ok": True, "patterns": list_patterns()}
+    return build_chain(
+        name,
+        body.get("target", ""),
+        domain=body.get("domain", ""),
+        host=body.get("host", ""),
+        username=body.get("username", ""),
+        wordlist=body.get("wordlist", ""),
+    )
+
+
+def _sandbox_list(body):
+    from nexhunter.execution.sandbox import list_dir
+
+    return list_dir(body.get("path", ""), limit=body.get("limit", 500))
+
+
+def _sandbox_read(body):
+    from nexhunter.execution.sandbox import read_file
+
+    return read_file(body.get("path", ""), max_bytes=body.get("max_bytes", 200_000))
+
+
+def _sandbox_write(body):
+    from nexhunter.execution.sandbox import write_file
+
+    return write_file(body.get("path", ""), body.get("content", ""))
+
+
+def _sandbox_python(body):
+    from nexhunter.execution.sandbox import python_run
+
+    return python_run(body.get("code", ""), timeout=body.get("timeout", 60))
+
+
+def _run_with_recovery(tool_name, params, max_attempts=3, direct=True):
+    """Recovery-wrapped execution against the single execution path (EXEC)."""
+    from nexhunter.execution.recovery import ExecutionRecovery
+
+    recovery = ExecutionRecovery(
+        service=EXEC, max_attempts=max_attempts, use_backoff=True
+    )
+    return recovery.execute(tool_name, params, direct=direct)
+
+
+# Lab proxies (localhost-only testing) started via /api/web/proxy/start.
+_LAB_PROXIES: dict = {}
+
+
+def _proxy_route(path, body=None):
+    """HTTP testing lab routes shared by GET and POST dispatch."""
+    if path == "/api/web/repeater":
+        return http_repeater(body.get("request", {}),
+                             timeout=int(body.get("timeout", 15)))
+    if path == "/api/web/intruder":
+        return http_intruder(
+            body.get("request", {}),
+            body.get("payloads", []),
+            timeout=int(body.get("timeout", 15)),
+            workers=int(body.get("workers", 5)),
+        )
+    if path == "/api/web/spider":
+        return http_spider(
+            body.get("url", ""),
+            max_pages=int(body.get("max_pages", 50)),
+            timeout=int(body.get("timeout", 15)),
+        )
+    if path == "/api/web/proxy/start":
+        port = int(body.get("port", 8080))
+        key = (body.get("host", "127.0.0.1"), port)
+        proxy = LabProxy(
+            host=key[0], port=port, rules=body.get("rules", [])
+        )
+        result = proxy.start()
+        _LAB_PROXIES[key] = proxy
+        return result
+    if path == "/api/web/proxy/stop":
+        port = int(body.get("port", 8080))
+        key = (body.get("host", "127.0.0.1"), port)
+        proxy = _LAB_PROXIES.pop(key, None)
+        if proxy is None:
+            return {"ok": False, "error": f"no proxy on {key[0]}:{port}"}
+        return proxy.stop()
+    if path == "/api/web/proxy/logs":
+        port = int(body.get("port", 8080))
+        key = (body.get("host", "127.0.0.1"), port)
+        proxy = _LAB_PROXIES.get(key)
+        if proxy is None:
+            return {"ok": False, "error": f"no proxy on {key[0]}:{port}"}
+        return {"ok": True, "logs": proxy.request_logs()}
+    return None
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -232,6 +357,23 @@ class Handler(BaseHTTPRequestHandler):
             direct=bool(body.get("direct", True)),
         )
 
+    def _recover(self, body):
+        """Run a tool with automatic failure recovery.
+
+        Classifies the failure and retries along the cheapest viable path:
+        reduced scope, backoff, equivalent alternative tool, or stops for a
+        human. Execution still goes through EXEC (one execution path).
+        """
+        tool_name = body.get("tool")
+        if not tool_name:
+            return {"ok": False, "error": "missing 'tool'", "code": "TOOL_REQUIRED"}
+        return _run_with_recovery(
+            tool_name,
+            body.get("params", {}),
+            max_attempts=int(body.get("max_attempts", 3)),
+            direct=bool(body.get("direct", True)),
+        )
+
     def _start_autonomous(self, body):
         """Kick off an adaptive autonomous run, or an AI-proposed plan."""
         target = body.get("target")
@@ -305,6 +447,8 @@ class Handler(BaseHTTPRequestHandler):
             self._json(200, [{"name": a.name, "desc": a.desc} for a in AGENTS.values()])
         elif path == "/api/processes/list":
             self._json(200, {"ok": True, "processes": EXEC.list_processes()})
+        elif path.startswith("/api/web/proxy/logs"):
+            self._json(200, _proxy_route("/api/web/proxy/logs", {}))
         elif path == "/api/findings":
             self._json(200, json.loads(ENGINE.report("json")))
         elif path == "/api/tools":
@@ -415,6 +559,20 @@ class Handler(BaseHTTPRequestHandler):
         fn = None
         if path == "/api/command":
             fn = lambda: self._command(body)
+        elif path == "/api/recover":
+            fn = lambda: self._recover(body)
+        elif path.startswith("/api/web/"):
+            fn = lambda: _proxy_route(path, body)
+        elif path == "/api/attack-chain":
+            fn = lambda: _build_attack_chain(body)
+        elif path == "/api/file/list":
+            fn = lambda: _sandbox_list(body)
+        elif path == "/api/file/read":
+            fn = lambda: _sandbox_read(body)
+        elif path == "/api/file/write":
+            fn = lambda: _sandbox_write(body)
+        elif path == "/api/python/run":
+            fn = lambda: _sandbox_python(body)
         elif path == "/api/cache/clear":
             fn = lambda: {"ok": True, "cleared": EXEC.cache.clear()}
         elif path == "/api/autonomous":
@@ -473,6 +631,14 @@ class Handler(BaseHTTPRequestHandler):
             fn = lambda: EXEC.terminate_process(path.rsplit("/", 1)[1])
         elif path == "/api/processes/terminate":
             fn = lambda: EXEC.terminate_process(body.get("pid") or body.get("execution_id", ""))
+        elif path.startswith("/api/processes/pause/"):
+            fn = lambda: EXEC.pause_process(path.rsplit("/", 1)[1])
+        elif path == "/api/processes/pause":
+            fn = lambda: EXEC.pause_process(body.get("pid") or body.get("execution_id", ""))
+        elif path.startswith("/api/processes/resume/"):
+            fn = lambda: EXEC.resume_process(path.rsplit("/", 1)[1])
+        elif path == "/api/processes/resume":
+            fn = lambda: EXEC.resume_process(body.get("pid") or body.get("execution_id", ""))
         elif path in ("/api/probe", "/api/portscan", "/api/webscan", "/api/recon", "/api/assess"):
             engine_flow = {"target": body.get("target", ""), "ports": body.get("ports", ""), "domain": body.get("domain", "")}
             fn = {

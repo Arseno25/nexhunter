@@ -1,6 +1,7 @@
 """Granular process management on the single execution path."""
 
 import os
+import signal
 import sys
 import time
 import tempfile
@@ -107,6 +108,46 @@ def test_unknown_process_reported(tmp: Path):
     assert service.terminate_process(999999)["code"] == "NOT_FOUND"
     assert service.list_processes() == []
     print("  [OK] Unknown pid reported cleanly")
+
+
+def test_pause_and_resume(tmp: Path):
+    """Pause (SIGSTOP) and resume (SIGCONT) a running async execution."""
+    if not hasattr(signal, "SIGSTOP"):
+        return
+    service = _service(tmp)
+    _register_sleeper("sleeper_pause", seconds=30)
+    try:
+        start = service.execute(
+            tool_name="sleeper_pause", params={"target": "x"},
+            run_async=True, direct=False,
+        )
+        exec_id = start["execution_id"]
+        record = _wait_running(service, exec_id)
+        assert record and record.pid
+
+        paused = service.pause_process(record.pid)
+        assert paused["ok"] is True
+        assert paused["status"] == "paused"
+        # The process really is stopped now.
+        try:
+            os.kill(record.pid, 0)
+        except OSError:
+            assert False, "process vanished"
+        views = service.list_processes()
+        assert any(v["paused"] for v in views)
+
+        resumed = service.resume_process(exec_id)
+        assert resumed["ok"] is True
+        assert resumed["status"] == "running"
+        assert not any(v["paused"] for v in service.list_processes())
+    finally:
+        T.TOOLS.pop("sleeper_pause", None)
+        # Never leave a stray sleeper behind.
+        for record in service.list_processes():
+            service.terminate_process(record["execution_id"])
+    for record in service._running_records():
+        _wait_terminal(service, record.id, deadline=5)
+    print("  [OK] Pause and resume round-trip")
 
 
 if __name__ == "__main__":

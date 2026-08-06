@@ -195,7 +195,7 @@ The bridge decides what a client is *shown*. The service decides what is
 
 ```mermaid
 flowchart LR
-    REG[(Tool registry<br/>~252 tools)] --> F{Profile filter<br/>category · risk · maturity}
+    REG[(Tool registry<br/>~255 tools)] --> F{Profile filter<br/>category · risk · maturity}
     F --> C[core · 12]
     F --> RC[recon · 23]
     F --> W[web · 37]

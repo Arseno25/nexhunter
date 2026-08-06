@@ -11,6 +11,7 @@ Order of operations:
 
 import logging
 import os
+import signal
 import sys
 import tempfile
 import threading
@@ -77,6 +78,9 @@ class ExecutionService:
         self._outputs: "OrderedDict[str, tuple]" = OrderedDict()
         self._outputs_lock = threading.Lock()
         self._max_outputs = 200
+        # Execution ids whose processes are currently paused (SIGSTOP).
+        self._paused: "set[str]" = set()
+        self._paused_lock = threading.Lock()
 
     def execute(
         self,
@@ -389,8 +393,7 @@ class ExecutionService:
                 return record
         return None
 
-    @staticmethod
-    def _process_view(record: ExecutionRecord) -> Dict[str, Any]:
+    def _process_view(self, record: ExecutionRecord) -> Dict[str, Any]:
         return {
             "pid": record.pid,
             "execution_id": record.id,
@@ -398,6 +401,7 @@ class ExecutionService:
             "target": record.target,
             "risk_level": record.risk_level,
             "status": record.status.value,
+            "paused": record.id in self._paused,
             "uptime_s": record.duration_seconds,
         }
 
@@ -426,6 +430,48 @@ class ExecutionService:
         if record is None:
             return _error("NOT_FOUND", f"no running process: {ident}")
         return self.terminate(record.id)
+
+    def _signal_process(self, ident, sig, want_paused: bool):
+        """Internal: STOP/CONT a running process, tracked by execution id."""
+        record = self._resolve(ident)
+        if record is None:
+            return _error("NOT_FOUND", f"no running process: {ident}")
+        with self._paused_lock:
+            already = record.id in self._paused
+            if want_paused == already:
+                return {
+                    "ok": True, "pid": record.pid,
+                    "execution_id": record.id,
+                    "status": "paused" if already else "running",
+                }
+        try:
+            os.kill(record.pid, signal.SIGSTOP if want_paused else signal.SIGCONT)
+        except ProcessLookupError:
+            return _error("NOT_RUNNING", f"process {record.pid} is no longer running")
+        except PermissionError as exc:
+            return _error("PERMISSION_DENIED", str(exc))
+        with self._paused_lock:
+            if want_paused:
+                self._paused.add(record.id)
+            else:
+                self._paused.discard(record.id)
+        return {
+            "ok": True, "pid": record.pid, "execution_id": record.id,
+            "status": "paused" if want_paused else "running",
+        }
+
+    def pause_process(self, ident) -> Dict[str, Any]:
+        """Pause a running process (SIGSTOP).
+
+        Honest caveat: the supervisor still owns the run time limit, so pausing
+        a job near its deadline can let the timeout fire while it is stopped.
+        Pause is for controlling long scans, not for extending deadlines.
+        """
+        return self._signal_process(ident, signal.SIGSTOP, True)
+
+    def resume_process(self, ident) -> Dict[str, Any]:
+        """Resume a previously paused process (SIGCONT)."""
+        return self._signal_process(ident, signal.SIGCONT, False)
 
     def _tail_workspace(self, record: ExecutionRecord, lines: int = 50) -> str:
         """Last few lines of a running execution's stdout, redacted."""

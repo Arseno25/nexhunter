@@ -2,6 +2,7 @@
 
 import importlib.util
 import json
+import re
 import shutil
 import subprocess
 from defusedxml import ElementTree as ET
@@ -299,16 +300,108 @@ class ToolSpec:
         return self.builder(normalized)
 
 
+def _build_nmap_advanced(p: dict) -> list:
+    """Build an nmap argv from advanced scan knobs."""
+    argv = ["nmap"]
+    if p.get("aggressive"):
+        argv += ["-A"]
+    else:
+        if p.get("os_detection"):
+            argv += ["-O"]
+        if p.get("version_detection", True):
+            argv += ["-sV"]
+    if p.get("stealth"):
+        argv += ["-sS", "-T1", "-n", "-Pn"]
+    else:
+        argv += [f"-T{p.get('timing', '4')}"]
+    if p.get("nse_scripts"):
+        argv += ["--script", p["nse_scripts"]]
+    if p.get("ports"):
+        argv += ["-p", p["ports"]]
+    argv += ["-oX", "-"]
+    argv += [p["target"]]
+    return argv
+
+
+def _build_masscan_advanced(p: dict) -> list:
+    """Build a masscan argv with rate and thread control."""
+    argv = ["masscan", p["target"], "-p", p["ports"], "-oG", "-",
+            "--rate", str(p["rate"])]
+    if p.get("threads"):
+        argv += ["--threads", str(p["threads"])]
+    return argv
+
+
+def _build_ffuf_advanced(p: dict) -> list:
+    """Build an ffuf argv with one wordlist per comma-separated entry.
+
+    The target URL keeps its FUZZ-style markers; each wordlist is paired with
+    the keyword at the same position, or plain FUZZ when no markers exist.
+    """
+    argv = ["ffuf", "-u", p["target"], "-t", str(p["threads"]), "-s"]
+    wordlists = [w.strip() for w in str(p["wordlists"]).split(",") if w.strip()]
+    for wordlist in wordlists:
+        argv += ["-w", wordlist]
+    if p.get("method"):
+        argv += ["-X", str(p["method"])]
+    if p.get("filter_status"):
+        argv += ["-fs", str(p["filter_status"])]
+    if p.get("matcher_status"):
+        argv += ["-mc", str(p["matcher_status"])]
+    return argv
+
+
 _tool_specs = {
-    # ==================== RECONNAISSANCE (OSINT) ====================
     "nmap_scan": ToolSpec(
         name="nmap_scan", binary="nmap", description="Port/service discovery",
         params={"target": None, "ports": "", "timing": "4"}, timeout=300,
         builder=lambda p: ["nmap", "-sV", f"-T{p['timing']}", "-oX", "-"] + (["-p", p["ports"]] if p["ports"] else []) + [p["target"]]),
+    "nmap_advanced_scan": ToolSpec(
+        name="nmap_advanced_scan", binary="nmap",
+        description="Nmap with fine control: OS detection, version detection, "
+                    "aggressive, stealth, NSE scripts, and timing",
+        params={
+            "target": None, "ports": "", "timing": "4",
+            "os_detection": False, "version_detection": True,
+            "aggressive": False, "stealth": False,
+            "nse_scripts": "",
+        },
+        timeout=600,
+        param_specs=(
+            P.ParamSpec(name="target", type=P.ParamType.TARGET, required=True),
+            P.ParamSpec(name="ports", type=P.ParamType.PORT_RANGE, default=""),
+            P.ParamSpec(name="timing", type=P.ParamType.STRING, default="4"),
+            P.ParamSpec(name="os_detection", type=P.ParamType.BOOLEAN, default=False),
+            P.ParamSpec(name="version_detection", type=P.ParamType.BOOLEAN, default=True),
+            P.ParamSpec(name="aggressive", type=P.ParamType.BOOLEAN, default=False),
+            P.ParamSpec(name="stealth", type=P.ParamType.BOOLEAN, default=False),
+            P.ParamSpec(name="nse_scripts", type=P.ParamType.STRING, default=""),
+        ),
+        builder=_build_nmap_advanced,
+        category="recon", risk_level="active", maturity="beta", cacheable=True,
+        parser="nmap_xml",
+    ),
     "masscan": ToolSpec(
         name="masscan", binary="masscan", description="Fast port scanner",
         params={"target": None, "ports": "1-65535", "rate": 1000}, timeout=600,
-        builder=lambda p: ["masscan", p["target"], "-p", p["ports"], "-oG", "-", "--rate", str(p["rate"])]),
+        builder=lambda p: ["masscan", p["target"], "-p", p["ports"], "-oG", "-", "--rate", str(p["rate"])],
+        category="recon", risk_level="active", parser="masscan_grep",
+    ),
+    "masscan_advanced_scan": ToolSpec(
+        name="masscan_advanced_scan", binary="masscan",
+        description="Masscan with rate control and thread tuning",
+        params={"target": None, "ports": "1-65535", "rate": 1000, "threads": ""},
+        timeout=600,
+        param_specs=(
+            P.ParamSpec(name="target", type=P.ParamType.TARGET, required=True),
+            P.ParamSpec(name="ports", type=P.ParamType.PORT_RANGE, default="1-65535"),
+            P.ParamSpec(name="rate", type=P.ParamType.INTEGER, default=1000, minimum=1),
+            P.ParamSpec(name="threads", type=P.ParamType.INTEGER, default=None),
+        ),
+        builder=_build_masscan_advanced,
+        category="recon", risk_level="active", maturity="beta", cacheable=True,
+        parser="masscan_grep",
+    ),
     "rustscan": ToolSpec(
         name="rustscan", binary="rustscan", description="Fast port scanner in Rust",
         params={"target": None}, timeout=300,
@@ -351,6 +444,24 @@ _tool_specs = {
         name="ffuf_scan", binary="ffuf", description="Web content fuzzer",
         params={"target": None, "wordlist": None, "filter_status": "", "threads": 40}, timeout=300,
         builder=lambda p: ["ffuf", "-u", p["target"].rstrip("/") + "/FUZZ", "-w", p["wordlist"], "-t", str(p["threads"])] + (["-fs", p["filter_status"]] if p["filter_status"] else [])),
+    "ffuf_advanced_scan": ToolSpec(
+        name="ffuf_advanced_scan", binary="ffuf",
+        description="Ffuf with multiple keyword wordlists (comma-separated), "
+                    "method, and matcher/filter status",
+        params={"target": None, "wordlists": None, "threads": 40, "method": "",
+                "filter_status": "", "matcher_status": ""},
+        timeout=600,
+        param_specs=(
+            P.ParamSpec(name="target", type=P.ParamType.URL, required=True),
+            P.ParamSpec(name="wordlists", type=P.ParamType.STRING, required=True),
+            P.ParamSpec(name="threads", type=P.ParamType.INTEGER, default=40, minimum=1),
+            P.ParamSpec(name="method", type=P.ParamType.STRING, default=""),
+            P.ParamSpec(name="filter_status", type=P.ParamType.STRING, default=""),
+            P.ParamSpec(name="matcher_status", type=P.ParamType.STRING, default=""),
+        ),
+        builder=_build_ffuf_advanced,
+        category="web", risk_level="active", maturity="beta", cacheable=True,
+    ),
     "gobuster_dir": ToolSpec(
         name="gobuster_dir", binary="gobuster", description="Directory brute force",
         params={"target": None, "wordlist": None, "extensions": "", "threads": 40}, timeout=300,
@@ -1570,6 +1681,25 @@ def _parse_dnsx(text):
     return out
 
 
+def _parse_masscan_grep(text):
+    """masscan -oG output: "Host: 1.2.3.4 () Ports: 80/open/tcp..."."""
+    out = []
+    for line in text.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        host = None
+        m = re.match(r"Host:\s*([^\s()]+)", line)
+        if m:
+            host = m.group(1)
+        ports = re.findall(r"([0-9]+)/open/", line)
+        for port in ports:
+            out.append({"host": host, "port": port})
+        if host and not ports:
+            out.append({"host": host, "port": "*"})
+    return out
+
+
 PARSERS = {
     "nmap_xml": _parse_nmap_xml,
     "httpx": _parse_httpx,
@@ -1579,6 +1709,7 @@ PARSERS = {
     "hosts": _parse_hosts,
     "host_port": _parse_host_port,
     "dnsx_resp": _parse_dnsx,
+    "masscan_grep": _parse_masscan_grep,
 }
 
 TOOLS = _tool_specs
