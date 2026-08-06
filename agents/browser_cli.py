@@ -36,13 +36,13 @@ OUT: dict[str, object] = {
 }
 
 # Anti-detection preamble: hides headless automation from window checks that
-# JS frameworks and WAFs use (navigator.webdriver, chrome properties, UA).
-# Kept as one string; executed via CDP before page scripts run.
+# JS frameworks and WAFs use (navigator.webdriver, chrome properties). It also
+# installs the JS runtime collectors so pages that crash under analysis can be
+# diagnosed. Kept as one string; executed via CDP before page scripts run.
 ANTI_DETECT_JS = r"""
 Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
 window.chrome = window.chrome || {runtime: {}};
 Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
-Object.defineProperty(navigator, 'plugins', {get: () => [1, 2, 3, 4, 5]});
 const origQuery = window.navigator.permissions && window.navigator.permissions.query;
 if (origQuery) {
   window.navigator.permissions.query = (p) =>
@@ -50,6 +50,16 @@ if (origQuery) {
       ? Promise.resolve({state: Notification.permission})
       : origQuery(p);
 }
+window.__nexhunter_js_errors = [];
+window.__nexhunter_console_warnings = [];
+window.addEventListener('error', (e) => window.__nexhunter_js_errors.push(String(e.message)));
+window.addEventListener('unhandledrejection', (e) =>
+  window.__nexhunter_js_errors.push('unhandledrejection: ' + String(e.reason)));
+const __nxConsoleError = console.error.bind(console);
+console.error = (...args) => {
+  window.__nexhunter_console_warnings.push(args.map(String).join(' '));
+  __nxConsoleError(...args);
+};
 """
 
 
@@ -77,8 +87,7 @@ def _static_crawl(url: str, wait: int) -> None:
     OUT["engine"] = "stdlib"
     OUT["url"] = url
     OUT["note"] = (
-        "selenium not installed; static crawl only, no JS execution. "
-        "Install with: pip install nexhunter[browser]"
+        "selenium not installed; static crawl only, no JS execution. Install with: pip install nexhunter[browser]"
     )
     if urlparse(url).scheme not in ("http", "https"):
         OUT["error"] = f"refusing non-http(s) url: {url}"
@@ -114,8 +123,11 @@ def _selenium_crawl(url: str, wait: int, screenshot: bool, dom_depth: int) -> No
     opts.add_argument("--disable-dev-shm-usage")
     opts.add_argument("--disable-blink-features=AutomationControlled")
     opts.add_argument("--window-size=1366,768")
-    opts.add_argument("--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                      "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36")
+    opts.add_argument("--lang=en-US")
+
+    # ponytail: no --user-agent override. headless=new UA has no
+    # "HeadlessChrome" token and matches the installed Chrome, so a
+    # hardcoded UA would desync Sec-CH-UA vs JS engine (detectable).
 
     OUT["engine"] = "selenium"
     OUT["url"] = url
@@ -124,14 +136,15 @@ def _selenium_crawl(url: str, wait: int, screenshot: bool, dom_depth: int) -> No
         driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {"source": ANTI_DETECT_JS})
         driver.set_page_load_timeout(max(10, wait + 10))
         driver.get(url)
-        driver.implicitly_wait(wait)
+        _wait_settle(driver, wait)
 
         OUT["status"] = _status_of(driver)
         OUT["title"] = driver.title or ""
-        OUT["headers"] = _response_headers(driver)
-        OUT["links"] = list(dict.fromkeys(
-            h for h in _gather_links(driver) if _is_http(h)
-        ))[:500]
+        # ponytail: real response headers come from a plain HTTP fetch; the
+        # Performance API never exposes responseHeaders. BiDi is the upgrade
+        # path if live interception is ever needed.
+        OUT["headers"] = _fetch_headers(url, wait)
+        OUT["links"] = list(dict.fromkeys(h for h in _gather_links(driver) if _is_http(h)))[:500]
         OUT["scripts_found"] = len(driver.find_elements(By.TAG_NAME, "script"))
         OUT["forms_found"] = len(driver.find_elements(By.TAG_NAME, "form"))
         if dom_depth > 0:
@@ -149,6 +162,44 @@ def _selenium_crawl(url: str, wait: int, screenshot: bool, dom_depth: int) -> No
             sys.stderr.write(f"driver quit failed: {exc}\n")
 
 
+def _wait_settle(driver, stable_ms: int = 3000, max_ms: int = 8000) -> None:
+    """Explicit wait for dynamic content: polls until the resource count
+    stops growing, so SPAs that render after XHRs are captured. Replaces
+    implicit waits/fixed sleeps (Selenium best practice)."""
+    try:
+        driver.execute_async_script(
+            "const done = arguments[arguments.length - 1];"
+            "const stableMs = arguments[0];"
+            "const maxMs = arguments[1];"
+            "let last = 0, t0 = Date.now();"
+            "const check = () => {"
+            "  const n = performance.getEntriesByType('resource').length;"
+            "  const elapsed = Date.now() - t0;"
+            "  if (elapsed > maxMs || (n === last && elapsed > stableMs)) return done();"
+            "  last = n; setTimeout(check, 250);"
+            "};"
+            "check();",
+            stable_ms,
+            max_ms,
+        )
+    except Exception:  # noqa: BLE001, S110 - settle wait is best-effort
+        pass
+
+
+def _fetch_headers(url: str, wait: int) -> dict:
+    """Real response headers for the document, via a plain HTTP request."""
+    import urllib.request
+
+    try:
+        req = urllib.request.Request(
+            url, headers={"User-Agent": "nexhunter/2.0 (+https://github.com/Arseno25/nexhunter)"}
+        )  # noqa: S310 - scheme validated in _is_http
+        with urllib.request.urlopen(req, timeout=max(10, wait)) as resp:  # nosec B310 - http/https only
+            return {k: v for k, v in resp.headers.items()}
+    except Exception:  # noqa: BLE001
+        return {}
+
+
 def _status_of(driver) -> int:
     for entry in _performance_entries(driver):
         if entry.get("responseStatus"):
@@ -156,40 +207,28 @@ def _status_of(driver) -> int:
     return 0
 
 
-def _response_headers(driver) -> dict:
-    headers = {}
-    for entry in _performance_entries(driver):
-        headers = {h["name"]: h["value"] for h in entry.get("responseHeaders", [])}
-        if headers:
-            break
-    return headers
-
-
 def _performance_entries(driver) -> list:
     try:
-        return driver.execute_script(
-            "return performance.getEntriesByType('resource').map(e => e.toJSON())"
-        ) or []
+        return driver.execute_script("return performance.getEntriesByType('resource').map(e => e.toJSON())") or []
     except Exception:  # noqa: BLE001
         return []
 
 
 def _gather_links(driver) -> list:
     try:
-        return driver.execute_script(
-            "return Array.from(document.querySelectorAll('a[href]')).map(a => a.href)"
-        ) or []
+        return driver.execute_script("return Array.from(document.querySelectorAll('a[href]')).map(a => a.href)") or []
     except Exception:  # noqa: BLE001
         return []
 
 
 def _measure_dom_depth(driver, limit: int) -> int:
     try:
-        return int(driver.execute_script(
-            "let d=0;"
-            "function w(n,l){l++;if(l>d)d=l;for(const c of n.children)w(c,l)}"
-            "w(document.body,0);return d;"
-        ) or 0)
+        return int(
+            driver.execute_script(
+                "let d=0;function w(n,l){l++;if(l>d)d=l;for(const c of n.children)w(c,l)}w(document.body,0);return d;"
+            )
+            or 0
+        )
     except Exception:  # noqa: BLE001
         return 0
 

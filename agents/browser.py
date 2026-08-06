@@ -26,13 +26,14 @@ from typing import Any
 from nexhunter.agents.base import Agent
 
 # Anti-detection preamble: hides headless automation from window checks that
-# JS frameworks and WAFs use (navigator.webdriver, chrome properties, UA).
-# Executed via CDP before page scripts run.
+# JS frameworks and WAFs use (navigator.webdriver, chrome properties). It also
+# installs the JS runtime collectors that `_js_errors` / `_console_warnings`
+# read back -- without them those two always return [].
+# Executed via CDP before any page script runs, so early errors are captured.
 ANTI_DETECT_JS = r"""
 Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
 window.chrome = window.chrome || {runtime: {}};
 Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
-Object.defineProperty(navigator, 'plugins', {get: () => [1, 2, 3, 4, 5]});
 const origQuery = window.navigator.permissions && window.navigator.permissions.query;
 if (origQuery) {
   window.navigator.permissions.query = (p) =>
@@ -40,6 +41,16 @@ if (origQuery) {
       ? Promise.resolve({state: Notification.permission})
       : origQuery(p);
 }
+window.__nexhunter_js_errors = [];
+window.__nexhunter_console_warnings = [];
+window.addEventListener('error', (e) => window.__nexhunter_js_errors.push(String(e.message)));
+window.addEventListener('unhandledrejection', (e) =>
+  window.__nexhunter_js_errors.push('unhandledrejection: ' + String(e.reason)));
+const __nxConsoleError = console.error.bind(console);
+console.error = (...args) => {
+  window.__nexhunter_console_warnings.push(args.map(String).join(' '));
+  __nxConsoleError(...args);
+};
 """
 
 _SECURITY_HEADERS = (
@@ -145,14 +156,16 @@ def _analyze_cookies(raw_cookies: list) -> list:
         for p in parts[1:]:
             key, _, value = p.partition("=")
             flags[key.lower()] = value
-        out.append({
-            "name": name_value[0],
-            "secure": "secure" in flags,
-            "httponly": "httponly" in flags,
-            "samesite": flags.get("samesite", "MISSING"),
-            "path": flags.get("path", "/"),
-            "domain": flags.get("domain", ""),
-        })
+        out.append(
+            {
+                "name": name_value[0],
+                "secure": "secure" in flags,
+                "httponly": "httponly" in flags,
+                "samesite": flags.get("samesite", "MISSING"),
+                "path": flags.get("path", "/"),
+                "domain": flags.get("domain", ""),
+            }
+        )
     return out
 
 
@@ -191,9 +204,11 @@ class BrowserAgent(Agent):
     """
 
     name = "browser"
-    desc = ("Browser analysis: DOM artifacts, security headers, cookies, "
-            "technology fingerprint, screenshots, network capture, crawling "
-            "(Selenium when installed, stdlib fallback otherwise)")
+    desc = (
+        "Browser analysis: DOM artifacts, security headers, cookies, "
+        "technology fingerprint, screenshots, network capture, crawling "
+        "(Selenium when installed, stdlib fallback otherwise)"
+    )
     param_schema = {"url": (True, str), "mode": (False, str)}
 
     def run(self, url: str = "", mode: str = "analyze"):
@@ -211,6 +226,7 @@ class BrowserAgent(Agent):
         mode = (mode or "analyze").lower()
         try:
             import selenium  # noqa: F401
+
             return self._selenium_run(url, mode)
         except ImportError:
             data = self._static_run(url)
@@ -238,7 +254,7 @@ class BrowserAgent(Agent):
             "engine": "stdlib",
             "ok": True,
             "note": "selenium not installed; static crawl only, no JS execution. "
-                    "Install with: pip install nexhunter[browser]",
+            "Install with: pip install nexhunter[browser]",
             "status": f.status,
             "title": _title_of(f.html),
             "forms": p.forms[:50],
@@ -267,9 +283,12 @@ class BrowserAgent(Agent):
         opts.add_argument("--disable-dev-shm-usage")
         opts.add_argument("--disable-blink-features=AutomationControlled")
         opts.add_argument("--window-size=1366,768")
-        opts.add_argument("--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                          "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36")
+        opts.add_argument("--lang=en-US")
         opts.add_experimental_option("excludeSwitches", ["enable-automation"])
+
+        # ponytail: no --user-agent override. headless=new UA has no
+        # "HeadlessChrome" token and matches the installed Chrome, so a
+        # hardcoded UA would desync Sec-CH-UA vs JS engine (detectable).
 
         driver = webdriver.Chrome(options=opts)
         try:
@@ -277,7 +296,7 @@ class BrowserAgent(Agent):
             driver.set_page_load_timeout(30)
 
             driver.get(url)
-            driver.implicitly_wait(3)
+            _wait_settle(driver)
 
             if mode == "screenshot":
                 shot = driver.save_screenshot("browser_screenshot.png")
@@ -292,12 +311,13 @@ class BrowserAgent(Agent):
                 }
 
             if mode == "network":
+                reqs = _network_requests(driver)
                 return {
                     "url": url,
                     "engine": "selenium",
                     "ok": True,
-                    "requests": _network_requests(driver)[:200],
-                    "request_count": len(_network_requests(driver)),
+                    "requests": reqs[:200],
+                    "request_count": len(reqs),
                     "title": driver.title or "",
                 }
 
@@ -326,7 +346,13 @@ class BrowserAgent(Agent):
             # analyze (default)
             p = _DomParser()
             p.feed(driver.page_source or "")
-            headers = _response_headers(driver)
+            # ponytail: response headers come from a real HTTP fetch, not CDP
+            # event capture (execute_cdp_cmd is request/response only; BiDi is
+            # the upgrade path if live interception is ever needed). The
+            # document response is what security header checks care about.
+            static = _StaticFetcher(url)
+            static.fetch()
+            headers = static.headers or {}
             cookies = [
                 {
                     "name": c.get("name", ""),
@@ -340,6 +366,7 @@ class BrowserAgent(Agent):
             ]
             gen = [m["content"] for m in p.metas if "generator" in m["name"].lower()]
             sec = {h: (headers.get(h.lower()) or "MISSING") for h in _SECURITY_HEADERS}
+            links = _gather_links(driver)
 
             return {
                 "url": url,
@@ -349,8 +376,8 @@ class BrowserAgent(Agent):
                 "title": driver.title or "",
                 "forms": p.forms[:50],
                 "form_count": len(p.forms),
-                "links": _gather_links(driver)[:200],
-                "link_count": len(_gather_links(driver)),
+                "links": links[:200],
+                "link_count": len(links),
                 "script_count": len(driver.find_elements(By.TAG_NAME, "script")),
                 "generator": gen,
                 "technologies": _detect_tech(driver.page_source or "", headers),
@@ -372,9 +399,7 @@ class BrowserAgent(Agent):
 def _network_requests(driver, limit: int = 200) -> list:
     """Requests the page made, via the Performance API (works without CDP)."""
     try:
-        entries = driver.execute_script(
-            "return performance.getEntriesByType('resource').map(e => e.toJSON())"
-        ) or []
+        entries = driver.execute_script("return performance.getEntriesByType('resource').map(e => e.toJSON())") or []
     except Exception:  # noqa: BLE001
         return []
     out = []
@@ -384,12 +409,14 @@ def _network_requests(driver, limit: int = 200) -> list:
         if not url or url in seen:
             continue
         seen.add(url)
-        out.append({
-            "url": url,
-            "type": entry.get("initiatorType", ""),
-            "duration_ms": round(entry.get("duration", 0), 1),
-            "size": entry.get("transferSize", 0),
-        })
+        out.append(
+            {
+                "url": url,
+                "type": entry.get("initiatorType", ""),
+                "duration_ms": round(entry.get("duration", 0), 1),
+                "size": entry.get("transferSize", 0),
+            }
+        )
         if len(out) >= limit:
             break
     return out
@@ -397,14 +424,10 @@ def _network_requests(driver, limit: int = 200) -> list:
 
 def _status_of(driver) -> int:
     try:
-        nav = driver.execute_script(
-            "return performance.getEntriesByType('navigation')[0]?.toJSON() || null"
-        )
+        nav = driver.execute_script("return performance.getEntriesByType('navigation')[0]?.toJSON() || null")
         if nav and nav.get("responseStatus"):
             return nav["responseStatus"]
-        entries = driver.execute_script(
-            "return performance.getEntriesByType('resource').map(e => e.toJSON())"
-        ) or []
+        entries = driver.execute_script("return performance.getEntriesByType('resource').map(e => e.toJSON())") or []
         for entry in entries:
             if entry.get("responseStatus"):
                 return entry["responseStatus"]
@@ -413,48 +436,60 @@ def _status_of(driver) -> int:
     return 0
 
 
-def _response_headers(driver) -> dict:
+def _wait_settle(driver, stable_ms: int = 1500, max_ms: int = 8000) -> None:
+    """Explicit wait for dynamic content: polls until the resource count
+    stops growing, so SPAs that render after XHRs are captured. Replaces
+    implicit waits/fixed sleeps (Selenium best practice)."""
     try:
-        entries = driver.execute_script(
-            "return performance.getEntriesByType('resource').map(e => e.toJSON())"
-        ) or []
-        for entry in entries:
-            headers = {h["name"]: h["value"] for h in entry.get("responseHeaders", [])}
-            if headers:
-                return headers
-    except Exception:  # noqa: BLE001, S110 - degraded read, empty headers
+        driver.execute_async_script(
+            "const done = arguments[arguments.length - 1];"
+            "const stableMs = arguments[0];"
+            "const maxMs = arguments[1];"
+            "let last = 0, t0 = Date.now();"
+            "const check = () => {"
+            "  const n = performance.getEntriesByType('resource').length;"
+            "  const elapsed = Date.now() - t0;"
+            "  if (elapsed > maxMs || (n === last && elapsed > stableMs)) return done();"
+            "  last = n; setTimeout(check, 250);"
+            "};"
+            "check();",
+            stable_ms,
+            max_ms,
+        )
+    except Exception:  # noqa: BLE001, S110 - settle wait is best-effort
         pass
-    return {}
 
 
 def _gather_links(driver) -> list:
     try:
-        return driver.execute_script(
-            "return Array.from(document.querySelectorAll('a[href]')).map(a => a.href)"
-        ) or []
+        return driver.execute_script("return Array.from(document.querySelectorAll('a[href]')).map(a => a.href)") or []
     except Exception:  # noqa: BLE001
         return []
 
 
 def _gather_forms(driver) -> list:
     try:
-        return driver.execute_script(
-            "return Array.from(document.forms).map(f => ({"
-            "  action: f.action || '', method: f.method || 'get',"
-            "  inputs: Array.from(f.elements).map(i => ({name: i.name || '', type: i.type || ''}))"
-            "}))"
-        ) or []
+        return (
+            driver.execute_script(
+                "return Array.from(document.forms).map(f => ({"
+                "  action: f.action || '', method: f.method || 'get',"
+                "  inputs: Array.from(f.elements).map(i => ({name: i.name || '', type: i.type || ''}))"
+                "}))"
+            )
+            or []
+        )
     except Exception:  # noqa: BLE001
         return []
 
 
 def _measure_dom_depth(driver) -> int:
     try:
-        return int(driver.execute_script(
-            "let d=0;"
-            "function w(n,l){l++;if(l>d)d=l;for(const c of n.children)w(c,l)}"
-            "w(document.body,0);return d;"
-        ) or 0)
+        return int(
+            driver.execute_script(
+                "let d=0;function w(n,l){l++;if(l>d)d=l;for(const c of n.children)w(c,l)}w(document.body,0);return d;"
+            )
+            or 0
+        )
     except Exception:  # noqa: BLE001
         return 0
 
