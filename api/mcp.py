@@ -57,7 +57,6 @@ mcp = FastMCP(
     instructions=(
         "nexhunter AI-driven security assessment platform via MCP.\n\n"
         "Setup: python -m nexhunter.api.server --port 8888\n"
-        "Web UI: http://localhost:8888/ or http://localhost:8888/ui\n"
         "Status: server_status() first to verify connectivity.\n\n"
         "Main flows:\n"
         "  - recommend_plan(target) - senior-pentester methodology plan, nothing runs\n"
