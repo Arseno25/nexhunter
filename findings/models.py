@@ -294,6 +294,36 @@ class Finding:
         }
 
     @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "Finding":
+        """Rebuild from `to_dict` output (persistence round-trip)."""
+        def _dt(key: str) -> datetime | None:
+            value = data.get(key)
+            return datetime.fromisoformat(value) if value else None
+
+        return cls(
+            id=data.get("id", ""),
+            execution_id=data.get("execution_id", ""),
+            tool=data.get("tool", ""),
+            target=data.get("target", ""),
+            category=data.get("category", Category.OBSERVATION.value),
+            title=data.get("title", ""),
+            description=data.get("description", ""),
+            severity=data.get("severity", Severity.INFO),
+            confidence=data.get("confidence", Confidence.TENTATIVE),
+            evidence=data.get("evidence") or {},
+            remediation=data.get("remediation"),
+            references=data.get("references") or [],
+            cve_ids=data.get("cve_ids") or [],
+            cwe_ids=data.get("cwe_ids") or [],
+            attack_ids=data.get("attack_ids") or [],
+            artifacts=data.get("artifacts") or [],
+            cvss_score=data.get("cvss_score"),
+            location=data.get("location"),
+            first_seen_at=_dt("first_seen_at") or datetime.now(timezone.utc),
+            last_seen_at=_dt("last_seen_at") or datetime.now(timezone.utc),
+        )
+
+    @classmethod
     def parser_failure(cls, tool: str, target: str, reason: str, **kwargs) -> "Finding":
         """A finding recording that we could not read a tool's output.
 

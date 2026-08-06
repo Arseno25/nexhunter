@@ -3,10 +3,20 @@
 The HTTP server is threaded, so every mutation of shared execution state goes
 through one lock. Records are bounded: a long-running server must not grow its
 history without limit.
+
+Optional `path` enables persistence: every mutation atomically rewrites the
+registry to that file, and `load` restores it, so execution history survives
+server restarts.
 """
 
+import json
+import os
+import tempfile
 import threading
 from collections import OrderedDict
+from pathlib import Path
+
+from loguru import logger
 
 from nexhunter.execution.models import ExecutionRecord, ExecutionStatus
 
@@ -16,17 +26,49 @@ DEFAULT_MAX_RECORDS = 500
 class ExecutionRegistry:
     """In-memory, concurrency-safe store of execution records."""
 
-    def __init__(self, max_records: int = DEFAULT_MAX_RECORDS):
+    def __init__(self, max_records: int = DEFAULT_MAX_RECORDS, path: Path | None = None):
         self._lock = threading.RLock()
         self._records: OrderedDict[str, ExecutionRecord] = OrderedDict()
         self._cancelled: set = set()
         self.max_records = max_records
+        self.path: Path | None = path
+        if path:
+            self.load()
+
+    def load(self) -> None:
+        """Restore records persisted by an earlier process."""
+        if not self.path or not self.path.is_file():
+            return
+        try:
+            with open(self.path, encoding="utf-8") as handle:
+                items = json.load(handle)
+            with self._lock:
+                for item in items:
+                    record = ExecutionRecord.from_dict(item)
+                    self._records[record.id] = record
+        except (OSError, ValueError, TypeError):
+            logger.warning("executions file unreadable, starting empty: {}", self.path)
+            self._records.clear()
+
+    def _persist(self) -> None:
+        if not self.path:
+            return
+        try:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            payload = [r.to_dict() for r in self._records.values()]
+            fd, tmp = tempfile.mkstemp(dir=self.path.parent, suffix=".tmp")
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                json.dump(payload, handle)
+            os.replace(tmp, self.path)
+        except OSError:
+            logger.warning("could not persist executions to {}", self.path)
 
     def add(self, record: ExecutionRecord) -> ExecutionRecord:
         """Register a new execution, evicting the oldest finished one if full."""
         with self._lock:
             self._records[record.id] = record
             self._evict_locked()
+            self._persist()
             return record
 
     def _evict_locked(self) -> None:
@@ -59,6 +101,7 @@ class ExecutionRegistry:
             if record is None:
                 return None
             record.transition(status)
+            self._persist()
             return record
 
     def request_cancel(self, execution_id: str) -> bool:

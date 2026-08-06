@@ -1156,6 +1156,18 @@ def main():
     for warning in config.warnings():
         log.warning(warning)
 
+    # Persist history next to the execution workspaces, so findings and
+    # execution records survive server restarts. In-place assignment keeps the
+    # ENGINE/ORCHESTRATOR instances wired at import time pointing at the same
+    # store objects that now write to disk.
+    from nexhunter.execution.workspace import data_dir
+
+    data_root = data_dir()
+    FINDINGS.path = data_root / "findings.json"
+    FINDINGS.load()
+    EXEC.registry.path = data_root / "executions.json"
+    EXEC.registry.load()
+
     if config.binds_externally:
         log.warning(
             "Listening on %s, which is reachable from other hosts. "
