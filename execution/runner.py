@@ -60,7 +60,8 @@ def _spawn_kwargs() -> dict:
     """Platform flags that put the child in its own killable group."""
     if _IS_WINDOWS:
         return {
-            "creationflags": subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW,
+            "creationflags": getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+            | getattr(subprocess, "CREATE_NO_WINDOW", 0),
         }
     return {"start_new_session": True}
 
@@ -78,7 +79,7 @@ def terminate_tree(proc: subprocess.Popen, grace: float = DEFAULT_GRACE_SECONDS)
         # Ask the whole group to stop first. The child was started with
         # CREATE_NEW_PROCESS_GROUP, so a break reaches its descendants too.
         try:
-            os.kill(proc.pid, signal.CTRL_BREAK_EVENT)
+            os.kill(proc.pid, getattr(signal, "CTRL_BREAK_EVENT", 0))
         except (OSError, ValueError, AttributeError):
             pass
         try:
