@@ -173,7 +173,7 @@ class _StaticFetcher:
             req = urllib.request.Request(  # noqa: S310 - scheme validated by caller
                 self.url, headers={"User-Agent": "Mozilla/5.0 (nexhunter)"}
             )
-            with urllib.request.urlopen(req, timeout=self.timeout) as resp:  # noqa: S310
+            with urllib.request.urlopen(req, timeout=self.timeout) as resp:  # nosec B310 - http/https only, scheme validated by caller
                 self.status = resp.status
                 self.headers = {k.lower(): v for k, v in resp.headers.items()}
                 self.html = resp.read(500_000).decode("utf-8", errors="replace")

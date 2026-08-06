@@ -89,7 +89,7 @@ def api(path, payload=None, timeout=600):
         method="POST" if payload is not None else "GET",
     )
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as r:  # noqa: S310 - scheme guard above
+        with urllib.request.urlopen(req, timeout=timeout) as r:  # nosec B310 - scheme guard above
             return json.load(r)
     except Exception as e:
         return {"ok": False, "error": f"server unreachable at {SERVER}: {e}"}

@@ -111,7 +111,7 @@ def _send(method: str, url: str, headers: dict, body: str,
         data = body.encode() if body else None
     t0 = time.monotonic()
     try:
-        with urllib.request.urlopen(  # noqa: S310 - scheme guard above
+        with urllib.request.urlopen(  # nosec B310 - scheme guard above
             req, data=data, timeout=timeout,
         ) as resp:
             duration = time.monotonic() - t0

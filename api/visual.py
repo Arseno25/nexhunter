@@ -121,15 +121,20 @@ def _paint(text: str, *names: str, color: bool = True) -> str:
 # (e.g. cp1252 Windows terminals), so cards never crash a print().
 def _box_chars() -> dict:
     glyphs = {
-        "tl": "┌", "tr": "┐", "bl": "└", "br": "┘",
-        "h": "─", "v": "│", "head": "┌─", "tail": "─┐",
+        "tl": "┌",
+        "tr": "┐",
+        "bl": "└",
+        "br": "┘",
+        "h": "─",
+        "v": "│",
+        "head": "┌─",
+        "tail": "─┐",
     }
     try:
         "".join(glyphs.values()).encode(sys.stdout.encoding or "utf-8")
         return glyphs
     except (UnicodeEncodeError, LookupError, AttributeError):
-        return {"tl": "+", "tr": "+", "bl": "+", "br": "+",
-                "h": "-", "v": "|", "head": "+-", "tail": "-+"}
+        return {"tl": "+", "tr": "+", "bl": "+", "br": "+", "h": "-", "v": "|", "head": "+-", "tail": "-+"}
 
 
 def _box(
@@ -163,11 +168,9 @@ def _box(
         norm.append((label, value, vc))
         label_w = max(label_w, len(label))
 
-    gap = 1 if label_w else 0
     inner = max(
         len(title) + 6,
-        *((label_w + 2 + len(value) + 4 if label else len(value) + 4)
-          for label, value, _ in norm),
+        *((label_w + 2 + len(value) + 4 if label else len(value) + 4) for label, value, _ in norm),
     )
     inner = min(inner, max(len(title) + 6, max_width))
     text_w = inner - 4
@@ -299,9 +302,7 @@ def format_tool_status(
     return f"{head} | {status_txt} | {target_txt}{bar}"
 
 
-def format_command_execution(
-    command: str, status: str, duration: float = 0.0, color: bool | None = None
-) -> str:
+def format_command_execution(command: str, status: str, duration: float = 0.0, color: bool | None = None) -> str:
     """Command execution display:
     `▶ nmap -sV target | SUCCESS (12.34s)`"""
     if color is None:
@@ -339,22 +340,26 @@ def create_banner(
     mode_color = {"active": "GREEN", "degraded": "YELLOW"}.get(mode, "ORANGE")
     tagline = _paint(
         "AI-Orchestrated Recon · Exploitation · Assessment",
-        "CRIMSON", "BOLD", color=color,
+        "CRIMSON",
+        "BOLD",
+        color=color,
     )
 
-    return "\n".join([
-        "",
-        art,
-        f"  {tagline}",
-        accent,
-        row("🌐", "Listening", f"http://{host}:{port}", "CYAN"),
-        row("🧭", "Mode", mode, mode_color),
-        row("🤖", "Agents", agents, "WHITE"),
-        row("🛠", "Tools", tools, "WHITE"),
-        row("📦", "Version", version, "WHITE"),
-        accent,
-        "",
-    ])
+    return "\n".join(
+        [
+            "",
+            art,
+            f"  {tagline}",
+            accent,
+            row("🌐", "Listening", f"http://{host}:{port}", "CYAN"),
+            row("🧭", "Mode", mode, mode_color),
+            row("🤖", "Agents", agents, "WHITE"),
+            row("🛠", "Tools", tools, "WHITE"),
+            row("📦", "Version", version, "WHITE"),
+            accent,
+            "",
+        ]
+    )
 
 
 class VulnerabilityCard:
@@ -536,9 +541,7 @@ def format_vulnerability_table(vulns: list[VulnerabilityCard]) -> str:
     for v in vulns[:50]:
         sev_colors = {"critical": "[!]", "high": "[!]", "medium": "[*]", "low": "[+]", "info": "[i]"}
         badge = sev_colors.get(v.severity, "[ ]")
-        lines.append(
-            f"{v.id:<8} {v.type:<20} {badge} {v.severity:<7} {v.endpoint[:40]:<40} {v.impact[:20]:<20}"
-        )
+        lines.append(f"{v.id:<8} {v.type:<20} {badge} {v.severity:<7} {v.endpoint[:40]:<40} {v.impact[:20]:<20}")
 
     if len(vulns) > 50:
         lines.append(f"\n... and {len(vulns) - 50} more vulnerabilities")
@@ -566,21 +569,21 @@ def _selfcheck() -> None:
     """Assert the box builder keeps every line the same visible width."""
     box = _box(
         "TEST",
-        [("PID 1", "RUNNING  nmap_scan  42s", "TOOL_RUNNING"),
-         "plain line without a label",
-         ("Long", "x" * 200, "WHITE")],
+        [
+            ("PID 1", "RUNNING  nmap_scan  42s", "TOOL_RUNNING"),
+            "plain line without a label",
+            ("Long", "x" * 200, "WHITE"),
+        ],
         color=False,
     )
     lines = box.splitlines()
-    widths = {len(_strip_ansi(l)) for l in lines}
+    widths = {len(_strip_ansi(line)) for line in lines}
     assert len(widths) == 1, f"box lines not aligned: {widths}\n{box}"
     assert "x" * 40 + "…" in box or "…" in box, "long value not truncated"
-    dash = create_live_dashboard([{"pid": 7, "status": "running",
-                                   "tool": "nmap_scan", "uptime_s": 42}],
-                                 color=False)
-    assert len({len(l) for l in dash.splitlines()}) == 1, "dashboard misaligned"
+    dash = create_live_dashboard([{"pid": 7, "status": "running", "tool": "nmap_scan", "uptime_s": 42}], color=False)
+    assert len({len(line) for line in dash.splitlines()}) == 1, "dashboard misaligned"
     err = format_error_card("TIMEOUT", "nmap_scan", "305s exceeded limit", "retry")
-    assert len({len(_strip_ansi(l)) for l in err.splitlines()}) == 1, "error card misaligned"
+    assert len({len(_strip_ansi(line)) for line in err.splitlines()}) == 1, "error card misaligned"
     for name, key in {**SEVERITY_COLORS, **STATUS_COLORS}.items():
         assert key in COLORS, f"{name} -> unknown palette key {key}"
     assert all("\033[5m" not in COLORS[key] for key in STATUS_COLORS.values()), "blink in status colors"

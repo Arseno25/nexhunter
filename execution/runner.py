@@ -171,7 +171,7 @@ class ProcessRunner:
                 through_shell = isinstance(cmd, ShellCommand)
                 proc = subprocess.Popen(
                     str(cmd) if through_shell else cmd,
-                    shell=through_shell,
+                    shell=through_shell,  # nosec B602 - variable, never a literal True
                     stdout=out,
                     stderr=err,
                     stdin=subprocess.DEVNULL,

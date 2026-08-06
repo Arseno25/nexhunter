@@ -107,6 +107,17 @@ ignore = [
 
 [tool.ruff.lint.per-file-ignores]
 "tests/*" = ["S101", "S310"]  # asserts are how tests report; tests open local test-server URLs
+"api/visual.py" = ["S101"]  # _selfcheck asserts are the module's own self-test
+# urlopen call sites are scheme-guarded right above each call; bandit B310
+# stays live and each site carries an explicit `# nosec B310` acknowledgment.
+"api/mcp.py" = ["S310"]
+"cli/client.py" = ["S310"]
+"agents/browser.py" = ["S310"]
+"agents/browser_cli.py" = ["S310"]
+"agents/intel.py" = ["S310"]
+"agents/exploit_kit/core.py" = ["S310"]
+"agents/exploit_kit/impact.py" = ["S310"]
+"execution/http_lab.py" = ["S310"]
 
 [tool.mypy]
 python_version = "3.10"
