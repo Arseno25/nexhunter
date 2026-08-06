@@ -121,14 +121,17 @@ recon/analysis tools (never offensive ones), review and run the optional helper:
 ## MCP setup
 
 Add to your AI client's config (Claude Desktop, Claude Code, Cursor, VS Code,
-Roo Code, OpenCode — see [docs/mcp/](docs/mcp/)):
+Roo Code, OpenCode — see [docs/mcp/](docs/mcp/)). Clients do not inherit your
+shell environment, so use the full interpreter path for your OS:
+
+**Linux/macOS**
 
 ```json
 {
   "mcpServers": {
     "nexhunter": {
       "type": "local",
-      "command": "python",
+      "command": "/usr/bin/python3",
       "args": [
         "-m", "nexhunter.api.mcp",
         "--server", "http://127.0.0.1:8888",
@@ -138,6 +141,30 @@ Roo Code, OpenCode — see [docs/mcp/](docs/mcp/)):
   }
 }
 ```
+
+**Windows** (backslashes must be escaped in JSON)
+
+```json
+{
+  "mcpServers": {
+    "nexhunter": {
+      "type": "local",
+      "command": "C:\\Python313\\python.exe",
+      "args": [
+        "-m", "nexhunter.api.mcp",
+        "--server", "http://127.0.0.1:8888",
+        "--profile", "nexhunter-core"
+      ]
+    }
+  }
+}
+```
+
+**Virtualenv**
+
+Use `/path/to/.venv/bin/python` on Linux/macOS, or `.venv\Scripts\python.exe`
+on Windows — same `args` as above. If the exact path is wrong, the client shows
+no tools; verify by running the command by hand first.
 
 ### Profiles
 
