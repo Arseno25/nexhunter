@@ -191,13 +191,21 @@ def optimize_parameters(tool: str) -> str:
 
 
 @mcp.tool()
-def cve_monitor(days: int = 7, severity: str = "", keyword: str = "",
-                limit: int = 20) -> str:
+def cve_monitor(days: int = 7, severity: str = "", keyword: str = "", limit: int = 20) -> str:
     """Recent NVD CVEs (window in days, optional severity/keyword filter)
     ranked by exploitability (kind, CVSS, PoC hints)."""
-    return _render(api("/api/agents/cve_watch", {
-        "days": days, "severity": severity, "keyword": keyword, "limit": limit,
-    }), indent=1)
+    return _render(
+        api(
+            "/api/agents/cve_watch",
+            {
+                "days": days,
+                "severity": severity,
+                "keyword": keyword,
+                "limit": limit,
+            },
+        ),
+        indent=1,
+    )
 
 
 @mcp.tool()
@@ -211,7 +219,9 @@ def run_tool(tool: str, params: str = "{}", async_run: bool = False, direct: boo
     may run.
     """
     parsed = json.loads(params) if params else {}
-    return _render(api("/api/command", {"tool": tool, "params": parsed, "async": async_run, "direct": direct}), indent=1)
+    return _render(
+        api("/api/command", {"tool": tool, "params": parsed, "async": async_run, "direct": direct}), indent=1
+    )
 
 
 @mcp.tool()
@@ -330,11 +340,22 @@ def vulnerability_card(
 ) -> str:
     """Format a vulnerability card (title, severity, endpoint, impact, fix,
     CVSS, PoC) into a structured record for reporting."""
-    return _render(api("/api/visual/vulnerability-card", {
-        "title": title, "severity": severity, "endpoint": endpoint,
-        "impact": impact, "remediation": remediation, "type": vuln_type,
-        "cvss_score": cvss_score, "poc": poc,
-    }), indent=1)
+    return _render(
+        api(
+            "/api/visual/vulnerability-card",
+            {
+                "title": title,
+                "severity": severity,
+                "endpoint": endpoint,
+                "impact": impact,
+                "remediation": remediation,
+                "type": vuln_type,
+                "cvss_score": cvss_score,
+                "poc": poc,
+            },
+        ),
+        indent=1,
+    )
 
 
 @mcp.tool()
@@ -352,16 +373,27 @@ def visual_vulnerabilities() -> str:
 
 
 @mcp.tool()
-def attack_chain(chain: str, target: str, domain: str = "", host: str = "",
-                 username: str = "", wordlist: str = "") -> str:
+def attack_chain(
+    chain: str, target: str, domain: str = "", host: str = "", username: str = "", wordlist: str = ""
+) -> str:
     """Build a named attack chain (each step: tool, params, gate, availability)
     scored with a success probability. Call with chain='' to list patterns.
     Patterns include recon_sweep, web_rce, ssrf_internal, credential_capture,
     api_abuse. Nothing executes; this is planning only."""
-    return _render(api("/api/attack-chain", {
-        "chain": chain, "target": target, "domain": domain, "host": host,
-        "username": username, "wordlist": wordlist,
-    }), indent=1)
+    return _render(
+        api(
+            "/api/attack-chain",
+            {
+                "chain": chain,
+                "target": target,
+                "domain": domain,
+                "host": host,
+                "username": username,
+                "wordlist": wordlist,
+            },
+        ),
+        indent=1,
+    )
 
 
 @mcp.tool()
@@ -504,6 +536,7 @@ def install_python_package(package: str, env_name: str = "default") -> str:
 
 def _register(name, spec):
     """Dynamically register tool as MCP tool."""
+
     def fn(**kwargs):
         params = {k: kwargs.get(k, spec.params.get(k)) for k in spec.params}
         return _render(api("/api/command", {"tool": name, "params": params}), indent=1)
@@ -524,9 +557,7 @@ def _register(name, spec):
         ]
     )
     fn.__doc__ = (
-        f"{spec.description}\n"
-        f"Risk: {spec.risk_level} | Binary: {spec.binary}\n"
-        f"Params: {', '.join(spec.params)}"
+        f"{spec.description}\nRisk: {spec.risk_level} | Binary: {spec.binary}\nParams: {', '.join(spec.params)}"
     )
     mcp.tool()(fn)
     _REGISTRY_TOOLS.add(name)
@@ -572,10 +603,10 @@ def register_profile_tools(profile_name: str | None = None, tool_limit: int | No
     profile = mcp_profiles.get_profile(profile_name or PROFILE_NAME)
     selected = _select_for_limit(mcp_profiles.tools_for(profile), tool_limit)
 
-    manager = mcp._tool_manager
     try:
         from fastmcp.settings import DuplicateBehavior
 
+        manager = mcp._tool_manager
         manager.duplicate_behavior = DuplicateBehavior.REPLACE
         for name in list(manager._tools):
             if name in _REGISTRY_TOOLS and name not in selected:
@@ -592,6 +623,7 @@ def register_profile_tools(profile_name: str | None = None, tool_limit: int | No
 # Resources: read-only context a client can pull without spending a tool call.
 # ---------------------------------------------------------------------------
 
+
 @mcp.resource("nexhunter://tools")
 def resource_tools() -> str:
     """Every tool in the registry with category, risk, maturity, availability."""
@@ -601,17 +633,13 @@ def resource_tools() -> str:
 @mcp.resource("nexhunter://tools/stable")
 def resource_stable_tools() -> str:
     """Only tools marked stable: parsed, documented, and covered by tests."""
-    return _render(
-        [spec.describe() for spec in T.TOOLS.values() if spec.maturity == "stable"]
-    )
+    return _render([spec.describe() for spec in T.TOOLS.values() if spec.maturity == "stable"])
 
 
 @mcp.resource("nexhunter://tools/available")
 def resource_available_tools() -> str:
     """Tools whose binary is actually installed on this host."""
-    return _render(
-        [spec.describe() for spec in T.TOOLS.values() if spec.available]
-    )
+    return _render([spec.describe() for spec in T.TOOLS.values() if spec.available])
 
 
 def _profiles_summary() -> dict:
@@ -708,9 +736,7 @@ def recommend_plan(target: str, risk_ceiling: str = "active") -> str:
 
 
 @mcp.tool()
-def plan_assessment(
-    target: str, objective: str = "standard", risk_ceiling: str = "active"
-) -> str:
+def plan_assessment(target: str, objective: str = "standard", risk_ceiling: str = "active") -> str:
     """Get a SCORED shortlist of the tools worth running against a target, WITHOUT running anything.
 
     This is the plan-first step: instead of considering all 252 registered
@@ -786,8 +812,12 @@ def autonomous_assess(
     direct=False for fully tracked step execution.
     """
     payload = {
-        "target": target, "risk_ceiling": risk_ceiling, "max_steps": max_steps,
-        "async": True, "strategy": strategy, "objective": objective,
+        "target": target,
+        "risk_ceiling": risk_ceiling,
+        "max_steps": max_steps,
+        "async": True,
+        "strategy": strategy,
+        "objective": objective,
         "direct": bool(direct),
     }
     if steps is not None:
@@ -807,30 +837,28 @@ _REGISTERED_TOOL_COUNT = register_profile_tools()
 
 def main():
     global SERVER, PROFILE_NAME, TOOL_LIMIT, MAX_OUTPUT
-    parser = argparse.ArgumentParser(
-        description="nexhunter MCP bridge. Flags override NEXHUNTER_MCP_* env vars."
-    )
+    parser = argparse.ArgumentParser(description="nexhunter MCP bridge. Flags override NEXHUNTER_MCP_* env vars.")
     parser.add_argument("--server", default=SERVER, help="nexhunter server URL")
     parser.add_argument(
         "--profile",
         default="",
         help=f"tool profile to expose (default: {mcp_profiles.DEFAULT_PROFILE}). "
-             f"One of: {', '.join(sorted(mcp_profiles.PROFILES))}",
+        f"One of: {', '.join(sorted(mcp_profiles.PROFILES))}",
     )
     parser.add_argument(
         "--tool-limit",
         type=int,
         default=None,
         help="cap registered registry tools at N (stable and installed first). "
-             "Respects a client's tool-count limit instead of bypassing it",
+        "Respects a client's tool-count limit instead of bypassing it",
     )
     parser.add_argument(
         "--max-output",
         type=int,
         default=None,
         help="max chars kept per string field in tool results. Defaults to "
-             "NEXHUNTER_MCP_MAX_OUTPUT or 4000. Keeps large tool output from "
-             "flooding the LLM context window",
+        "NEXHUNTER_MCP_MAX_OUTPUT or 4000. Keeps large tool output from "
+        "flooding the LLM context window",
     )
     parser.add_argument("--list-profiles", action="store_true", help="print profiles and exit")
     parser.add_argument("--debug", action="store_true")
@@ -838,8 +866,10 @@ def main():
 
     if args.list_profiles:
         for row in mcp_profiles.summarize():
-            print(f"{row['name']:22} {row['tool_count']:4} tools "
-                  f"({row['available_tool_count']} installed)  {row['description']}")
+            print(
+                f"{row['name']:22} {row['tool_count']:4} tools "
+                f"({row['available_tool_count']} installed)  {row['description']}"
+            )
         return
 
     # Flags override env vars, which override defaults; one pass, one truth.
@@ -864,9 +894,11 @@ def main():
     )
     log.info(
         "server=%s profile=%s tools=%d limit=%s max_output=%d",
-        SERVER, PROFILE_NAME,
+        SERVER,
+        PROFILE_NAME,
         len(mcp_profiles.tools_for(mcp_profiles.get_profile(PROFILE_NAME))),
-        limit, MAX_OUTPUT,
+        limit,
+        MAX_OUTPUT,
     )
 
     mcp.run()

@@ -52,12 +52,18 @@ if (origQuery) {
 }
 window.__nexhunter_js_errors = [];
 window.__nexhunter_console_warnings = [];
-window.addEventListener('error', (e) => window.__nexhunter_js_errors.push(String(e.message)));
-window.addEventListener('unhandledrejection', (e) =>
-  window.__nexhunter_js_errors.push('unhandledrejection: ' + String(e.reason)));
+window.__nxCap = 500;
+window.addEventListener('error', (e) => {
+  if (window.__nexhunter_js_errors.length < window.__nxCap) window.__nexhunter_js_errors.push(String(e.message));
+});
+window.addEventListener('unhandledrejection', (e) => {
+  if (window.__nexhunter_js_errors.length < window.__nxCap)
+    window.__nexhunter_js_errors.push('unhandledrejection: ' + String(e.reason));
+});
 const __nxConsoleError = console.error.bind(console);
 console.error = (...args) => {
-  window.__nexhunter_console_warnings.push(args.map(String).join(' '));
+  if (window.__nexhunter_console_warnings.length < window.__nxCap)
+    window.__nexhunter_console_warnings.push(args.map(String).join(' '));
   __nxConsoleError(...args);
 };
 """
@@ -136,7 +142,8 @@ def _selenium_crawl(url: str, wait: int, screenshot: bool, dom_depth: int) -> No
         driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {"source": ANTI_DETECT_JS})
         driver.set_page_load_timeout(max(10, wait + 10))
         driver.get(url)
-        _wait_settle(driver, wait)
+        # wait is CLI seconds; _wait_settle works in milliseconds.
+        _wait_settle(driver, wait * 1000)
 
         OUT["status"] = _status_of(driver)
         OUT["title"] = driver.title or ""
@@ -165,18 +172,20 @@ def _selenium_crawl(url: str, wait: int, screenshot: bool, dom_depth: int) -> No
 def _wait_settle(driver, stable_ms: int = 3000, max_ms: int = 8000) -> None:
     """Explicit wait for dynamic content: polls until the resource count
     stops growing, so SPAs that render after XHRs are captured. Replaces
-    implicit waits/fixed sleeps (Selenium best practice)."""
+    implicit waits/fixed sleeps (Selenium best practice). Stability is
+    measured from the last observed count change, not the start."""
     try:
         driver.execute_async_script(
             "const done = arguments[arguments.length - 1];"
             "const stableMs = arguments[0];"
             "const maxMs = arguments[1];"
-            "let last = 0, t0 = Date.now();"
+            "let last = 0, t0 = Date.now(), lastChange = t0;"
             "const check = () => {"
             "  const n = performance.getEntriesByType('resource').length;"
-            "  const elapsed = Date.now() - t0;"
-            "  if (elapsed > maxMs || (n === last && elapsed > stableMs)) return done();"
-            "  last = n; setTimeout(check, 250);"
+            "  const now = Date.now();"
+            "  if (n !== last) { last = n; lastChange = now; }"
+            "  if (now - lastChange >= stableMs || now - t0 > maxMs) return done();"
+            "  setTimeout(check, 250);"
             "};"
             "check();",
             stable_ms,
@@ -190,20 +199,28 @@ def _fetch_headers(url: str, wait: int) -> dict:
     """Real response headers for the document, via a plain HTTP request."""
     import urllib.request
 
+    if urlparse(url).scheme not in ("http", "https"):
+        return {}
     try:
-        req = urllib.request.Request(
+        req = urllib.request.Request(  # noqa: S310 - scheme validated above
             url, headers={"User-Agent": "nexhunter/2.0 (+https://github.com/Arseno25/nexhunter)"}
-        )  # noqa: S310 - scheme validated in _is_http
-        with urllib.request.urlopen(req, timeout=max(10, wait)) as resp:  # nosec B310 - http/https only
+        )
+        with urllib.request.urlopen(req, timeout=max(10, wait)) as resp:  # nosec B310 - http/https only, scheme validated above
             return {k: v for k, v in resp.headers.items()}
     except Exception:  # noqa: BLE001
         return {}
 
 
 def _status_of(driver) -> int:
-    for entry in _performance_entries(driver):
-        if entry.get("responseStatus"):
-            return entry["responseStatus"]
+    try:
+        nav = driver.execute_script("return performance.getEntriesByType('navigation')[0]?.toJSON() || null")
+        if nav and nav.get("responseStatus"):
+            return nav["responseStatus"]
+        for entry in _performance_entries(driver):
+            if entry.get("responseStatus"):
+                return entry["responseStatus"]
+    except Exception:  # noqa: BLE001, S110 - degraded read, default status
+        pass
     return 0
 
 
@@ -251,6 +268,10 @@ def main(argv=None) -> int:
     args = parser.parse_args(argv)
 
     OUT["url"] = args.url
+    if urlparse(args.url).scheme not in ("http", "https"):
+        OUT["error"] = f"refusing non-http(s) url: {args.url}"
+        print(json.dumps(OUT, ensure_ascii=False))
+        return 1
     try:
         import selenium  # noqa: F401
 

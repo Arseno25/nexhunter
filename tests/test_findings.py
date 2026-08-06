@@ -36,6 +36,7 @@ def _finding(**overrides) -> Finding:
 # Normalization
 # --------------------------------------------------------------------------
 
+
 def test_severity_normalization():
     """Tool-specific severity spellings map onto one scale."""
     print("[TEST] Severity normalization...")
@@ -138,6 +139,7 @@ def test_parser_failure_is_recorded_not_swallowed():
 # Fingerprints and deduplication
 # --------------------------------------------------------------------------
 
+
 def test_fingerprint_is_stable_and_sha256():
     """The same finding produces the same SHA-256 fingerprint every time."""
     print("[TEST] Fingerprint stability...")
@@ -161,9 +163,7 @@ def test_fingerprint_ignores_run_specific_fields():
         severity="critical",
     )
 
-    assert original.fingerprint == rerun.fingerprint, (
-        "execution id, timestamps, and severity must not change identity"
-    )
+    assert original.fingerprint == rerun.fingerprint, "execution id, timestamps, and severity must not change identity"
 
     print("  [OK] Reruns keep the same identity")
 
@@ -208,6 +208,29 @@ def test_merge_does_not_downgrade_severity():
     print("  [OK] Severity never downgraded by a merge")
 
 
+def test_merge_recomputes_generated_remediation():
+    """Merging a CWE that maps to a fix updates generated remediation, both
+    directions; tool-supplied text is never touched."""
+    print("[TEST] Merge recomputes generated remediation...")
+
+    # Self carries no remediation or CWE; other adds CWE-89 (parameterized queries).
+    base = _finding(category=Category.VULNERABILITY.value)
+    base.merge(_finding(cwe_ids=["CWE-89"]))
+    assert base.remediation and "parameterized" in base.remediation.lower()
+
+    # Reverse order: self already carries CWE-89 and generated remediation.
+    base = _finding(cwe_ids=["CWE-89"])
+    base.merge(_finding())
+    assert base.remediation and "parameterized" in base.remediation.lower()
+
+    # Tool-supplied remediation survives a CWE-89 merge unchanged.
+    custom = _finding(cwe_ids=["CWE-79"], remediation="custom fix")
+    custom.merge(_finding(cwe_ids=["CWE-89"]))
+    assert custom.remediation == "custom fix"
+
+    print("  [OK] Generated remediation recomputed, tool text preserved")
+
+
 def test_evidence_is_redacted():
     """Credentials in evidence are masked before storage.
 
@@ -216,10 +239,12 @@ def test_evidence_is_redacted():
     """
     print("[TEST] Evidence redacted...")
     store = FindingStore()
-    stored = store.add(_finding(
-        category=Category.SECRET.value,
-        evidence={"matched": "password=hunter2", "api_key": "AKIAIOSFODNN7EXAMPLE"},
-    ))
+    stored = store.add(
+        _finding(
+            category=Category.SECRET.value,
+            evidence={"matched": "password=hunter2", "api_key": "AKIAIOSFODNN7EXAMPLE"},
+        )
+    )
 
     serialized = json.dumps(stored.evidence)
     assert "hunter2" not in serialized, f"credential survived into evidence: {serialized}"
@@ -292,6 +317,7 @@ def test_store_bounded():
 # Export
 # --------------------------------------------------------------------------
 
+
 def test_json_and_jsonl_export():
     """JSON and JSONL round-trip."""
     print("[TEST] JSON and JSONL export...")
@@ -331,10 +357,12 @@ def test_markdown_separates_findings_from_observations():
 def test_html_escapes_untrusted_content():
     """Findings carry target-controlled text, so HTML output is escaped."""
     print("[TEST] HTML escaping...")
-    findings = [_finding(
-        title="<script>alert('xss')</script>",
-        target="<img src=x onerror=alert(1)>",
-    )]
+    findings = [
+        _finding(
+            title="<script>alert('xss')</script>",
+            target="<img src=x onerror=alert(1)>",
+        )
+    ]
     report = to_html(findings)
 
     # What matters is that no tag delimiter survives unescaped. The payload's
@@ -351,8 +379,13 @@ def test_sarif_is_valid_and_complete():
     """SARIF output has the required structure."""
     print("[TEST] SARIF export...")
     findings = [
-        _finding(title="Hardcoded secret", category=Category.SECRET.value,
-                 severity="critical", location="src/config.py", cwe_ids=["CWE-798"]),
+        _finding(
+            title="Hardcoded secret",
+            category=Category.SECRET.value,
+            severity="critical",
+            location="src/config.py",
+            cwe_ids=["CWE-798"],
+        ),
         _finding(title="Open port", category=Category.OBSERVATION.value, severity="info"),
     ]
     document = json.loads(to_sarif(findings))
@@ -381,9 +414,7 @@ def test_sarif_does_not_invent_file_paths():
     run = json.loads(to_sarif(findings))["runs"][0]
 
     location = run["results"][0]["locations"][0]
-    assert "physicalLocation" not in location, (
-        "a host and port is not a file; SARIF must not claim it is"
-    )
+    assert "physicalLocation" not in location, "a host and port is not a file; SARIF must not claim it is"
     assert location["logicalLocations"][0]["name"] == "443"
 
     print("  [OK] No fabricated file paths")
@@ -494,6 +525,7 @@ if __name__ == "__main__":
     test_fingerprint_distinguishes_real_differences()
     test_deduplication_merges_repeats()
     test_merge_does_not_downgrade_severity()
+    test_merge_recomputes_generated_remediation()
     test_evidence_is_redacted()
     test_store_is_concurrency_safe()
     test_store_summary()

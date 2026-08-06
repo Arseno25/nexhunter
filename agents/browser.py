@@ -43,12 +43,18 @@ if (origQuery) {
 }
 window.__nexhunter_js_errors = [];
 window.__nexhunter_console_warnings = [];
-window.addEventListener('error', (e) => window.__nexhunter_js_errors.push(String(e.message)));
-window.addEventListener('unhandledrejection', (e) =>
-  window.__nexhunter_js_errors.push('unhandledrejection: ' + String(e.reason)));
+window.__nxCap = 500;
+window.addEventListener('error', (e) => {
+  if (window.__nexhunter_js_errors.length < window.__nxCap) window.__nexhunter_js_errors.push(String(e.message));
+});
+window.addEventListener('unhandledrejection', (e) => {
+  if (window.__nexhunter_js_errors.length < window.__nxCap)
+    window.__nexhunter_js_errors.push('unhandledrejection: ' + String(e.reason));
+});
 const __nxConsoleError = console.error.bind(console);
 console.error = (...args) => {
-  window.__nexhunter_console_warnings.push(args.map(String).join(' '));
+  if (window.__nexhunter_console_warnings.length < window.__nxCap)
+    window.__nexhunter_console_warnings.push(args.map(String).join(' '));
   __nxConsoleError(...args);
 };
 """
@@ -320,7 +326,6 @@ class BrowserAgent(Agent):
                     "request_count": len(reqs),
                     "title": driver.title or "",
                 }
-
             if mode == "crawl":
                 links = _gather_links(driver)
                 return {
@@ -351,8 +356,12 @@ class BrowserAgent(Agent):
             # the upgrade path if live interception is ever needed). The
             # document response is what security header checks care about.
             static = _StaticFetcher(url)
-            static.fetch()
-            headers = static.headers or {}
+            if static.fetch():
+                headers = static.headers
+            else:
+                # A failed fetch is "unavailable", not "no headers": an empty
+                # mapping would report every security header as MISSING.
+                headers = None
             cookies = [
                 {
                     "name": c.get("name", ""),
@@ -365,7 +374,7 @@ class BrowserAgent(Agent):
                 for c in driver.get_cookies()
             ]
             gen = [m["content"] for m in p.metas if "generator" in m["name"].lower()]
-            sec = {h: (headers.get(h.lower()) or "MISSING") for h in _SECURITY_HEADERS}
+            sec = {h: (headers.get(h.lower()) or "MISSING") for h in _SECURITY_HEADERS} if headers else {}
             links = _gather_links(driver)
 
             return {
@@ -396,8 +405,12 @@ class BrowserAgent(Agent):
                 pass
 
 
-def _network_requests(driver, limit: int = 200) -> list:
-    """Requests the page made, via the Performance API (works without CDP)."""
+def _network_requests(driver) -> list:
+    """Requests the page made, via the Performance API (works without CDP).
+
+    Returns every deduplicated entry; the caller truncates for display so
+    request_count reflects the complete collection.
+    """
     try:
         entries = driver.execute_script("return performance.getEntriesByType('resource').map(e => e.toJSON())") or []
     except Exception:  # noqa: BLE001
@@ -417,8 +430,6 @@ def _network_requests(driver, limit: int = 200) -> list:
                 "size": entry.get("transferSize", 0),
             }
         )
-        if len(out) >= limit:
-            break
     return out
 
 
@@ -439,18 +450,20 @@ def _status_of(driver) -> int:
 def _wait_settle(driver, stable_ms: int = 1500, max_ms: int = 8000) -> None:
     """Explicit wait for dynamic content: polls until the resource count
     stops growing, so SPAs that render after XHRs are captured. Replaces
-    implicit waits/fixed sleeps (Selenium best practice)."""
+    implicit waits/fixed sleeps (Selenium best practice). Stability is
+    measured from the last observed count change, not the start."""
     try:
         driver.execute_async_script(
             "const done = arguments[arguments.length - 1];"
             "const stableMs = arguments[0];"
             "const maxMs = arguments[1];"
-            "let last = 0, t0 = Date.now();"
+            "let last = 0, t0 = Date.now(), lastChange = t0;"
             "const check = () => {"
             "  const n = performance.getEntriesByType('resource').length;"
-            "  const elapsed = Date.now() - t0;"
-            "  if (elapsed > maxMs || (n === last && elapsed > stableMs)) return done();"
-            "  last = n; setTimeout(check, 250);"
+            "  const now = Date.now();"
+            "  if (n !== last) { last = n; lastChange = now; }"
+            "  if (now - lastChange >= stableMs || now - t0 > maxMs) return done();"
+            "  setTimeout(check, 250);"
             "};"
             "check();",
             stable_ms,

@@ -179,6 +179,9 @@ class Finding:
     first_seen_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     last_seen_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     id: str = ""
+    # True when remediation was filled in from the knowledge base rather than
+    # supplied by the tool; only generated remediation is recomputed on merge.
+    _remediation_generated: bool = field(default=False, repr=False)
 
     def __post_init__(self):
         self.severity = normalize_severity(self.severity)
@@ -204,6 +207,7 @@ class Finding:
             self.attack_ids = attack.attack_ids_for(self.cwe_ids)
         if not self.remediation:
             self.remediation = attack.remediation_for(self.cwe_ids, self.category)
+            self._remediation_generated = self.remediation is not None
 
         if not self.id:
             self.id = self.fingerprint[:16]
@@ -257,6 +261,11 @@ class Finding:
             self.cvss_score = other.cvss_score
         if not self.remediation:
             self.remediation = other.remediation
+            self._remediation_generated = other._remediation_generated
+        elif self._remediation_generated:
+            # Merged CWEs may now map to a concrete fix (e.g. CWE-89 ->
+            # parameterized queries); recompute, but never touch tool text.
+            self.remediation = attack.remediation_for(self.cwe_ids, self.category)
 
     def to_dict(self) -> dict[str, Any]:
         return {
