@@ -376,7 +376,7 @@ class VulnerabilityCard:
         cvss_score: float | None = None,
         poc: str = "",
     ):
-        self.id = f"vuln_{int(time.time() * 1000)}"
+        self.id = f"vuln_{time.time_ns()}"
         self.title = title
         self.type = vuln_type
         self.severity = severity
@@ -565,6 +565,108 @@ def _strip_ansi(text: str) -> str:
     return re.sub(r"\x1b\[[0-9;]*m", "", text)
 
 
+def _pad_to(text: str, width: int) -> str:
+    """Left-justify a multi-line string to a fixed visible width."""
+    return "\n".join(line + " " * max(0, width - len(_strip_ansi(line))) for line in text.splitlines())
+
+
+def merge_columns(left: str, right: str, gap: int = 4) -> str:
+    """Place two multi-line strings side by side.
+
+    Both columns keep their own box alignment; shorter ones are padded to the
+    same height, so joined top/bottom borders stay straight.
+    """
+    left_lines = left.splitlines()
+    right_lines = right.splitlines()
+    height = max(len(left_lines), len(right_lines))
+    left_lines += [""] * (height - len(left_lines))
+    right_lines += [""] * (height - len(right_lines))
+    left_w = len(_strip_ansi(left_lines[0])) + gap
+    return "\n".join(
+        f"{left.ljust(left_w)}{right}"
+        for left, right in zip(left_lines, right_lines, strict=True)
+    )
+
+
+def create_console_dashboard(
+    tools: list[dict[str, Any]],
+    executions: list[dict[str, Any]],
+    findings: list[dict[str, Any]],
+    metrics: dict[str, Any],
+    color: bool | None = None,
+) -> str:
+    """HexStrike-style console frame: header strip, toolkit sidebar, and
+    executions + findings panels side by side. Pure client-side render; every
+    input is a JSON list/dict, so the server does not need a render path."""
+    if color is None:
+        color = supports_color()
+
+    # Toolkit sidebar, grouped by risk level like a module list.
+    groups: list[tuple[str, str, list[dict]]] = []
+    for risk in ("passive", "active", "intrusive"):
+        members = [t for t in tools if t.get("risk_level") == risk]
+        if members:
+            groups.append((risk.upper(), f"{len(members):>4} tools", members))
+
+    sidebar_rows: list[Any] = []
+    for risk, count, members in groups:
+        sidebar_rows.append(("", f"[{risk}]   {count}", "BOLD"))
+        for tool in members[:3]:
+            mark = "+" if tool.get("available") else "."
+            sidebar_rows.append(("", f"  {mark} {tool.get('name', '?')}", "WHITE" if tool.get("available") else "GRAY"))
+        if len(members) > 3:
+            sidebar_rows.append(("", f"  ... {len(members) - 3} more", "DIM"))
+        sidebar_rows.append(("", "", ""))
+
+    # Executions panel, newest first.
+    exec_rows: list[Any] = []
+    for exec_ in executions[:12]:
+        status = str(exec_.get("status", "unknown"))
+        sev = STATUS_COLORS.get(status.lower(), "GRAY")
+        target = str(exec_.get("target") or "")
+        duration = exec_.get("duration_s")
+        tail = f" → {target}" if target else ""
+        tail += f"  {duration:.1f}s" if isinstance(duration, (int, float)) else ""
+        exec_rows.append((status.upper()[:10], f"{exec_.get('tool', '?')}{tail}", sev))
+    if not exec_rows:
+        exec_rows.append(("", "no executions yet", "GRAY"))
+
+    # Findings panel: severity counts + top titles.
+    sev_counts = {level: 0 for level in ("critical", "high", "medium", "low", "info")}
+    for finding in findings:
+        level = str(finding.get("severity", "info")).lower()
+        if level in sev_counts:
+            sev_counts[level] += 1
+
+    findings_rows: list[Any] = [
+        (sev.upper(), str(sev_counts[sev]), SEVERITY_COLORS.get(sev, "VULN_INFO"))
+        for sev in ("critical", "high", "medium", "low", "info")
+        if sev_counts[sev]
+    ]
+    if not findings_rows:
+        findings_rows.append(("", "no findings yet", "GRAY"))
+    for finding in findings[:4]:
+        title = str(finding.get("title", ""))[:44]
+        findings_rows.append(("", title, "WHITE"))
+
+    header_rows: list[Any] = [
+        ("Requests", str(metrics.get("requests", 0))),
+        ("Processes", str(metrics.get("processes", 0))),
+        ("Findings", str(metrics.get("findings", 0))),
+    ]
+    if metrics.get("cache_hits"):
+        header_rows.append(("Cache hits", str(metrics.get("cache_hits", 0))))
+
+    header = _box("NEXHUNTER CONSOLE", header_rows, border="CRIMSON", color=color)
+    sidebar = _box("⚔ TOOLKIT", sidebar_rows, border="CYAN", color=color)
+    exec_box = _box("▶ EXECUTIONS", exec_rows, border="GREEN", color=color)
+    findings_box = _box("🚨 FINDINGS", findings_rows, border="ORANGE", color=color)
+
+    right = _pad_to(exec_box, max(len(_strip_ansi(line)) for line in exec_box.splitlines()))
+    right = "\n".join([right, _pad_to(findings_box, len(_strip_ansi(right.splitlines()[0])))])
+    return header + "\n" + merge_columns(sidebar, right, gap=2)
+
+
 def _selfcheck() -> None:
     """Assert the box builder keeps every line the same visible width."""
     box = _box(
@@ -584,6 +686,18 @@ def _selfcheck() -> None:
     assert len({len(line) for line in dash.splitlines()}) == 1, "dashboard misaligned"
     err = format_error_card("TIMEOUT", "nmap_scan", "305s exceeded limit", "retry")
     assert len({len(_strip_ansi(line)) for line in err.splitlines()}) == 1, "error card misaligned"
+    merged = merge_columns("a\nbb", "x\n\nzzz")
+    lines = merged.splitlines()
+    assert len(lines) == 3 and lines[0].endswith("x") and lines[2].endswith("zzz"), "merge_columns height/width wrong"
+    dash = create_console_dashboard(
+        [{"name": "nmap_scan", "risk_level": "active", "available": True}] * 3,
+        [{"tool": "nmap_scan", "status": "running", "target": "10.0.0.1", "duration_s": 42}],
+        [{"severity": "critical", "title": "RCE in admin panel"}],
+        {"requests": 10, "processes": 1, "findings": 1},
+        color=False,
+    )
+    assert dash.count("╔") == 0 and "NEXHUNTER CONSOLE" in dash and "TOOLKIT" in dash, "console dashboard missing panels"
+    assert len({len(_strip_ansi(line)) for line in dash.splitlines()}) <= 2, "console dashboard columns misaligned"
     for name, key in {**SEVERITY_COLORS, **STATUS_COLORS}.items():
         assert key in COLORS, f"{name} -> unknown palette key {key}"
     assert all("\033[5m" not in COLORS[key] for key in STATUS_COLORS.values()), "blink in status colors"

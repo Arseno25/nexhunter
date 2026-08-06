@@ -1,6 +1,6 @@
 """MCP profiles: which tools a given AI client is shown.
 
-Exposing all 300-odd registered tools to every client is what makes an MCP
+Exposing all 268 registered tools to every client is what makes an MCP
 integration expensive and error-prone -- a large initialization payload, a
 large token cost on every session, and a model choosing between near-identical
 tools it has no basis to pick between. A profile narrows that to one job.

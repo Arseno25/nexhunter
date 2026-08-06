@@ -14,14 +14,7 @@ from nexhunter.api.security_features import (
     ThreatIntelligence,
 )
 from nexhunter.api.visual import VulnerabilityCard, ProgressTracker, DashboardMetrics
-from nexhunter.workflows.security_workflows import (
-    BugBountyWorkflow,
-    ApiSecurityWorkflow,
-    CloudSecurityWorkflow,
-    WORKFLOW_TYPES,
-)
 from nexhunter.agents.enhanced import ENHANCED_AGENTS
-from nexhunter.workflows.workflow_agents import WORKFLOW_AGENTS
 
 
 def test_osint_collector():
@@ -141,20 +134,6 @@ def test_dashboard_metrics():
 # workflow still reported as passing -- the tests could not fail. Assertions
 # now propagate, which is the only thing pytest treats as a failure.
 
-def test_workflows():
-    """Test all workflows."""
-    print("[TEST] Workflows...")
-    target = "example.com"
-
-    assert WORKFLOW_TYPES, "no workflows registered"
-    for wf_type, wf_class in WORKFLOW_TYPES.items():
-        workflow = wf_class(target)
-        assert hasattr(workflow, "phases"), f"{wf_type} has no phases attribute"
-        assert len(workflow.phases) > 0, f"{wf_type} defines no phases"
-
-    print(f"  [OK] {len(WORKFLOW_TYPES)} workflows define phases")
-
-
 def test_enhanced_agents():
     """Test enhanced agents."""
     print("[TEST] Enhanced Agents...")
@@ -168,18 +147,13 @@ def test_enhanced_agents():
     print(f"  [OK] {len(ENHANCED_AGENTS)} enhanced agents well-formed")
 
 
-def test_workflow_agents():
-    """Test workflow agents."""
-    print("[TEST] Workflow Agents...")
-
-    assert WORKFLOW_AGENTS, "no workflow agents registered"
-    for agent_name, agent in WORKFLOW_AGENTS.items():
-        assert hasattr(agent, "name"), f"{agent_name} has no name"
-        assert hasattr(agent, "execute"), f"{agent_name} has no execute()"
-        result = agent.execute(None, {"target": "example.com"})
-        assert "ok" in result, f"{agent_name} returned no 'ok' key: {result}"
-
-    print(f"  [OK] {len(WORKFLOW_AGENTS)} workflow agents respond")
+def test_workflow_agents_are_gone():
+    """The old fake workflow agents were removed; nothing may resurrect them."""
+    try:
+        from nexhunter.workflows import workflow_agents  # noqa: F401
+    except ImportError:
+        return
+    raise AssertionError("fake workflow agents must not come back")
 
 
 def test_integration():
@@ -187,20 +161,17 @@ def test_integration():
     print("[TEST] Integration Scenarios...")
 
     # Bug bounty workflow with OSINT
-    BugBountyWorkflow("example.com")
     osint = OsintCollector()
     osint.add_subdomain("app.example.com", "1.2.3.4")
     assert len(osint.to_dict()["subdomains"]) > 0
 
     # API workflow with vulnerability analysis
-    ApiSecurityWorkflow("https://api.example.com")
     analyzer = VulnerabilityAnalyzer()
     analyzer.add_vulnerability("API Auth Bypass", "CWE-287", 9.1, "critical", "Access")
     chains = analyzer.detect_chains()
     assert chains is not None, "detect_chains should return a result, not None"
 
     # Cloud workflow with threat intel
-    CloudSecurityWorkflow("aws-account")
     intel = ThreatIntelligence()
     intel.add_ioc("S3_BUCKET", "public-bucket")
     risk = intel.assess_risk()
@@ -224,9 +195,8 @@ def run_all_tests():
         test_vulnerability_card,
         test_progress_tracker,
         test_dashboard_metrics,
-        test_workflows,
+        test_workflow_agents_are_gone,
         test_enhanced_agents,
-        test_workflow_agents,
         test_integration,
     ]
 

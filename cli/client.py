@@ -5,9 +5,9 @@ Commands: health, agents, tools, probe, assess, report, telemetry.
 See NEXHUNTER_CLI.md for full documentation.
 
 Usage:
-    python nexhunter.py health
-    python nexhunter.py probe https://example.com
-    python nexhunter.py --server http://127.0.0.1:8888 assess https://example.com
+    nexhunter health
+    nexhunter probe https://example.com
+    nexhunter --server http://127.0.0.1:8888 assess https://example.com
 """
 
 import argparse
@@ -388,21 +388,33 @@ def cmd_vulnerabilities(args):
 
 
 def cmd_dashboard(args):
-    """Display assessment dashboard."""
-    color = "1" if _C.enabled else "0"
-    d = api(f"/api/visual/dashboard?format=box&color={color}")
-    if d.get("error"):
-        print(ERR("[-] " + d["error"]))
-        return 1
-    if d.get("box"):
-        print(d["box"])
-        return 0
-    # Fallback: plain metrics from an older server.
-    print(HEAD("Assessment Dashboard:"))
-    print(f"  Requests: {d.get('requests', 0)}")
-    print(f"  Findings: {d.get('findings', 0)}")
-    print(f"  Active Processes: {d.get('processes', 0)}")
-    print(f"  Cache Hits: {d.get('cache_hits', 0)}")
+    """HexStrike-style console dashboard: toolkit sidebar, executions,
+    findings, and server metrics in one tidy frame. --watch refreshes."""
+    from nexhunter.api.visual import create_console_dashboard
+
+    def frame() -> str:
+        tools = api("/api/tools")
+        execs = api("/api/executions")
+        findings = api("/api/findings")
+        metrics = api("/api/visual/dashboard")
+        return create_console_dashboard(
+            tools.get("tools", []) if isinstance(tools, dict) else [],
+            execs.get("executions", []) if isinstance(execs, dict) else [],
+            findings.get("findings", []) if isinstance(findings, dict) else [],
+            metrics if isinstance(metrics, dict) else {},
+            color=_C.enabled,
+        )
+
+    if getattr(args, "watch", False):
+        try:
+            while True:
+                sys.stdout.write("\033[2J\033[H" + frame())
+                sys.stdout.flush()
+                time.sleep(getattr(args, "interval", 3))
+        except KeyboardInterrupt:
+            return 0
+
+    print(frame())
     return 0
 
 
@@ -664,7 +676,9 @@ def main(argv=None):
     p_report.add_argument("--fmt", choices=["markdown", "json"], default="markdown")
     sub.add_parser("telemetry", help="server performance and cache statistics")
     sub.add_parser("vulns", help="display vulnerability cards")
-    sub.add_parser("dashboard", help="display assessment dashboard")
+    p_dash = sub.add_parser("dashboard", help="console dashboard: toolkit, executions, findings (--watch to refresh)")
+    p_dash.add_argument("--watch", action="store_true", help="live refresh every --interval seconds")
+    p_dash.add_argument("--interval", type=int, default=3, help="refresh interval in seconds (default: 3)")
 
     # Enhanced features
     osint_parser = sub.add_parser("osint", help="OSINT intelligence gathering")

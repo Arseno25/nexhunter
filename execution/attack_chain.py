@@ -106,7 +106,7 @@ def build_chain(name: str, target: str,
                 "available": list(CHAIN_PATTERNS)}
     meta = CHAIN_PATTERNS[name]
     steps: list[dict] = []
-    for tool, desc, _base, params, gate in meta["steps"]:
+    for tool, desc, base, params, gate in meta["steps"]:
         spec = T.get_tool_spec(tool)
         available = bool(spec and spec.available)
         filled = _build(tool, params, target, domain, host, username, wordlist)
@@ -116,6 +116,7 @@ def build_chain(name: str, target: str,
             "params": filled,
             "gate": gate,
             "binary_available": available,
+            "base_probability": base,
         })
 
     prob = _chain_probability(steps)
@@ -137,15 +138,18 @@ def _build(tool, params, target, domain, host, username, wordlist) -> dict:
 
 
 def _chain_probability(steps: list[dict]) -> float:
-    """Multiplicative success odds with availability and tool count discounts."""
+    """Multiplicative success odds from per-step base probabilities.
+
+    A missing binary halves the step's odds. The chain-length penalty scales
+    with the score, so a long cold chain never scores below zero.
+    """
     if not steps:
         return 0.0
     prob = 1.0
     for step in steps:
-        step_prob = 0.5  # a gate blocks roughly half the time on a real target
-        # A missing binary shouldn't zero the plan; it halves the step.
-        if step.get("binary_available"):
-            step_prob = 0.75
+        step_prob = step.get("base_probability", 0.5)
+        if not step.get("binary_available"):
+            step_prob /= 2
         prob *= step_prob
     penalty = max(0.0, len(steps) - 3) * 0.05
-    return max(0.0, prob - penalty)
+    return round(max(0.0, prob * (1 - penalty)), 3)

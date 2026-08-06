@@ -363,6 +363,30 @@ def test_schema_driven_redaction_beats_flag_guessing():
     print("  [OK] Declared secrets masked where guessing fails")
 
 
+def test_optimizer_query_param_only_filled_for_whois():
+    """A "query" parameter is target-shaped only for whois_lookup.
+
+    cve_search, searchsploit, shodan, censys and zoomeye use "query" for a
+    search string; auto-filling it with the target hostname pollutes the
+    search.
+    """
+    print("[TEST] Optimizer query parameter scoping...")
+    from nexhunter.agents.param_optimizer import ParameterOptimizer
+
+    opt = ParameterOptimizer()
+
+    whois = T.get_tool_spec("whois_lookup")
+    params = opt.optimize(whois, "example.com")
+    assert params.get("query") == "example.com"
+
+    for name in ("cve_search", "searchsploit", "shodan", "censys", "zoomeye"):
+        spec = T.get_tool_spec(name)
+        params = opt.optimize(spec, "example.com")
+        assert "query" not in params, f"{name} query must not be auto-filled with the hostname"
+
+    print("  [OK] Search-tool queries left alone")
+
+
 if __name__ == "__main__":
     print("\n=== Typed Parameter Tests ===\n")
     test_option_injection_rejected()
@@ -387,4 +411,5 @@ if __name__ == "__main__":
     test_registry_rejects_injection_through_a_real_tool()
     test_secret_parameters_detected()
     test_schema_driven_redaction_beats_flag_guessing()
+    test_optimizer_query_param_only_filled_for_whois()
     print("\n=== All Typed Parameter Tests Passed ===\n")

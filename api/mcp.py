@@ -57,7 +57,6 @@ mcp = FastMCP(
     instructions=(
         "nexhunter AI-driven security assessment platform via MCP.\n\n"
         "Setup: python -m nexhunter.api.server --port 8888\n"
-        "Web UI: http://localhost:8888/ or http://localhost:8888/ui\n"
         "Status: server_status() first to verify connectivity.\n\n"
         "Main flows:\n"
         "  - recommend_plan(target) - senior-pentester methodology plan, nothing runs\n"
@@ -164,12 +163,15 @@ def run_agent(name: str, params: str = "{}") -> str:
 
 @mcp.tool()
 def run_flow(flow: str, target: str, category: str = "", file: str = "") -> str:
-    """Run a workflow agent: 'bugbounty' (phased recon->report) or 'ctf' (category: web/crypto/forensics/pwn/recon)."""
+    """Run a workflow agent: 'bugbounty' (phased recon->report), 'bugbounty-pro'
+    (professional assessment) or 'ctf' (category: web/crypto/forensics/pwn/recon)."""
     if flow == "bugbounty":
         return _render(api("/api/flow/bugbounty", {"target": target}), indent=1)
+    if flow == "bugbounty-pro":
+        return _render(api("/api/flow/bugbounty-pro", {"target": target}), indent=1)
     if flow == "ctf":
         return _render(api("/api/flow/ctf", {"target": target, "category": category, "file": file}), indent=1)
-    return json.dumps({"ok": False, "error": "flow must be 'bugbounty' or 'ctf'"})
+    return json.dumps({"ok": False, "error": "flow must be 'bugbounty', 'bugbounty-pro' or 'ctf'"})
 
 
 @mcp.tool()
@@ -739,8 +741,8 @@ def recommend_plan(target: str, risk_ceiling: str = "active") -> str:
 def plan_assessment(target: str, objective: str = "standard", risk_ceiling: str = "active") -> str:
     """Get a SCORED shortlist of the tools worth running against a target, WITHOUT running anything.
 
-    This is the plan-first step: instead of considering all 252 registered
-    tools, the selector scores every tool against the target profile (its type,
+    This is the plan-first step: instead of considering the whole tool
+    registry, the selector scores every tool against the target profile (its type,
     technologies, web/TLS surface), its category relevance, maturity, and
     whether the binary is installed -- then returns only the high-value few,
     ranked, each with the reasons behind the pick.

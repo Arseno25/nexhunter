@@ -6,8 +6,7 @@ import urllib.parse
 import urllib.request
 
 from nexhunter.agents.base import Agent
-
-NVD = "https://services.nvd.nist.gov/rest/json/cves/2.0?"
+from nexhunter.agents.exploit_kit import core as C
 
 EXPLOIT_KINDS = [
     ("rce", ("remote code execution", "code execution", "command injection", "deserialization", "rce")),
@@ -57,7 +56,7 @@ class CVEIntelligenceManager(Agent):
             return self._cache[q]
 
         try:
-            url = NVD + urllib.parse.urlencode({"keywordSearch": q, "resultsPerPage": limit})
+            url = C.NVD + urllib.parse.urlencode({"keywordSearch": q, "resultsPerPage": limit})
             req = urllib.request.Request(url, headers={"User-Agent": "nexhunter/1.0"})  # noqa: S310 - NVD API/https only
             with urllib.request.urlopen(req, timeout=6) as resp:  # nosec B310 - NVD API/https only
                 data = json.load(resp)
@@ -108,7 +107,7 @@ class AIExploitGenerator(Agent):
             return self.result(ok=False, error="cve_id required")
 
         try:
-            url = NVD + urllib.parse.urlencode({"cveId": cve_id})
+            url = C.NVD + urllib.parse.urlencode({"cveId": cve_id})
             req = urllib.request.Request(url, headers={"User-Agent": "nexhunter/1.0"})  # noqa: S310 - NVD API/https only
             with urllib.request.urlopen(req, timeout=8) as resp:  # nosec B310 - NVD API/https only
                 data = json.load(resp)

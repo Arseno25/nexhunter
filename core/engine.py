@@ -1,12 +1,10 @@
 """nexhunter.engine - orchestration: caching, parallel exec, tech-aware tool selection."""
 
-import hashlib
 import json
 import re
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from collections import OrderedDict
-from dataclasses import asdict, dataclass, field
 from typing import Any
 
 from nexhunter.core import tools as T
@@ -15,29 +13,9 @@ from nexhunter.core.config import (
     MAX_PARALLEL_WORKERS,
     FINDING_DEDUP_ENABLED,
 )
+from nexhunter.findings.models import Finding
 
 SEVERITY_ORDER = {"critical": 0, "high": 1, "medium": 2, "low": 3, "info": 4}
-
-
-@dataclass
-class Finding:
-    """Standardized finding with deduplication support."""
-
-    tool: str
-    target: str
-    title: str
-    severity: str = "info"
-    evidence: str = ""
-    timestamp: float = field(default_factory=time.time)
-
-    def signature(self) -> str:
-        """Generate unique signature for deduplication."""
-        msg = f"{self.tool}:{self.target}:{self.title}".encode()
-        return hashlib.sha256(msg).hexdigest()
-
-    def to_dict(self) -> dict:
-        """Convert to dictionary."""
-        return asdict(self)
 
 
 class WorkflowContext:
@@ -64,9 +42,13 @@ class WorkflowContext:
 class Engine:
     """Orchestration engine with caching, parallel exec, finding tracking."""
 
-    def __init__(self):
+    def __init__(self, finding_store=None):
         self.findings: list[Finding] = []
         self._finding_sigs = set()
+        # Shared finding store: the single registry when wired (see
+        # api/server.py). Consumers read the store; self.findings stays as the
+        # legacy list for callers that never pass a store.
+        self._store = finding_store
         # LRU cache: OrderedDict; hits move the entry to the end, eviction
         # drops the least-recently-used entry from the front.
         self._cache: OrderedDict[str, dict] = OrderedDict()
@@ -132,13 +114,19 @@ class Engine:
         return out
 
     def add(self, finding: Finding):
-        """Add finding with deduplication."""
+        """Add finding with deduplication; mirrors into the shared store."""
         if FINDING_DEDUP_ENABLED:
-            sig = finding.signature()
+            sig = finding.fingerprint
             if sig in self._finding_sigs:
                 return
             self._finding_sigs.add(sig)
         self.findings.append(finding)
+        if self._store is not None:
+            self._store.add(finding)
+
+    def _visible(self) -> list:
+        """Findings for consumers: the shared store when wired, else legacy."""
+        return self._store.list() if self._store is not None else self.findings
 
     @staticmethod
     def _parse_curl_probe(headers: str, body: str) -> dict:
@@ -200,7 +188,7 @@ class Engine:
                         target=h["addr"],
                         title=f"open {p['proto']}/{p['port']} - {p['service'] or 'unknown'}",
                         severity=sev,
-                        evidence=evidence,
+                        evidence={"detail": evidence} if evidence else {},
                     )
                 )
         return {
@@ -231,7 +219,7 @@ class Engine:
                             target=n["matched"] or target,
                             title=n["name"] or n["template"],
                             severity=n["severity"] or "info",
-                            evidence=n["description"],
+                            evidence={"detail": n["description"]} if n.get("description") else {},
                         )
                     )
         return {"ok": True, "target": target, "tech": tech, "tools_run": sorted(results)}
@@ -294,7 +282,7 @@ class Engine:
                     target=target,
                     title="query parameter present - manual sqlmap check advised",
                     severity="info",
-                    evidence="auto-injection testing skipped to limit noise; run sqlmap_scan directly",
+                    evidence={"detail": "auto-injection testing skipped to limit noise; run sqlmap_scan directly"},
                 )
             )
 
@@ -304,14 +292,15 @@ class Engine:
 
     def summary(self) -> dict:
         """Summary of findings by severity."""
+        findings = self._visible()
         by_sev: dict[str, int] = {}
-        for f in self.findings:
-            by_sev[f.severity] = by_sev.get(f.severity, 0) + 1
-        return {"total": len(self.findings), "by_severity": by_sev}
+        for f in findings:
+            by_sev[f.severity.value] = by_sev.get(f.severity.value, 0) + 1
+        return {"total": len(findings), "by_severity": by_sev}
 
     def report(self, fmt: str = "markdown") -> str:
         """Generate report in markdown or JSON."""
-        fs = sorted(self.findings, key=lambda f: SEVERITY_ORDER.get(f.severity, 9))
+        fs = sorted(self._visible(), key=lambda f: SEVERITY_ORDER.get(f.severity.value, 9))
         if fmt == "json":
             return json.dumps({"findings": [f.to_dict() for f in fs]}, indent=2)
         lines = ["# nexhunter Assessment Report", ""]
@@ -319,13 +308,15 @@ class Engine:
             lines.append("No findings recorded.")
         else:
             for f in fs:
-                lines.append(f"- **{f.severity.upper()}** [{f.tool}] {f.title}")
+                lines.append(f"- **{f.severity.value.upper()}** [{f.tool}] {f.title}")
                 if f.evidence:
                     lines.append(f"  evidence: {f.evidence}")
         return "\n".join(lines)
 
     def clear(self):
         """Clear findings and state."""
+        if self._store is not None:
+            self._store.clear()
         self.findings.clear()
         self._finding_sigs.clear()
         self.workflow_contexts.clear()

@@ -15,8 +15,6 @@ import re
 from nexhunter.agents.base import Agent
 from nexhunter.agents.exploit_kit import core as C
 
-NVD_SEARCH = "https://services.nvd.nist.gov/rest/json/cves/2.0?"
-
 SEVERITY_ORDER = {"CRITICAL": 4, "HIGH": 3, "MEDIUM": 2, "LOW": 1}
 
 # PoC-hinting markers found in descriptions or references.
@@ -60,7 +58,7 @@ class CVEWatchAgent(Agent):
             params["keywordSearch"] = keyword
 
         try:
-            data = C.fetch_json(NVD_SEARCH + C.urllib.parse.urlencode(params))
+            data = C.fetch_json(C.NVD + C.urllib.parse.urlencode(params))
         except Exception as exc:  # noqa: BLE001 - report the network failure
             return self.result(ok=False, error=f"NVD unreachable: {exc}")
 

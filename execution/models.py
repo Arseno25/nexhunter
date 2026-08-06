@@ -100,6 +100,45 @@ class ExecutionRecord:
         end = self.completed_at or datetime.now(timezone.utc)
         return round((end - self.started_at).total_seconds(), 3)
 
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "ExecutionRecord":
+        """Rebuild from `to_dict` output (persistence round-trip).
+
+        Records that were mid-flight when the server died are honest about it:
+        they come back as FAILED rather than pretending to be running. Pid and
+        workspace are deliberately not restored -- pids are meaningless after a
+        restart and workspaces are derivable from the execution id.
+        """
+        status = ExecutionStatus(data.get("status", ExecutionStatus.QUEUED.value))
+        if not status.is_terminal:
+            status = ExecutionStatus.FAILED
+            message = data.get("error") or "server restarted mid-execution"
+        else:
+            message = data.get("error")
+
+        def _dt(key: str) -> datetime | None:
+            value = data.get(key)
+            return datetime.fromisoformat(value) if value else None
+
+        return cls(
+            tool_name=data.get("tool", ""),
+            id=data.get("id") or uuid.uuid4().hex,
+            status=status,
+            target=data.get("target"),
+            risk_level=data.get("risk_level", "active"),
+            redacted_parameters=data.get("parameters") or {},
+            redacted_command=data.get("command") or [],
+            created_at=_dt("created_at") or datetime.now(timezone.utc),
+            started_at=_dt("started_at"),
+            completed_at=_dt("completed_at"),
+            exit_code=data.get("exit_code"),
+            error_code=data.get("error_code"),
+            error_message=message,
+            stdout_bytes=data.get("stdout_bytes", 0),
+            stderr_bytes=data.get("stderr_bytes", 0),
+            truncated=bool(data.get("truncated", False)),
+        )
+
     def to_dict(self) -> dict[str, Any]:
         """Dashboard-ready view. Contains no unredacted parameters."""
         return {

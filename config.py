@@ -65,6 +65,11 @@ def _choice(name: str, default: str, choices: tuple) -> str:
     return raw
 
 
+def _default_data_dir() -> Path:
+    """Local default when NEXHUNTER_DATA_DIR is unset. Single source of truth."""
+    return Path.cwd() / "nexhunter_data"
+
+
 @dataclass(frozen=True)
 class Config:
     """Validated runtime configuration."""
@@ -74,7 +79,7 @@ class Config:
     bind_port: int = 8888
     external_bind_allowed: bool = False
 
-    data_dir: Path = field(default_factory=lambda: Path.cwd() / "nexhunter_data")
+    data_dir: Path = field(default_factory=_default_data_dir)
     log_level: str = "INFO"
 
     max_request_bytes: int = 1_048_576
@@ -112,7 +117,7 @@ class Config:
             bind_port=_integer("NEXHUNTER_BIND_PORT", 8888, minimum=1, maximum=65535),
             external_bind_allowed=_flag("NEXHUNTER_EXTERNAL_BIND_ALLOWED", False),
 
-            data_dir=Path(data_dir_raw).expanduser() if data_dir_raw else Path.cwd() / "nexhunter_data",
+            data_dir=Path(data_dir_raw).expanduser() if data_dir_raw else _default_data_dir(),
             log_level=_choice("NEXHUNTER_LOG_LEVEL", "INFO", VALID_LOG_LEVELS).upper(),
 
             max_request_bytes=_integer("NEXHUNTER_MAX_REQUEST_BYTES", 1_048_576, minimum=1024),

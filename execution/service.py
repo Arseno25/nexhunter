@@ -141,6 +141,7 @@ class ExecutionService:
         self.registry.add(record)
 
         record.transition(ExecutionStatus.VALIDATING)
+
         merged, err = spec.normalize(params)
         if err is not None:
             return self._fail(record, "INVALID_PARAMS", err, blocked=True)
@@ -154,7 +155,7 @@ class ExecutionService:
         }
         record.target = spec.target_of(merged)
 
-        record.transition(ExecutionStatus.AUTHORIZED)
+        self.registry.transition(record.id, ExecutionStatus.AUTHORIZED)
 
         cmd = spec.build_cmd(merged)
         if not cmd:
@@ -283,7 +284,7 @@ class ExecutionService:
         cache_key: str | None = None,
     ) -> None:
         """Run the process and fold its outcome into the record."""
-        record.transition(ExecutionStatus.RUNNING)
+        self.registry.transition(record.id, ExecutionStatus.RUNNING)
         log.info(_tool_line(
             "RUNNING", record.tool_name, record.target or "",
             f"(risk={record.risk_level})",
@@ -310,16 +311,16 @@ class ExecutionService:
 
         if result.timed_out:
             record.error_code, record.error_message = "TIMEOUT", result.error
-            record.transition(ExecutionStatus.TIMED_OUT)
+            self.registry.transition(record.id, ExecutionStatus.TIMED_OUT)
         elif result.terminated:
             record.error_code, record.error_message = result.error_code, result.error
-            record.transition(ExecutionStatus.TERMINATED)
+            self.registry.transition(record.id, ExecutionStatus.TERMINATED)
         elif result.error or result.exit_code != 0:
             record.error_code = result.error_code or "NONZERO_EXIT"
             record.error_message = result.error
-            record.transition(ExecutionStatus.FAILED)
+            self.registry.transition(record.id, ExecutionStatus.FAILED)
         else:
-            record.transition(ExecutionStatus.COMPLETED)
+            self.registry.transition(record.id, ExecutionStatus.COMPLETED)
 
         self._log_outcome(record)
         self.registry.clear_cancel(record.id)
@@ -510,7 +511,7 @@ class ExecutionService:
     def _fail(self, record: ExecutionRecord, code: str, message: str, blocked: bool) -> dict[str, Any]:
         record.error_code = code
         record.error_message = message
-        record.transition(ExecutionStatus.BLOCKED if blocked else ExecutionStatus.FAILED)
+        self.registry.transition(record.id, ExecutionStatus.BLOCKED if blocked else ExecutionStatus.FAILED)
         log.warning(_tool_line(
             "BLOCKED" if blocked else "FAILED",
             record.tool_name, record.target or "", f"[{code}] {message}",
