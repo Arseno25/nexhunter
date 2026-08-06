@@ -567,6 +567,28 @@ def visual_dashboard():
     return jsonify(metrics.to_dict())
 
 
+@app.get("/")
+@app.get("/ui")
+def ui_home():
+    """Browser dashboard at the root, matching the /ui path the MCP
+    instructions advertise. Zero assets, zero JS: the live box + links."""
+    box = create_live_dashboard(EXEC.list_processes(), color=False)
+    html = (
+        "<!doctype html><html><head><meta charset='utf-8'>"
+        "<title>nexhunter</title>"
+        "<style>body{font-family:ui-monospace,Consolas,monospace;background:#0d1117;"
+        "color:#c9d1d9;padding:2rem}h1{color:#58a6ff}pre{background:#161b22;"
+        "padding:1rem;border-radius:8px;overflow-x:auto}"
+        "a{color:#58a6ff;margin-right:1rem}</style></head><body>"
+        f"<h1>nexhunter</h1>{box and f'<pre>{box}</pre>' or ''}"
+        "<p><a href='/api/visual/dashboard'>metrics (json)</a>"
+        "<a href='/api/findings/export?format=markdown'>findings (md)</a>"
+        "<a href='/api/visual/vulnerabilities'>vulnerabilities (json)</a>"
+        "<a href='/health'>health</a></p></body></html>"
+    )
+    return _html_response(html, status=200)
+
+
 @app.get("/api/visual/vulnerabilities")
 def visual_vulnerabilities():
     findings = FINDINGS.list()
