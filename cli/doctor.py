@@ -72,12 +72,18 @@ def _check_destructive_flags() -> list[tuple[str, str]]:
 
 def _check_dependencies() -> list[tuple[str, str]]:
     results = []
-    for module, purpose in (("fastmcp", "MCP server"), ("defusedxml", "safe XML parsing")):
+    for module, purpose in (
+        ("fastmcp", "MCP server"),
+        ("flask", "API server"),
+        ("defusedxml", "safe XML parsing"),
+    ):
         try:
             __import__(module)
             results.append((OK, f"{module} available ({purpose})"))
         except ImportError:
-            results.append((MISSING, f"{module} not installed ({purpose} unavailable)"))
+            # Python dependencies are part of the install, unlike optional tool
+            # binaries: a missing one means the server or bridge cannot start.
+            results.append((FAIL, f"{module} not installed ({purpose} unavailable)"))
     return results
 
 

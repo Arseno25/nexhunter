@@ -16,6 +16,8 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import Any
 
+from nexhunter.findings import attack
+
 
 class Severity(Enum):
     """Normalized severity. Tool-specific scales map onto these."""
@@ -41,14 +43,31 @@ _SEVERITY_RANK = {
 
 # How other tools spell the same thing.
 _SEVERITY_ALIASES = {
-    "critical": Severity.CRITICAL, "crit": Severity.CRITICAL, "severe": Severity.CRITICAL,
-    "blocker": Severity.CRITICAL, "5": Severity.CRITICAL,
-    "high": Severity.HIGH, "error": Severity.HIGH, "major": Severity.HIGH, "4": Severity.HIGH,
-    "medium": Severity.MEDIUM, "moderate": Severity.MEDIUM, "warning": Severity.MEDIUM,
-    "warn": Severity.MEDIUM, "3": Severity.MEDIUM,
-    "low": Severity.LOW, "minor": Severity.LOW, "note": Severity.LOW, "2": Severity.LOW,
-    "info": Severity.INFO, "informational": Severity.INFO, "information": Severity.INFO,
-    "unknown": Severity.INFO, "none": Severity.INFO, "1": Severity.INFO, "0": Severity.INFO,
+    "critical": Severity.CRITICAL,
+    "crit": Severity.CRITICAL,
+    "severe": Severity.CRITICAL,
+    "blocker": Severity.CRITICAL,
+    "5": Severity.CRITICAL,
+    "high": Severity.HIGH,
+    "error": Severity.HIGH,
+    "major": Severity.HIGH,
+    "4": Severity.HIGH,
+    "medium": Severity.MEDIUM,
+    "moderate": Severity.MEDIUM,
+    "warning": Severity.MEDIUM,
+    "warn": Severity.MEDIUM,
+    "3": Severity.MEDIUM,
+    "low": Severity.LOW,
+    "minor": Severity.LOW,
+    "note": Severity.LOW,
+    "2": Severity.LOW,
+    "info": Severity.INFO,
+    "informational": Severity.INFO,
+    "information": Severity.INFO,
+    "unknown": Severity.INFO,
+    "none": Severity.INFO,
+    "1": Severity.INFO,
+    "0": Severity.INFO,
 }
 
 
@@ -92,9 +111,9 @@ def severity_from_cvss(score: float) -> Severity:
 class Confidence(Enum):
     """How firmly the evidence supports the finding."""
 
-    CONFIRMED = "confirmed"   # verified by the tool, not inferred
-    FIRM = "firm"             # strong evidence, no verification step
-    TENTATIVE = "tentative"   # pattern match or inference
+    CONFIRMED = "confirmed"  # verified by the tool, not inferred
+    FIRM = "firm"  # strong evidence, no verification step
+    TENTATIVE = "tentative"  # pattern match or inference
 
     @staticmethod
     def parse(value: Any) -> "Confidence":
@@ -119,16 +138,17 @@ class Category(str, Enum):
     claims, and conflating them is how scanners produce alarming nonsense.
     """
 
-    OBSERVATION = "observation"       # a fact about the target
-    VULNERABILITY = "vulnerability"   # a weakness, with evidence
+    OBSERVATION = "observation"  # a fact about the target
+    VULNERABILITY = "vulnerability"  # a weakness, with evidence
     MISCONFIGURATION = "misconfiguration"
-    EXPOSURE = "exposure"             # something reachable that should not be
+    EXPOSURE = "exposure"  # something reachable that should not be
     SECRET = "secret"  # noqa: S105 - a finding *type*, not a hardcoded credential
     PARSER_FAILURE = "parser_failure"  # we could not read the tool's output
 
 
 _CVE = re.compile(r"^CVE-\d{4}-\d{4,}$", re.IGNORECASE)
 _CWE = re.compile(r"^CWE-\d+$", re.IGNORECASE)
+_ATTACK = re.compile(r"^T\d{4}(\.\d{3})?$", re.IGNORECASE)
 
 
 @dataclass
@@ -153,10 +173,15 @@ class Finding:
     cve_ids: list[str] = field(default_factory=list)
     cwe_ids: list[str] = field(default_factory=list)
     cvss_score: float | None = None
-    location: str | None = None      # file path, URL path, or port
+    location: str | None = None  # file path, URL path, or port
+    attack_ids: list[str] = field(default_factory=list)  # MITRE ATT&CK
+    artifacts: list[str] = field(default_factory=list)  # evidence files: screenshots, pcaps, …
     first_seen_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     last_seen_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     id: str = ""
+    # True when remediation was filled in from the knowledge base rather than
+    # supplied by the tool; only generated remediation is recomputed on merge.
+    _remediation_generated: bool = field(default=False, repr=False)
 
     def __post_init__(self):
         self.severity = normalize_severity(self.severity)
@@ -166,6 +191,7 @@ class Finding:
         # dropped rather than passed along to a reader who will trust it.
         self.cve_ids = [c.upper() for c in self.cve_ids if _CVE.match(str(c))]
         self.cwe_ids = [c.upper() for c in self.cwe_ids if _CWE.match(str(c))]
+        self.attack_ids = [a.upper() for a in self.attack_ids if _ATTACK.match(str(a))]
 
         if self.cvss_score is not None:
             try:
@@ -173,6 +199,15 @@ class Finding:
             except (TypeError, ValueError):
                 score = None
             self.cvss_score = score if score is not None and 0.0 <= score <= 10.0 else None
+
+        # The knowledge base fills gaps a parser left open: ATT&CK techniques
+        # derived from CWEs, and a concrete remediation when the tool provided
+        # none. Both are deterministic, curated mappings -- never guesses.
+        if not self.attack_ids:
+            self.attack_ids = attack.attack_ids_for(self.cwe_ids)
+        if not self.remediation:
+            self.remediation = attack.remediation_for(self.cwe_ids, self.category)
+            self._remediation_generated = self.remediation is not None
 
         if not self.id:
             self.id = self.fingerprint[:16]
@@ -216,6 +251,8 @@ class Finding:
             (other.cve_ids, self.cve_ids),
             (other.cwe_ids, self.cwe_ids),
             (other.references, self.references),
+            (other.attack_ids, self.attack_ids),
+            (other.artifacts, self.artifacts),
         ):
             for item in source:
                 if item not in destination:
@@ -224,6 +261,11 @@ class Finding:
             self.cvss_score = other.cvss_score
         if not self.remediation:
             self.remediation = other.remediation
+            self._remediation_generated = other._remediation_generated
+        elif self._remediation_generated:
+            # Merged CWEs may now map to a concrete fix (e.g. CWE-89 ->
+            # parameterized queries); recompute, but never touch tool text.
+            self.remediation = attack.remediation_for(self.cwe_ids, self.category)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -242,6 +284,8 @@ class Finding:
             "references": self.references,
             "cve_ids": self.cve_ids,
             "cwe_ids": self.cwe_ids,
+            "attack_ids": self.attack_ids,
+            "artifacts": self.artifacts,
             "cvss_score": self.cvss_score,
             "location": self.location,
             "is_vulnerability": self.is_vulnerability,

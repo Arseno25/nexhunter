@@ -38,8 +38,13 @@ def test_freeform_tools_are_registered_and_gated():
     assert isinstance(python.build_cmd({"script": "print(1)"}), list)
 
 
+# hakrawler reads its target URL from stdin (no -url flag), so its builder
+# pipes via the shell. Everything else must be plain argv.
+SHELL_BUILDERS = {"execute_command", "hakrawler"}
+
+
 def test_only_sanctioned_builders_emit_shell_commands():
-    """Exactly one builder returns a ShellCommand; every other tool is argv."""
+    """Only the sanctioned builders return a ShellCommand; every other tool is argv."""
     probe = "alpha beta --flag; rm -rf /"
     shell_builders = []
     for name, spec in T.TOOLS.items():
@@ -52,7 +57,7 @@ def test_only_sanctioned_builders_emit_shell_commands():
             continue
         if isinstance(built, ShellCommand):
             shell_builders.append(name)
-    assert shell_builders == ["execute_command"], f"ShellCommand emitted by: {shell_builders}"
+    assert set(shell_builders) == SHELL_BUILDERS, f"ShellCommand emitted by: {shell_builders}"
 
 
 def test_every_profile_includes_freeform():
@@ -64,7 +69,9 @@ def test_every_profile_includes_freeform():
 
 def test_profile_can_opt_out_of_freeform():
     strict = mcp_profiles.Profile(
-        name="strict", description="scoped", categories=("recon",),
+        name="strict",
+        description="scoped",
+        categories=("recon",),
         include_freeform_tools=False,
     )
     exposed = set(mcp_profiles.tools_for(strict))
@@ -94,9 +101,7 @@ def test_execute_command_executes_through_the_shell():
 
 def test_execute_command_is_recorded_on_the_tracked_path():
     service = ExecutionService()
-    result = service.execute(
-        "execute_command", {"command": "echo tracked"}, direct=False
-    )
+    result = service.execute("execute_command", {"command": "echo tracked"}, direct=False)
     assert result["ok"], result
     assert "tracked" in result["output"], result
     assert result.get("execution_id"), "tracked run must mint a record"

@@ -93,7 +93,7 @@ Or manually:
 
 ```bash
 python -m venv .venv
-.venv/bin/pip install -e ".[mcp,browser]"
+.venv/bin/pip install -e ".[api,mcp,browser]"
 .venv/bin/python -m nexhunter.cli.client doctor   # check the installation
 ```
 

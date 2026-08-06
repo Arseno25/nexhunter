@@ -6,6 +6,7 @@ from collections.abc import Sequence
 from datetime import datetime, timezone
 from typing import Any
 
+from nexhunter.findings import attack
 from nexhunter.findings.models import Category, Finding, Severity
 
 SARIF_VERSION = "2.1.0"
@@ -76,6 +77,12 @@ def to_markdown(findings: Sequence[Finding], title: str = "Security Assessment F
                 lines.append(f"- **CVE:** {', '.join(finding.cve_ids)}")
             if finding.cwe_ids:
                 lines.append(f"- **CWE:** {', '.join(finding.cwe_ids)}")
+            if finding.attack_ids:
+                labeled = ", ".join(
+                    f"{technique} ({attack.attack_name(technique)})" if attack.attack_name(technique) else technique
+                    for technique in finding.attack_ids
+                )
+                lines.append(f"- **MITRE ATT&CK:** {labeled}")
             lines.append(f"- **First seen:** {finding.first_seen_at.isoformat(timespec='seconds')}")
             lines.append("")
             if finding.description:
@@ -87,6 +94,12 @@ def to_markdown(findings: Sequence[Finding], title: str = "Security Assessment F
                 lines.append("```json")
                 lines.append(json.dumps(finding.evidence, indent=2))
                 lines.append("```")
+                lines.append("")
+            if finding.artifacts:
+                lines.append("**Evidence artifacts**")
+                lines.append("")
+                for artifact in finding.artifacts:
+                    lines.append(f"- `{artifact}`")
                 lines.append("")
             if finding.remediation:
                 lines.append(f"**Remediation:** {finding.remediation}")
@@ -151,12 +164,13 @@ def to_html(findings: Sequence[Finding], title: str = "Security Assessment Findi
             f"<td>{html.escape(finding.tool)}</td>"
             f"<td>{html.escape(finding.confidence.value)}</td>"
             f"<td>{html.escape(finding.category)}</td>"
+            f"<td>{html.escape(', '.join(finding.attack_ids))}</td>"
+            f"<td>{html.escape(', '.join(finding.artifacts))}</td>"
             "</tr>"
         )
 
     chips = "".join(
-        f'<span class="chip" style="background:{severity_colors[level]}">'
-        f"{level.value.title()}: {counts[level]}</span>"
+        f'<span class="chip" style="background:{severity_colors[level]}">{level.value.title()}: {counts[level]}</span>'
         for level in _SEVERITY_ORDER
     )
 
@@ -191,8 +205,8 @@ def to_html(findings: Sequence[Finding], title: str = "Security Assessment Findi
 <div>{chips}</div>
 <div class="wrap">
 <table>
-<thead><tr><th>Severity</th><th>Title</th><th>Target</th><th>Tool</th><th>Confidence</th><th>Category</th></tr></thead>
-<tbody>{"".join(rows) if rows else '<tr><td colspan="6" class="empty">No findings recorded.</td></tr>'}</tbody>
+<thead><tr><th>Severity</th><th>Title</th><th>Target</th><th>Tool</th><th>Confidence</th><th>Category</th><th>ATT&amp;CK</th><th>Evidence</th></tr></thead>
+<tbody>{"".join(rows) if rows else '<tr><td colspan="8" class="empty">No findings recorded.</td></tr>'}</tbody>
 </table>
 </div>
 </body>
@@ -220,11 +234,13 @@ def to_sarif(findings: Sequence[Finding], tool_name: str = "NexHunter") -> str:
                 "defaultConfiguration": {"level": _SARIF_LEVEL[finding.severity]},
                 "properties": {
                     "category": finding.category,
-                    "tags": [finding.category, finding.tool],
+                    "tags": [finding.category, finding.tool, *finding.attack_ids],
                 },
             }
             if finding.cwe_ids:
                 rule["properties"]["cwe"] = finding.cwe_ids
+            if finding.attack_ids:
+                rule["properties"]["attack"] = finding.attack_ids
             if finding.references:
                 rule["helpUri"] = finding.references[0]
             rules[rule_id] = rule
@@ -239,6 +255,8 @@ def to_sarif(findings: Sequence[Finding], tool_name: str = "NexHunter") -> str:
                 "confidence": finding.confidence.value,
                 "target": finding.target,
                 "tool": finding.tool,
+                "attack_ids": finding.attack_ids,
+                "artifacts": finding.artifacts,
             },
         }
         if finding.cve_ids:
@@ -248,38 +266,51 @@ def to_sarif(findings: Sequence[Finding], tool_name: str = "NexHunter") -> str:
 
         # SARIF locations are file-shaped. A network target has no file, so it
         # is reported as a logical location rather than invented as a path.
-        if finding.location and finding.category in {
-            Category.SECRET.value, Category.VULNERABILITY.value
-        } and ("/" in finding.location or "\\" in finding.location):
-            result["locations"] = [{
-                "physicalLocation": {
-                    "artifactLocation": {"uri": finding.location.replace("\\", "/")},
+        if (
+            finding.location
+            and finding.category in {Category.SECRET.value, Category.VULNERABILITY.value}
+            and ("/" in finding.location or "\\" in finding.location)
+        ):
+            result["locations"] = [
+                {
+                    "physicalLocation": {
+                        "artifactLocation": {"uri": finding.location.replace("\\", "/")},
+                    }
                 }
-            }]
+            ]
         else:
-            result["locations"] = [{
-                "logicalLocations": [{
-                    "name": finding.location or finding.target,
-                    "kind": "resource",
-                }]
-            }]
+            result["locations"] = [
+                {
+                    "logicalLocations": [
+                        {
+                            "name": finding.location or finding.target,
+                            "kind": "resource",
+                        }
+                    ]
+                }
+            ]
 
         results.append(result)
 
-    return json.dumps({
-        "$schema": SARIF_SCHEMA,
-        "version": SARIF_VERSION,
-        "runs": [{
-            "tool": {
-                "driver": {
-                    "name": tool_name,
-                    "informationUri": "https://github.com/Arseno25/nexhunter",
-                    "rules": list(rules.values()),
+    return json.dumps(
+        {
+            "$schema": SARIF_SCHEMA,
+            "version": SARIF_VERSION,
+            "runs": [
+                {
+                    "tool": {
+                        "driver": {
+                            "name": tool_name,
+                            "informationUri": "https://github.com/Arseno25/nexhunter",
+                            "rules": list(rules.values()),
+                        }
+                    },
+                    "results": results,
                 }
-            },
-            "results": results,
-        }],
-    }, indent=2)
+            ],
+        },
+        indent=2,
+    )
 
 
 FORMATS = {
