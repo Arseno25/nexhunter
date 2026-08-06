@@ -21,7 +21,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from nexhunter.core import tools as T
-from nexhunter.core.risk import RiskLevel
+from nexhunter.core.risk import RiskLevel, risk_level_from_str
 from nexhunter.agents.profiler import TargetProfile
 
 
@@ -270,7 +270,7 @@ class ToolSelector:
             score, reasons = result
             if score < obj.threshold:
                 continue
-            risk = RiskLevel(spec.risk_level) if spec.risk_level in RiskLevel._value2member_map_ else RiskLevel.ACTIVE
+            risk = risk_level_from_str(spec.risk_level)
             scored.append(ScoredTool(
                 name=spec.name,
                 category=spec.category,

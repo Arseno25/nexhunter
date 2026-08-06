@@ -5,9 +5,9 @@ Commands: health, agents, tools, probe, assess, report, telemetry.
 See NEXHUNTER_CLI.md for full documentation.
 
 Usage:
-    python nexhunter.py health
-    python nexhunter.py probe https://example.com
-    python nexhunter.py --server http://127.0.0.1:8888 assess https://example.com
+    nexhunter health
+    nexhunter probe https://example.com
+    nexhunter --server http://127.0.0.1:8888 assess https://example.com
 """
 
 import argparse
