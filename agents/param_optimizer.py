@@ -167,7 +167,12 @@ class ParameterOptimizer:
             return self._extensions_for(profile)
 
         # -- target-shaped parameters ---------------------------------------
-        if ptype == ParamType.HOSTNAME or name == "query":
+        if ptype == ParamType.HOSTNAME:
+            return _hostname(target)
+        # ponytail: only whois_lookup's "query" is target-shaped; cve_search,
+        # searchsploit, shodan, censys, zoomeye all use "query" for a search
+        # string, and filling it with the hostname pollutes the search.
+        if name == "query" and spec.name == "whois_lookup":
             return _hostname(target)
 
         if ptype == ParamType.URL:
