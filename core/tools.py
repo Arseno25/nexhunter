@@ -1,4 +1,4 @@
-"""nexhunter.tools - 150+ security tools registry with ToolSpec pattern."""
+"""nexhunter.tools - security tools registry with ToolSpec pattern."""
 
 import importlib.util
 import json
