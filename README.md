@@ -7,7 +7,7 @@
 
   <p>Safe orchestration of security tools for <em>authorized</em> assessments.</p>
 
-![Version](https://img.shields.io/badge/version-1.0.0-blue) ![Python](https://img.shields.io/badge/python-3.10%2B-green) ![Tests](https://img.shields.io/badge/tests-357%20passing-green) ![License](https://img.shields.io/badge/license-MIT-blue)
+![Version](https://img.shields.io/badge/version-1.0.0-blue) ![Python](https://img.shields.io/badge/python-3.10%2B-green) ![Tests](https://img.shields.io/badge/tests-510%20passing-green) ![License](https://img.shields.io/badge/license-MIT-blue)
 </div>
 
 ---
@@ -600,7 +600,7 @@ See [.env.example](.env.example).
 ## Testing
 
 ```bash
-pytest                                                    # 358 tests, all passing
+pytest                                                    # 510 tests, all passing
 pytest --cov=nexhunter --cov-report=term-missing          # coverage
 ruff check .                                              # zero lint errors
 mypy --explicit-package-bases .                           # zero type errors
@@ -636,7 +636,7 @@ best covered; legacy agent and engine code is thinner.
 |---|---|
 | [docs/architecture.md](docs/architecture.md) | Layers, execution flow, state machine, diagrams |
 | [docs/security-model.md](docs/security-model.md) | Threat model, guarantees, non-guarantees |
-| [docs/how-it-works.md](docs/how-it-works.md) | One execution path, call trace, the loop, the can/cannot boundary |
+| [docs/how-it-works.md](docs/how-it-works.md) | One execution path, call trace, the loop, finding-to-report validation flow, the can/cannot boundary |
 | [docs/workflows.md](docs/workflows.md) | Phased tool-execution sequences, how a workflow stays within scope |
 | [docs/mcp/](docs/mcp/) | MCP setup per client |
 

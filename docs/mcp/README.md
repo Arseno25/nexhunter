@@ -56,6 +56,7 @@ python -m nexhunter.api.mcp --list-profiles
 | `nexhunter-vulnscan` | Vulnerability scanners and network IDS tooling |
 | `nexhunter-mobile` | APK inspection, decompilation, runtime exploration |
 | `nexhunter-ctf` | One-stop CTF profile: Web Exploitation, Cryptography, Reverse Engineering & Pwn, Forensics, OSINT |
+| `nexhunter-bugbounty` | One-stop profile for public web/API bounty programs: web, api, recon, osint, auth, crypto |
 | `nexhunter-full` | **Default (no `--profile`).** Every non-destructive tool. Large payload; prefer a focused profile when you know the job |
 
 Every profile also surfaces the two freeform tools — `execute_command` (raw
@@ -111,7 +112,39 @@ without spending a tool call:
 | `nexhunter://profiles` | Profiles and their tool counts |
 | `nexhunter://executions` | Recent executions with status |
 | `nexhunter://findings` | Findings recorded so far |
+| `nexhunter://findings/patterns` | Curated hunting/report-quality reference — attack vectors, false-positive patterns, report formulas. Read-only, never a filter |
 | `nexhunter://system/status` | Server health and tool availability |
+
+## Bug bounty finding validation
+
+Hand-written tools, always registered regardless of `--profile` — the same
+treatment every utility tool (`findings`, `report`, `agents`, …) already
+gets. The whole flow is also available as one MCP *prompt*,
+`bugbounty_hunt(target)`: recon → probe/scan → explore → validate → score &
+report, phase by phase, with each phase's tool list generated from the live
+registry every time it renders. Any MCP client sees it automatically via the
+standard prompt-listing capability — nothing to install beyond the server
+entry above.
+
+| Tool | Does |
+|---|---|
+| `get_finding(finding_id)` | Fetch one finding with full evidence, before reasoning about it |
+| `submit_finding_gates(...)` | Record your own verdict on the 4-gate exploitability check, plus optional confidence/severity flags and canonical-report narrative |
+| `submit_presubmission_checklist(...)` | Record the pre-submission checklist — a different question: is the writeup ready to send |
+| `score_cvss(vector)` | CVSS 3.1 base score from a vector string — pure arithmetic |
+| `bounty_report(finding_id, platform)` | Submission-ready report: `hackerone`/`h1`, `bugcrowd`, `intigriti`, `immunefi`, or `generic` |
+| `promote_finding(finding_id, reason, related_finding_ids)` | Reconsider a demoted/needs-review finding on a second signal, move to confirmed |
+| `link_finding_chain(...)` · `get_finding_chain(finding_id)` | Declare / read a link between two findings, without promoting either |
+| `get_finding_custody(finding_id)` | The tamper-evident audit trail for one finding, with hash verification |
+| `verify_ledger()` | Store-wide integrity audit: every confirmed/demoted claim backed by evidence, every custody chain intact |
+| `triage_findings()` | Everything recorded so far, bucketed by disposition, most severe first |
+
+Every gate/checklist/adjustment verdict is something *you* reason through —
+these tools validate the shape of what you submit and aggregate it
+deterministically; none of them decide a finding's fate on their own. See
+[how-it-works.md](../how-it-works.md#from-finding-to-report-the-same-rule-one-more-time)
+for the full flow and [security-model.md](../security-model.md#a-findings-disposition-is-never-invented)
+for the guarantees.
 
 ## What the model cannot do
 

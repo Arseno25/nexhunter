@@ -85,6 +85,26 @@ them (they serve any engagement; a profile can opt out).
 - Destructive tools additionally require a feature flag
   (`NEXHUNTER_DESTRUCTIVE_TOOLS_ENABLED`), which `doctor` reports.
 
+### A finding's disposition is never invented
+
+- `gate_status` (confirmed/demoted/refuted/needs_review) is computed by
+  `gates.aggregate()` from four verdicts a caller submitted — never set
+  directly, never inferred from a finding's title or evidence text.
+- A CVSS score set via `cvss_vector` is recomputed from the official 3.1
+  formula, not trusted as a bare number; a malformed vector is dropped, not
+  guessed at.
+- Impact narrative in a generated report comes only from the reviewer's own
+  `impact` gate reasoning; Root Cause/Attack Flow/Realistic Attack Chain
+  sections render only when the reviewer supplied them, never fabricated
+  from evidence that doesn't describe them.
+- A finding's `custody_chain` is hash-linked (`findings/custody.py`):
+  altering a past entry's data breaks every hash after it, so `intact: false`
+  is detectable even though the stored file itself isn't tamper-proof.
+- `verify_ledger()` audits the whole store for confirmed/demoted findings
+  with no evidence or artifacts behind them, and for any broken custody
+  chain — read-only, it reports issues rather than fixing or dropping a
+  finding on its own.
+
 ## What NexHunter does not guarantee
 
 Stated plainly, because a security tool that overstates itself is worse than

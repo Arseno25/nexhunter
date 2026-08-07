@@ -183,6 +183,41 @@ Markdown, HTML, or SARIF. A report never presents a fact as a vulnerability
 (that would be the inference above masquerading as a finding), and a broken
 parser is recorded as a parser failure — never as a clean result.
 
+## From finding to report: the same rule, one more time
+
+A finding recorded by a tool is a claim, not a verdict. Turning it into
+something worth submitting follows the same shape as everything above: the
+AI reasons, NexHunter's code validates and records — never the reverse.
+
+```
+Finding (category: vulnerability)
+        ↓ get_finding — pull full evidence
+        ↓ reason through 4 gates yourself
+submit_finding_gates(pass/fail/demote/unsure × 4, + optional
+                      confidence/severity flags, + optional narrative)
+        ↓ code aggregates deterministically
+gate_status (confirmed / demoted / refuted / needs_review)
+        ↓ folded with review_confidence
+disposition (+ lead, when confidence < 60)
+        ↓
+submit_presubmission_checklist → score_cvss → bounty_report(platform)
+```
+
+Every step in the diamond is code: aggregating four verdicts into one
+status, computing a CVSS score from a vector, rendering a template. Every
+step in the plain arrows is the AI's own reasoning, submitted as structured
+input, never trusted as free-text prose — the same boundary the rest of this
+document draws between "AI proposes" and "code decides what actually
+happens." `findings/gates.py`, `findings/cvss.py`, and
+`findings/bounty_reports.py` carry the detail; `nexhunter://findings/patterns`
+is the read-only reference (attack vectors, false-positive patterns, report
+formulas) consulted along the way, never a filter.
+
+Two more checks sit beside this, not in the chain: `verify_ledger()` audits
+the whole store at once (does every confirmed/demoted finding actually have
+evidence, is every custody chain intact), and `get_finding_custody(id)`
+reads one finding's tamper-evident history.
+
 ## The boundary: what the AI can and cannot do
 
 | Can | Cannot |

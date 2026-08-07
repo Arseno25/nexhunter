@@ -73,9 +73,17 @@ flowchart TB
         E3[api/mcp_profiles.py]
     end
 
+    subgraph findings [Findings]
+        G1[findings/store.py<br/>FindingStore]
+        G2[findings/gates.py<br/>4-gate validator]
+        G3[findings/cvss.py<br/>CVSS 3.1 scoring]
+        G4[findings/bounty_reports.py<br/>platform reports]
+    end
+
     interface --> service
     service --> exec
     service --> registry
+    exec --> findings
     C1 --> B1
     C4 --> B1
 ```
@@ -87,6 +95,7 @@ flowchart TB
 | Safety | Validate input shape, redact secrets, set autonomy ceilings | Be bypassable by any caller |
 | Execution | Run a process safely and contain its output | Decide whether it should run |
 | Registry | Describe tools and their parameters | Execute anything |
+| Findings | Normalize, store, and report on what execution recorded; validate and aggregate a reviewer's verdict | Decide a finding's disposition on its own |
 
 ## What happens on one execution
 
@@ -210,6 +219,7 @@ flowchart LR
     F --> CT[container · 16]
     F --> FR[forensics · 31]
     F --> CTF[ctf · 101]
+    F --> BB[bugbounty · 97]
     F --> FU[full · 265]
 
     C --> CLIENT[AI client]
@@ -218,7 +228,8 @@ flowchart LR
 
 Six more specialty profiles (osint, wireless, privesc, payloads, vulnscan,
 mobile) slice the same registry the same way; the full list with counts is in
-the README.
+the README. `nexhunter-bugbounty` bundles web + api + recon + osint + auth +
+crypto — the categories a public web/API bounty program actually touches.
 
 Without a `--profile` flag the bridge defaults to `nexhunter-full` (265 tools,
 everything non-destructive). A focused profile cuts initialization payload and
@@ -294,6 +305,14 @@ Both sit on the one execution path and add no way to reach the OS.
 | `workflows/orchestrator.py` | Adaptive planner and bounded autonomy loop |
 | `api/mcp_profiles.py` | Profile definitions and filtering |
 | `cli/doctor.py` | Environment health check |
+| `findings/store.py` | Fingerprint-deduplicating FindingStore, optional disk persistence |
+| `findings/gates.py` | The 4-gate exploitability validator, confidence/severity scoring, pre-submission checklist, promotion |
+| `findings/cvss.py` | CVSS 3.1 base-score formula from a vector string |
+| `findings/bounty_reports.py` | Per-platform submission-ready report templates |
+| `findings/patterns.py` | Curated hunting/report-quality reference (read-only, never an auto-filter) |
+| `findings/custody.py` | Hash-linked, tamper-evident audit trail per finding |
+| `findings/ledger.py` | Store-wide integrity audit (evidence-backed claims, intact custody chains) |
+| `findings/triage.py` | Bucket findings by disposition for batch review |
 
 ## Related
 
