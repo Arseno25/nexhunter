@@ -62,7 +62,7 @@ def _tool_line(status: str, tool: str, target: str = "", extra: str = "") -> str
         token = f"{color}{token}\033[0m"
     dest = f"→ {target}" if target else ""
     tail = f"  {extra}" if extra else ""
-    return f"{token} {tool:<14} {dest}{tail}".rstrip()
+    return f"{token} {tool:<{visual.TOOL_COL}} {dest}{tail}".rstrip()
 
 
 class ExecutionService:

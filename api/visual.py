@@ -221,6 +221,11 @@ NEXHUNTER_ART = r"""
 # 224 visible increments -- smoother than a plain full/empty bar.
 _PARTIALS = " ▏▎▍▌▋▊▉"
 
+# Shared minimum width for the tool-name column, so a plan-progress line
+# (format_step) and the tool event lines it precedes (execution's RUNNING /
+# COMPLETED) put the tool name in the same place and read as one aligned flow.
+TOOL_COL = 16
+
 
 def render_progress_bar(
     current: float,
@@ -275,12 +280,16 @@ def live_progress(
     enabled: bool | None = None,
     interval: float = 0.1,
 ):
-    """Animate a spinner + easing progress bar in place while a block runs.
+    """Animate a spinner + activity bar in place while a block runs.
 
-    Duration is unknown up front, so the bar eases toward (never reaches) 100%
-    via ``1 - exp(-t/τ)`` and snaps closed on exit -- no fake completion. Drawn
-    to stderr with ``\\r`` so it never pollutes stdout logs or a redirected
-    pipe. A no-op unless the stream is an interactive color TTY.
+    A tool's duration is unknown up front, so this shows *activity*, not a
+    completion percentage: the eased fill (``1 - exp(-t/τ)``) and spinner give
+    motion while the real readout is elapsed seconds. Deliberately no percent --
+    an eased number that never reaches 100 reads as a stuck bar, and the honest
+    progress number belongs to the plan line (STEP n/total), not to one tool of
+    unknown length. Drawn to stderr with ``\\r`` so it never pollutes stdout
+    logs or a redirected pipe. A no-op unless the stream is an interactive
+    color TTY.
     """
     stream = stream or sys.stderr
     if enabled is None:
@@ -304,11 +313,10 @@ def live_progress(
             spin = _paint(next(frames), tier, "BOLD", color=color)
             bar = render_progress_bar(frac, width=22, color=color,
                                       show_percent=False, fill_color=tier)
-            pct = _paint(f"{frac * 100:3.0f}%", tier, "BOLD", color=color)
             elapsed_txt = _paint(f"{elapsed:6.1f}s", "GRAY", color=color)
-            # Numeric columns first (fixed width, stay aligned run to run); the
-            # variable-length label trails so it never shifts them.
-            stream.write(f"\r{spin} {bar} {pct} {elapsed_txt}  {label}\033[K")
+            # Elapsed is the only number here (fixed width, stays aligned run to
+            # run); the variable-length label trails so it never shifts it.
+            stream.write(f"\r{spin} {bar} {elapsed_txt}  {label}\033[K")
             stream.flush()
             stop.wait(interval)
 
@@ -329,21 +337,28 @@ def format_step(
     tool: str = "",
     target: str = "",
     phase: str = "",
-    width: int = 28,
+    width: int = 24,
     color: bool | None = None,
 ) -> str:
-    """One neat step line: `STEP 03/20 ▐███░░▌ 40%  tool → target · phase`."""
+    """One plan-progress line: `◆ STEP 03/20 ▐███░░▌  nmap_scan  → target · recon`.
+
+    The bar tracks progress through the plan (step count), so the percent is
+    dropped -- ``STEP 03/20`` already states it, and leaving one number per
+    concept keeps this from being read as a per-tool completion. The tool name
+    sits in the shared TOOL_COL column so it lines up with the RUNNING /
+    COMPLETED lines that follow.
+    """
     if color is None:
         color = supports_color()
     head = _paint(f"STEP {current:02d}/{total:02d}", "PURPLE", "BOLD", color=color)
-    bar = render_progress_bar(current, total, width=width, color=color)
+    bar = render_progress_bar(current, total, width=width, color=color, show_percent=False)
     tail = ""
     if tool:
-        tail += "  " + _paint(tool, "WHITE", color=color)
+        tail += "  " + _paint(f"{tool:<{TOOL_COL}}", "WHITE", color=color)
     if target:
-        tail += _paint(f" → {target}", "GRAY", color=color)
+        tail += _paint(f"→ {target}", "GRAY", color=color)
     if phase:
-        tail += _paint(f"  · {phase}", "DIM", color=color)
+        tail += _paint(f" · {phase}", "DIM", color=color)
     return f"◆ {head}  {bar}{tail}"
 
 
@@ -774,7 +789,7 @@ def _selfcheck() -> None:
         time.sleep(0.05)
     drawn = buf.getvalue()
     assert "nmap" in drawn and "\r\033[K" in drawn, "live bar did not draw/clear"
-    assert "%" in drawn, "live bar missing percent readout"
+    assert "s  nmap" in drawn, "live bar missing elapsed readout"
     for name, key in {**SEVERITY_COLORS, **STATUS_COLORS}.items():
         assert key in COLORS, f"{name} -> unknown palette key {key}"
     assert all("\033[5m" not in COLORS[key] for key in STATUS_COLORS.values()), "blink in status colors"
