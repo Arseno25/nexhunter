@@ -73,8 +73,42 @@ def test_no_raw_command_tool():
     print("  [OK] run_command removed")
 
 
+def test_bugbounty_hunt_prompt_is_discoverable():
+    """The bug-bounty skill is an MCP prompt: any client that connects sees
+    it via the standard prompt-listing capability, no separate config beyond
+    the MCP server pointer every client already needs."""
+    print("[TEST] bugbounty_hunt prompt is registered and discoverable...")
+    prompts = asyncio.run(M.mcp.list_prompts())
+    names = {p.name for p in prompts}
+    assert "bugbounty_hunt" in names
+    print("  [OK] bugbounty_hunt discoverable via list_prompts")
+
+
+def test_bugbounty_hunt_prompt_reflects_live_registry():
+    """Tool names in the rendered prompt must be real, registered tools --
+    the phases are generated from the registry, never hardcoded, so they
+    can't drift out of sync with what's actually available."""
+    print("[TEST] bugbounty_hunt prompt only names real, registered tools...")
+    rendered = M.bugbounty_hunt("https://example.com")
+    assert "https://example.com" in rendered
+    import re
+
+    non_tool_words = {
+        "run_tool", "get_finding", "submit_finding_gates", "score_cvss", "bounty_report",
+        "pass", "fail", "demote", "unsure",
+    }
+    named = set(re.findall(r"`([a-z][a-z0-9_]+)`", rendered)) - non_tool_words
+    from nexhunter.core import tools as T
+
+    unknown = named - set(T.TOOLS)
+    assert not unknown, f"prompt names tools that aren't registered: {unknown}"
+    print(f"  [OK] {len(named)} tool names in the prompt, all present in the registry")
+
+
 if __name__ == "__main__":
     test_active_profile_tools_exposed()
     test_registration_generated_from_registry()
     test_no_raw_command_tool()
+    test_bugbounty_hunt_prompt_is_discoverable()
+    test_bugbounty_hunt_prompt_reflects_live_registry()
     print("\nAll MCP registration tests passed")

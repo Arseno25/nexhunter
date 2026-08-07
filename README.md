@@ -319,6 +319,18 @@ curl -X POST http://127.0.0.1:8888/api/findings/<id>/gates \
   widely treated as by-design. It's read-only knowledge for an AI to consult
   before gate review, never an auto-filter — matching a title against a
   string is not proof a finding lacks the chain that makes it valid.
+- **The whole flow is one MCP prompt.** `bugbounty_hunt(target)` is an MCP
+  *prompt* (the protocol's own primitive for a reusable skill/workflow
+  template) — recon → probe/scan → explore → the 4-gate check → score &
+  report, phase by phase. Any MCP client discovers it automatically on
+  connect via the standard prompt-listing capability the protocol already
+  requires, so there's nothing extra to install or paste into a system
+  prompt beyond the one MCP server entry every client needs anyway — and
+  because it's an open, multi-vendor protocol (not a Claude-only Skill
+  file), it works the same way for any MCP-speaking AI or provider. The
+  tool list per phase is generated from the live registry every time the
+  prompt renders, never hardcoded, so it can't drift out of sync with
+  what's actually installed.
 
 ## Execution modes
 

@@ -803,6 +803,71 @@ def resource_finding_patterns() -> str:
     return _render({"always_rejected": list(patterns.ALWAYS_REJECTED), "safe_patterns": list(patterns.SAFE_PATTERNS)})
 
 
+def _phase_tools(categories: tuple[str, ...], limit: int = 8) -> str:
+    """Bullet list of the best tools for a phase, generated from the live
+    registry every time this prompt renders -- never a hardcoded tool name,
+    so it can't drift out of sync with what's actually registered. Stable,
+    installed tools sort first; the rest fill in up to `limit`."""
+    profile = mcp_profiles.get_profile("nexhunter-bugbounty")
+    candidates = [spec for spec in mcp_profiles.tools_for(profile).values() if spec.category in categories]
+    candidates.sort(key=lambda s: (s.maturity != "stable", not s.available, s.name))
+    if not candidates:
+        return "  (none registered in this category)"
+    return "\n".join(f"  - `{s.name}`{' [installed]' if s.available else ''} -- {s.description}" for s in candidates[:limit])
+
+
+@mcp.prompt()
+def bugbounty_hunt(target: str) -> str:
+    """The bug-bounty hunting skill, phase by phase, for `target`. Every
+    tool listed is pulled live from the registry (nexhunter-bugbounty
+    profile) -- nothing here is hardcoded, so it can't go stale. Ported from
+    bountyforge's methodology (github.com/Gabson0x/bountyforge): recon ->
+    probe/scan -> explore -> the 4-gate validator -> score & report, adapted
+    to NexHunter's tools and its "code validates, AI judges" rule instead of
+    a Claude-only Skill file with local shell access."""
+    return f"""# Bug Bounty Hunt: {target}
+
+The only question that matters at every step: **can I prove this is exploitable, concretely, right now?** A theoretical bug wastes everyone's time -- yours and the triager's. Kill weak findings early rather than write them up.
+
+## PHASE 1 -- Recon
+
+Map the attack surface before touching anything deeper.
+
+{_phase_tools(("recon", "osint"))}
+
+## PHASE 2 -- Probe & Scan
+
+Confirm what's actually live and reachable.
+
+{_phase_tools(("web", "recon"), limit=6)}
+
+## PHASE 3 -- Explore
+
+Content discovery, injection testing, credential/auth attacks, TLS checks. This is where findings get created -- call `run_tool` (or the registered tool directly) for each candidate, and let evidence, not assumption, decide what's worth a closer look.
+
+{_phase_tools(("web", "api", "auth", "crypto"), limit=10)}
+
+Before creating a finding, skim `nexhunter://findings/patterns` -- programs reject some bug classes on sight (open redirect alone, self-XSS with no escalation, missing security headers alone, ...) unless you have a concrete chain past them.
+
+## PHASE 4 -- Validate (the 4-gate check)
+
+Nothing gets reported on your say-so alone. For every candidate finding, call `get_finding(finding_id)` to pull the full evidence, then reason through all four gates yourself and submit your verdict with `submit_finding_gates`:
+
+  1. **refutation**   -- can an existing guard concretely block this? (quote the exact check)
+  2. **reachability**  -- does the vulnerable state exist in a live deployment, not just in theory?
+  3. **trigger**       -- can an unprivileged (or minimally privileged) actor execute it?
+  4. **impact**        -- is there material harm to an identifiable victim?
+
+Each gate is `pass` (clears cleanly), `fail` (kills the finding outright), `demote` (clears, but under a caveat -- e.g. only a privileged actor can trigger it -- that argues for lower severity, not rejection), or `unsure` (evidence doesn't settle it -- flags for manual review). NexHunter aggregates your four verdicts into one status in code; it never invents a verdict for you.
+
+Optionally, mark which confidence deductions apply (partial_attack_path, bounded_impact, requires_specific_state, requires_user_interaction, fix_partially_mitigates) -- each costs fixed points off 100, and the final report is scaled to what that score actually earned: full write-up at 80+, PoC without a remediation claim at 60-79, lead-only (no PoC, no fix) below 60.
+
+## PHASE 5 -- Score & Report
+
+For a CONFIRMED or DEMOTED finding: compute `score_cvss(vector)` for an honest severity number (never eyeball it), then `bounty_report(finding_id, platform)` for a submission-ready write-up -- platform is 'hackerone', 'bugcrowd', 'intigriti', 'immunefi', or 'generic'. Impact narrative in the report comes straight from the impact-gate reasoning you already wrote; nothing is invented at report time that wasn't already argued during validation.
+"""
+
+
 @mcp.resource("nexhunter://system/status")
 def resource_status() -> str:
     """Server health and tool availability."""
