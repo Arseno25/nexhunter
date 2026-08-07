@@ -5,9 +5,13 @@ for terminal display: banners, progress bars, vulnerability cards, error
 cards, tool status lines, and a live process dashboard.
 """
 
+import itertools
+import math
 import os
 import sys
+import threading
 import time
+from contextlib import contextmanager
 from typing import Any
 
 
@@ -217,6 +221,11 @@ NEXHUNTER_ART = r"""
 # 224 visible increments -- smoother than a plain full/empty bar.
 _PARTIALS = " ▏▎▍▌▋▊▉"
 
+# Shared minimum width for the tool-name column, so a plan-progress line
+# (format_step) and the tool event lines it precedes (execution's RUNNING /
+# COMPLETED) put the tool name in the same place and read as one aligned flow.
+TOOL_COL = 16
+
 
 def render_progress_bar(
     current: float,
@@ -224,6 +233,7 @@ def render_progress_bar(
     width: int = 28,
     color: bool | None = None,
     show_percent: bool = True,
+    fill_color: str = "CYAN",
 ) -> str:
     """Render a smooth progress bar.
 
@@ -247,7 +257,7 @@ def render_progress_bar(
         bar += "░" * (width - full - (1 if rem else 0))
     bar = bar[:width].ljust(width, "░")
 
-    fill = _paint(bar, "CYAN", color=color)
+    fill = _paint(bar, fill_color, color=color)
     caps_l = _paint("▐", "GRAY", color=color)
     caps_r = _paint("▌", "GRAY", color=color)
     out = f"{caps_l}{fill}{caps_r}"
@@ -257,27 +267,98 @@ def render_progress_bar(
     return out
 
 
+# HexStrike-style braille spinner; cycles while a tool runs.
+_SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+
+
+@contextmanager
+def live_progress(
+    label: str,
+    estimate: float = 20.0,
+    stream=None,
+    color: bool | None = None,
+    enabled: bool | None = None,
+    interval: float = 0.1,
+):
+    """Animate a spinner + activity bar in place while a block runs.
+
+    A tool's duration is unknown up front, so this shows *activity*, not a
+    completion percentage: the eased fill (``1 - exp(-t/τ)``) and spinner give
+    motion while the real readout is elapsed seconds. Deliberately no percent --
+    an eased number that never reaches 100 reads as a stuck bar, and the honest
+    progress number belongs to the plan line (STEP n/total), not to one tool of
+    unknown length. Drawn to stderr with ``\\r`` so it never pollutes stdout
+    logs or a redirected pipe. A no-op unless the stream is an interactive
+    color TTY.
+    """
+    stream = stream or sys.stderr
+    if enabled is None:
+        enabled = supports_color(stream) and getattr(stream, "isatty", lambda: False)()
+    if not enabled:
+        yield
+        return
+
+    stop = threading.Event()
+    start = time.time()
+    tau = max(estimate / 3.0, 0.5)
+    frames = itertools.cycle(_SPINNER)
+
+    def draw() -> None:
+        while not stop.is_set():
+            elapsed = time.time() - start
+            frac = min(1.0 - math.exp(-elapsed / tau), 0.99)
+            # Fill/percent shift blue -> cyan -> green as the run advances, so a
+            # long-running tool never looks stuck on one flat color.
+            tier = "BLUE" if frac < 0.34 else "CYAN" if frac < 0.67 else "GREEN"
+            spin = _paint(next(frames), tier, "BOLD", color=color)
+            bar = render_progress_bar(frac, width=22, color=color,
+                                      show_percent=False, fill_color=tier)
+            elapsed_txt = _paint(f"{elapsed:6.1f}s", "GRAY", color=color)
+            # Elapsed is the only number here (fixed width, stays aligned run to
+            # run); the variable-length label trails so it never shifts it.
+            stream.write(f"\r{spin} {bar} {elapsed_txt}  {label}\033[K")
+            stream.flush()
+            stop.wait(interval)
+
+    worker = threading.Thread(target=draw, daemon=True)
+    worker.start()
+    try:
+        yield
+    finally:
+        stop.set()
+        worker.join(timeout=0.5)
+        stream.write("\r\033[K")  # wipe the line so the final log prints clean
+        stream.flush()
+
+
 def format_step(
     current: int,
     total: int,
     tool: str = "",
     target: str = "",
     phase: str = "",
-    width: int = 28,
+    width: int = 24,
     color: bool | None = None,
 ) -> str:
-    """One neat step line: `STEP 03/20 ▐███░░▌ 40%  tool → target · phase`."""
+    """One plan-progress line: `◆ STEP 03/20 ▐███░░▌  nmap_scan  → target · recon`.
+
+    The bar tracks progress through the plan (step count), so the percent is
+    dropped -- ``STEP 03/20`` already states it, and leaving one number per
+    concept keeps this from being read as a per-tool completion. The tool name
+    sits in the shared TOOL_COL column so it lines up with the RUNNING /
+    COMPLETED lines that follow.
+    """
     if color is None:
         color = supports_color()
     head = _paint(f"STEP {current:02d}/{total:02d}", "PURPLE", "BOLD", color=color)
-    bar = render_progress_bar(current, total, width=width, color=color)
+    bar = render_progress_bar(current, total, width=width, color=color, show_percent=False)
     tail = ""
     if tool:
-        tail += "  " + _paint(tool, "WHITE", color=color)
+        tail += "  " + _paint(f"{tool:<{TOOL_COL}}", "WHITE", color=color)
     if target:
-        tail += _paint(f" → {target}", "GRAY", color=color)
+        tail += _paint(f"→ {target}", "GRAY", color=color)
     if phase:
-        tail += _paint(f"  · {phase}", "DIM", color=color)
+        tail += _paint(f" · {phase}", "DIM", color=color)
     return f"◆ {head}  {bar}{tail}"
 
 
@@ -698,6 +779,17 @@ def _selfcheck() -> None:
     )
     assert dash.count("╔") == 0 and "NEXHUNTER CONSOLE" in dash and "TOOLKIT" in dash, "console dashboard missing panels"
     assert len({len(_strip_ansi(line)) for line in dash.splitlines()}) <= 2, "console dashboard columns misaligned"
+    # live_progress: no-op path yields cleanly; TTY path draws then wipes.
+    import io
+    with live_progress("nmap → 10.0.0.1", enabled=False):
+        pass
+    buf = io.StringIO()
+    with live_progress("nmap → 10.0.0.1", estimate=2, stream=buf, color=False,
+                       enabled=True, interval=0.01):
+        time.sleep(0.05)
+    drawn = buf.getvalue()
+    assert "nmap" in drawn and "\r\033[K" in drawn, "live bar did not draw/clear"
+    assert "s  nmap" in drawn, "live bar missing elapsed readout"
     for name, key in {**SEVERITY_COLORS, **STATUS_COLORS}.items():
         assert key in COLORS, f"{name} -> unknown palette key {key}"
     assert all("\033[5m" not in COLORS[key] for key in STATUS_COLORS.values()), "blink in status colors"

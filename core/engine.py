@@ -10,10 +10,11 @@ from typing import Any
 from nexhunter.core import tools as T
 from nexhunter.core.config import (
     CACHE_MAX,
-    MAX_PARALLEL_WORKERS,
     FINDING_DEDUP_ENABLED,
 )
+from nexhunter.core.scaling import adaptive_worker_count
 from nexhunter.findings.models import Finding
+from nexhunter.security.redaction import SecretRedactor
 
 SEVERITY_ORDER = {"critical": 0, "high": 1, "medium": 2, "low": 3, "info": 4}
 
@@ -56,6 +57,9 @@ class Engine:
         self.cache_evictions = 0
         self._tool_stats: dict[str, list[float]] = {}
         self._host_requests: dict[str, list[float]] = {}
+        # Tool output flows into the LLM context, so secrets are stripped before
+        # any result leaves the engine (mirrors ExecutionService's redaction).
+        self.redactor = SecretRedactor()
         self.workflow_contexts: dict[str, WorkflowContext] = {}
 
     def _track(self, target: str):
@@ -72,6 +76,9 @@ class Engine:
             self.cache_hits += 1
             return dict(self._cache[key], cached=True)
         res = T.run(cmd, timeout)
+        # Redact before caching so no secret is ever stored or returned.
+        res["stdout"] = self.redactor.redact_string(res.get("stdout", "") or "")
+        res["stderr"] = self.redactor.redact_string(res.get("stderr", "") or "")
         res["cached"] = False
         self._cache[key] = res
         if len(self._cache) > CACHE_MAX:
@@ -103,7 +110,7 @@ class Engine:
     def parallel(self, jobs: dict[str, Any]) -> dict:
         """Execute multiple functions in parallel."""
         out: dict[str, Any] = {}
-        max_workers = min(MAX_PARALLEL_WORKERS, len(jobs) or 1)
+        max_workers = adaptive_worker_count(len(jobs))
         with ThreadPoolExecutor(max_workers=max_workers) as ex:
             futs = {ex.submit(fn): n for n, fn in jobs.items()}
             for f in as_completed(futs):

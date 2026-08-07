@@ -210,20 +210,53 @@ def cve_monitor(days: int = 7, severity: str = "", keyword: str = "", limit: int
     )
 
 
-@mcp.tool()
-def run_tool(tool: str, params: str = "{}", async_run: bool = False, direct: bool = True) -> str:
-    """Run a registered tool by name with JSON params (async_run=True returns pid immediately).
+# A tool whose registry timeout meets this bar runs as a background job by
+# default: a long scan returns a handle at once instead of holding the MCP
+# request open past the client's timeout, which is a common cause of the
+# connection being torn down mid-scan. Override with NEXHUNTER_MCP_ASYNC_THRESHOLD.
+ASYNC_TIMEOUT_THRESHOLD = int(os.environ.get("NEXHUNTER_MCP_ASYNC_THRESHOLD", "120"))
 
-    Direct by default (in-process, no execution record);
-    pass direct=False for tracked execution with history and workspaces.
+
+def _is_long_running(tool: str) -> bool:
+    """True when the tool's registry timeout is long enough to risk a client timeout."""
+    spec = T.get_tool_spec(tool)
+    return bool(spec and spec.timeout and spec.timeout >= ASYNC_TIMEOUT_THRESHOLD)
+
+
+@mcp.tool()
+def run_tool(tool: str, params: str = "{}", async_run: bool | None = None, direct: bool = True) -> str:
+    """Run a registered tool by name with JSON params.
+
+    async_run picks the execution mode:
+      None (default)  auto -- a tool whose registry timeout is long
+                      (>= NEXHUNTER_MCP_ASYNC_THRESHOLD, default 120s) runs as a
+                      background job so a long scan cannot outlast the client's
+                      request timeout and drop the MCP connection; quick tools
+                      run inline and return their results directly.
+      True            force a background job.
+      False           force inline (may hold the request open for the whole run).
+
+    A background job returns immediately with an execution_id and 'async': true.
+    Poll it with execution_output(execution_id) for results, executions() for
+    status, and execution_terminate(execution_id) to stop it.
+
+    Direct by default (in-process, no execution record) for inline runs; a
+    background job always uses the tracked path so it can be polled and
+    terminated. Pass direct=False to force tracked execution for inline runs too.
 
     Raw shell command execution is not supported; only tools in the registry
     may run.
     """
     parsed = json.loads(params) if params else {}
-    return _render(
-        api("/api/command", {"tool": tool, "params": parsed, "async": async_run, "direct": direct}), indent=1
-    )
+    run_async = _is_long_running(tool) if async_run is None else bool(async_run)
+    result = api("/api/command", {"tool": tool, "params": parsed, "async": run_async, "direct": direct})
+    if run_async and isinstance(result, dict) and result.get("async") and result.get("execution_id"):
+        eid = result["execution_id"]
+        result["poll"] = (
+            f"background job started ({tool}); execution_output('{eid}') for results, "
+            f"executions() for status, execution_terminate('{eid}') to stop"
+        )
+    return _render(result, indent=1)
 
 
 @mcp.tool()
@@ -605,19 +638,28 @@ def register_profile_tools(profile_name: str | None = None, tool_limit: int | No
     profile = mcp_profiles.get_profile(profile_name or PROFILE_NAME)
     selected = _select_for_limit(mcp_profiles.tools_for(profile), tool_limit)
 
-    try:
-        from fastmcp.settings import DuplicateBehavior
-
-        manager = mcp._tool_manager
-        manager.duplicate_behavior = DuplicateBehavior.REPLACE
-        for name in list(manager._tools):
-            if name in _REGISTRY_TOOLS and name not in selected:
-                manager._tools.pop(name, None)
-    except (ImportError, AttributeError):  # pragma: no cover - fastmcp layout guard
-        log.warning("fastmcp tool replacement unsupported; --profile/--tool-limit will be ignored")
+    # Drop registry tools no longer in this selection so a --profile/--tool-limit
+    # cap is real, not cosmetic. FastMCP 3.x removed the private _tool_manager;
+    # tools are removed through the public API (local_provider on 3.x, the
+    # deprecated top-level remove_tool as a fallback). Re-adding a still-selected
+    # tool below is a no-op replace, so only the drop needs doing here.
+    _remove = getattr(getattr(mcp, "local_provider", None), "remove_tool", None) or getattr(
+        mcp, "remove_tool", None
+    )
+    if _remove is None:  # pragma: no cover - fastmcp layout guard
+        log.warning("fastmcp tool removal unsupported; --profile/--tool-limit will be ignored")
+    else:
+        for name in list(_REGISTRY_TOOLS):
+            if name not in selected:
+                try:
+                    _remove(name)
+                except Exception:  # pragma: no cover - already gone / version skew
+                    pass
+                _REGISTRY_TOOLS.discard(name)
 
     for name, spec in selected.items():
-        _register(name, spec)
+        if name not in _REGISTRY_TOOLS:  # already-registered tools are unchanged; re-adding only warns
+            _register(name, spec)
     return len(selected)
 
 

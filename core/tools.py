@@ -5,7 +5,6 @@ import json
 import re
 import shlex
 import shutil
-import subprocess
 from defusedxml import ElementTree as ET
 from dataclasses import dataclass
 from typing import Any
@@ -3440,30 +3439,33 @@ _OUT_CAP = 2_000_000  # 2 MB cap on legacy-path output (primary path caps at 10 
 
 
 def run(cmd: list, timeout: int) -> dict:
-    """Run command subprocess with timeout handling and output cap.
+    """Run one command for the legacy Engine path (probe, portscan, recon...).
 
-    This is the legacy execution path used by Engine (probe, portscan, webscan,
-    recon, assess routes). Process-tree cleanup on timeout and full workdir
-    isolation live in execution/runner.ProcessRunner — the primary path for all
-    MCP and /api/command traffic. This helper keeps subprocess.run for simplicity;
-    its callers hold short-lived one-shot commands (curl, nmap, dig, etc.) where
-    grandchild orphans are not a practical concern.
+    Delegates to execution/runner.ProcessRunner so this path gets the same
+    process-tree cleanup on timeout as the primary MCP // /api/command path --
+    a timed-out nmap no longer leaves grandchild helpers orphaned. Runs in a
+    throwaway workdir and maps the RunResult back to the legacy dict contract.
+    ProcessRunner is imported lazily to avoid an import cycle (execution imports
+    core.tools).
     """
-    try:
-        r = subprocess.run(  # noqa: S603 - caller provides validated cmd list
-            cmd, capture_output=True, text=True, timeout=timeout, errors="replace"
-        )
-        return {
-            "ok": r.returncode == 0,
-            "exit": r.returncode,
-            "stdout": r.stdout[:_OUT_CAP],
-            "stderr": r.stderr[:_OUT_CAP],
-            "error": None,
-        }
-    except FileNotFoundError:
-        return {"ok": False, "exit": -1, "stdout": "", "stderr": "", "error": f"binary '{cmd[0]}' not found on PATH"}
-    except subprocess.TimeoutExpired:
-        return {"ok": False, "exit": -1, "stdout": "", "stderr": "", "error": f"timed out after {timeout}s"}
+    import tempfile
+    from pathlib import Path
+
+    from nexhunter.execution.runner import ProcessRunner
+
+    with tempfile.TemporaryDirectory(prefix="nexhunter-legacy-") as scratch:
+        r = ProcessRunner().run(cmd, timeout=timeout, workdir=Path(scratch))
+
+    error = r.error
+    if r.timed_out and not error:
+        error = f"timed out after {timeout}s"
+    return {
+        "ok": r.exit_code == 0 and not r.error and not r.timed_out and not r.terminated,
+        "exit": r.exit_code if r.exit_code is not None else -1,
+        "stdout": r.stdout[:_OUT_CAP],
+        "stderr": r.stderr[:_OUT_CAP],
+        "error": error,
+    }
 
 
 def which(bin_name: str) -> str | None:

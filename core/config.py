@@ -1,5 +1,7 @@
 """nexhunter.config - centralized configuration."""
 
+import os
+
 # Cache settings (legacy Engine LRU, used by /api/probe, /api/portscan, ...)
 CACHE_MAX = 128
 CACHE_CLEANUP_THRESHOLD = 0.8
@@ -68,14 +70,27 @@ RATE_LIMIT_PER_HOST = 5  # max requests per minute per host
 FINDING_DEDUP_ENABLED = True
 
 # Agent settings
-MAX_PARALLEL_WORKERS = 4
+# Parallel tool fan-out. The batch worker count adapts to host load between
+# MIN_PARALLEL_WORKERS and PARALLEL_WORKERS_CEILING (see core/scaling.py) --
+# the same auto-scaling idea as HexStrike's process pool, bounded to this
+# machine. MAX_PARALLEL_WORKERS is the baseline used when load is unknown
+# (psutil not installed), so behaviour is unchanged without the optional dep.
+MIN_PARALLEL_WORKERS = int(os.environ.get("NEXHUNTER_MIN_WORKERS", "2"))
+MAX_PARALLEL_WORKERS = int(os.environ.get("NEXHUNTER_MAX_WORKERS", "4"))
+PARALLEL_WORKERS_CEILING = int(
+    os.environ.get("NEXHUNTER_WORKERS_CEILING", str(min(32, max(4, (os.cpu_count() or 4) * 2))))
+)
+# Load thresholds (percent): at/above HI shrink toward MIN, below LO grow
+# toward the ceiling, in between hold the baseline.
+WORKER_CPU_HI = float(os.environ.get("NEXHUNTER_WORKER_CPU_HI", "85"))
+WORKER_CPU_LO = float(os.environ.get("NEXHUNTER_WORKER_CPU_LO", "50"))
+WORKER_MEM_HI = float(os.environ.get("NEXHUNTER_WORKER_MEM_HI", "90"))
 MAX_PROCESS_OUTPUT_LINES = 200
 MAX_TOOL_OUTPUT_PREVIEW = 2000
 
-# Server settings
-SERVER_HOST = "127.0.0.1"
-SERVER_PORT = 8888
-REQUEST_TIMEOUT = 600
+# Server bind host/port live in the top-level, validated config.py
+# (bind_host/bind_port). Duplicating them here caused two sources of truth, so
+# they were removed. REQUEST_TIMEOUT was dead and is gone too.
 
 # Flow settings
 WORKFLOW_TIMEOUT = 3600  # 1 hour per workflow

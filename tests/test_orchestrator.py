@@ -15,6 +15,7 @@ from nexhunter.agents.profiler import Profiler
 from nexhunter.core import tools as T
 from nexhunter.core.risk import RiskLevel
 from nexhunter.findings.store import FindingStore
+import nexhunter.workflows.orchestrator as orch
 from nexhunter.workflows.orchestrator import (
     AdaptivePlanner,
     AutonomousOrchestrator,
@@ -38,10 +39,12 @@ class FakeExecutionService:
     def execute(self, tool_name, params, **kwargs):
         self.calls.append({"tool": tool_name, "params": params})
         if tool_name in self.denied:
-            return {"ok": False, "code": "TOOL_ERROR", "error": "tool refused",
+            return {"ok": False, "exit": 1, "code": "TOOL_ERROR",
+                    "error": "tool refused", "status": "failed",
                     "execution_id": f"exec-{len(self.calls)}"}
         return {
             "ok": True,
+            "exit": 0,
             "status": "completed",
             "execution_id": f"exec-{len(self.calls)}",
             "output": self.outputs.get(tool_name, ""),
@@ -419,6 +422,69 @@ def test_async_run_is_pollable():
     assert orchestrator.get_run(run.id).status is RunStatus.COMPLETED
 
     print("  [OK] Async run polled to completion")
+
+
+def test_autonomous_retries_transient_failure():
+    """A tool that fails transiently once is retried, not abandoned.
+
+    Fails if the orchestrator runs each tool exactly once (no recovery wired
+    into the autonomous loop).
+    """
+    print("[TEST] Autonomous run recovers a transient failure...")
+
+    class TransientFake:
+        """Each tool's first call times out; the retry succeeds."""
+
+        def __init__(self):
+            self.calls = []
+            self._failed = set()
+
+        def execute(self, tool_name, params, **kwargs):
+            self.calls.append(tool_name)
+            if tool_name not in self._failed:
+                self._failed.add(tool_name)
+                return {"ok": False, "exit": 1, "status": "failed",
+                        "error": "timed out after 5s",
+                        "execution_id": f"e{len(self.calls)}"}
+            return {"ok": True, "exit": 0, "status": "completed", "output": "",
+                    "execution_id": f"e{len(self.calls)}"}
+
+    fake = TransientFake()
+    orchestrator = AutonomousOrchestrator(
+        execution_service=fake, finding_store=FindingStore())
+
+    run = orchestrator.start(
+        target="https://example.com", risk_ceiling="active",
+        max_steps=3, run_async=False,
+    )
+
+    retried = max(fake.calls.count(t) for t in set(fake.calls))
+    assert retried >= 2, "a transient failure should have been retried"
+    assert run.status is RunStatus.COMPLETED, run.errors
+    assert run.executions and all(e.get("ok") for e in run.executions), \
+        "every step should end ok once the retry succeeds"
+    print(f"  [OK] Recovered; calls={fake.calls}")
+
+
+def test_workflow_deadline_stops_run_with_partial_results(monkeypatch):
+    """An expired workflow deadline stops the loop and marks it STOPPED."""
+    print("[TEST] Workflow deadline stops the run...")
+    # Negative timeout => deadline already in the past on the first check.
+    monkeypatch.setattr(orch, "WORKFLOW_TIMEOUT", -1)
+    fake = FakeExecutionService()
+    orchestrator = AutonomousOrchestrator(execution_service=fake, finding_store=FindingStore())
+
+    run = orchestrator.start(
+        target="https://example.com",
+        risk_ceiling="active",
+        max_steps=15,
+        run_async=False,
+    )
+
+    assert run.status is RunStatus.STOPPED, f"expected STOPPED, got {run.status}"
+    assert run.steps_taken == 0, "no tool should run once the deadline has passed"
+    assert any("deadline" in e.get("error", "") for e in run.errors), "deadline not noted"
+    print("  [OK] Deadline stopped the run with partial results")
 
 
 if __name__ == "__main__":

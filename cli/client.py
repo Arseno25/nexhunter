@@ -333,30 +333,82 @@ def cmd_autonomous(args):
 
     _clear_line()
     r = api(f"/api/autonomous/{rid}").get("run", {})
-    ok = r.get("status") == "completed"
-    print(f"  {OK('[+]') if ok else ERR('[-]')} status={r.get('status')}  "
-          f"steps={r.get('steps_taken')}/{r.get('max_steps')}")
+    return _print_run_report(args, r)
+
+
+def _print_run_report(args, r):
+    """Final assessment report for an autonomous run.
+
+    Three verdicts, not two: a run stopped by the workflow deadline finished
+    with partial results and is not a failure. Shows the outcome, what ran,
+    findings by severity, held-back tools, and any notes (deadline included).
+    """
+    status = r.get("status", "unknown")
+    if status == "completed":
+        verdict, badge, exit_ok = "COMPLETED", OK("[+]"), True
+    elif status == "stopped":
+        verdict, badge, exit_ok = "PARTIAL", WARN("[~]"), True
+    else:
+        verdict, badge, exit_ok = status.upper(), ERR("[-]"), False
+
+    steps, total = r.get("steps_taken", 0), r.get("max_steps", 0) or 1
+    dur = _fmt_secs(_run_duration(r))
+
+    print(HEAD("─" * 64))
+    print(f"  {badge} ASSESSMENT {verdict}   {INFO(r.get('target', ''))}")
+    print(f"  steps {steps}/{total}   duration {dur}   ceiling {r.get('risk_ceiling', '')}")
 
     execs = r.get("executions", [])
     if execs:
-        print(HEAD("  Executed:"))
+        n_ok = sum(1 for e in execs if e.get("ok"))
+        print(HEAD(f"  Executed: {n_ok}/{len(execs)} ok"))
         for e in execs:
             mark = OK("ok ") if e.get("ok") else ERR("err")
             print(f"    {mark} {e.get('tool')}  {MUTE(e.get('status') or '')}")
+
+    f = api("/api/findings")
+    findings = f.get("findings", []) if isinstance(f, dict) else []
+    by_sev = {}
+    for it in findings:
+        sev = (it.get("severity") or "info").lower()
+        by_sev[sev] = by_sev.get(sev, 0) + 1
+    print(HEAD(f"  Findings: {len(findings)}"))
+    if findings:
+        print(sev_bars(by_sev, len(findings)))
+        for it in findings[:15]:
+            sev = (it.get("severity") or "info").lower()
+            paint = SEV_COLOR.get(sev, MUTE)
+            print(f"    {paint(sev.upper().ljust(8))} [{it.get('tool')}] {it.get('title')}")
+        if len(findings) > 15:
+            print(MUTE(f"    ... {len(findings) - 15} more"))
+
     withheld = r.get("recommended_next", [])
     if withheld:
         print(HEAD("  Withheld (needs human approval):"))
         for w in withheld[:10]:
             print(f"    {WARN('[!]')} {w.get('tool')}  {MUTE(w.get('risk_level', ''))}")
 
-    summ = api("/api/findings/summary")
-    if isinstance(summ, dict) and summ.get("ok"):
-        s = summ.get("summary", {})
-        total_f = s.get("total") if isinstance(s, dict) else None
-        if total_f:
-            print(HEAD(f"  Findings: {total_f}") + MUTE("  (nexhunter report)"))
+    errors = r.get("errors", [])
+    if errors:
+        print(HEAD("  Notes:"))
+        for e in errors[:8]:
+            where = e.get("tool") or e.get("phase") or ""
+            print(f"    {WARN('[!]')} {e.get('error') or e.get('code')}  {MUTE(where)}")
+
+    print(HEAD("─" * 64))
     verbose(args, r)
-    return 0 if ok else 1
+    return 0 if exit_ok else 1
+
+
+def _run_duration(r):
+    """Seconds between started_at and completed_at; 0 if unavailable."""
+    from datetime import datetime
+    try:
+        started = datetime.fromisoformat(r["started_at"])
+        ended = datetime.fromisoformat(r["completed_at"])
+        return (ended - started).total_seconds()
+    except (KeyError, TypeError, ValueError):
+        return 0.0
 
 
 def cmd_vulnerabilities(args):
@@ -555,7 +607,13 @@ def cmd_doctor(args):
     """Check that this installation can actually run."""
     from nexhunter.cli import doctor
 
-    return doctor.run(check_versions=not args.no_versions, show_all_tools=args.all)
+    return doctor.run(
+        check_versions=not args.no_versions,
+        show_all_tools=args.all,
+        do_install=args.install,
+        assume_yes=args.yes,
+        dry_run=args.dry_run,
+    )
 
 
 def cmd_registry(args):
@@ -700,6 +758,14 @@ def main(argv=None):
     doctor_parser = sub.add_parser("doctor", help="check this installation can run (no server needed)")
     doctor_parser.add_argument("--all", action="store_true", help="list every missing stable tool")
     doctor_parser.add_argument("--no-versions", action="store_true", help="skip version probes (faster)")
+    doctor_parser.add_argument(
+        "--install", action="store_true",
+        help="install missing stable tools via their known recipe (apt/go/pipx); shows a plan and asks first",
+    )
+    doctor_parser.add_argument("--yes", action="store_true", help="with --install, skip the confirmation prompt")
+    doctor_parser.add_argument(
+        "--dry-run", action="store_true", help="with --install, print the install plan without running it",
+    )
 
     registry_parser = sub.add_parser("registry", help="inspect the tool registry (no server needed)")
     registry_sub = registry_parser.add_subparsers(dest="registry_cmd", required=True)

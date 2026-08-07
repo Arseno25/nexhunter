@@ -511,6 +511,24 @@ def test_empty_export_is_valid():
     print("  [OK] Empty exports valid")
 
 
+def test_add_many_persists_once(tmp_path):
+    """Bulk insert writes the findings file a single time, not per finding.
+
+    Fails if add_many rewrites the whole file once per finding (O(n) I/O).
+    """
+    print("[TEST] add_many persists once...")
+    store = FindingStore(path=tmp_path / "findings.json")
+    persists = []
+    real_persist = store._persist
+    store._persist = lambda: (persists.append(1), real_persist())[1]
+
+    store.add_many([_finding(title=f"Finding {i}") for i in range(3)])
+
+    assert len(persists) == 1, f"expected one persist, got {len(persists)}"
+    assert len(store) == 3
+    print("  [OK] Single persist for a bulk insert")
+
+
 if __name__ == "__main__":
     print("\n=== Finding Tests ===\n")
     test_severity_normalization()

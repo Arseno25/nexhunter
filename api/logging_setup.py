@@ -68,7 +68,9 @@ def _console_format(record: Any, use_color: bool) -> str:
         badge = f"\x1b[{sgr}m{badge}\x1b[0m"
         name = f"\x1b[38;5;51m{name}\x1b[0m"
         msg = f"\x1b[{sgr}m{msg}\x1b[0m"
-    return f"{record['time']:%H:%M:%S} | {badge} | {name} | {msg}"
+    # Callable formatters must supply their own line break; loguru does not
+    # append one (unlike string formats). Mirrors _file_format's trailing \n.
+    return f"{record['time']:%H:%M:%S} | {badge} | {name} | {msg}\n"
 
 
 def _file_format(record: Any) -> str:

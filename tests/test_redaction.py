@@ -105,6 +105,29 @@ def test_clean_output_unchanged():
     print("  [OK] Benign output preserved")
 
 
+def test_engine_redacts_secrets_in_tool_output(monkeypatch):
+    """Engine (agent path) redacts secrets before returning tool output.
+
+    Tool output flows into the LLM context, so an unredacted secret would leak
+    to the model. Fails if Engine returns raw stdout/stderr.
+    """
+    print("[TEST] Engine redacts tool output...")
+    from nexhunter.core import engine as engine_mod
+    from nexhunter.core.engine import Engine
+
+    monkeypatch.setattr(engine_mod.T, "run", lambda cmd, timeout: {
+        "ok": True, "exit": 0,
+        "stdout": "found AKIAIOSFODNN7EXAMPLE in config",
+        "stderr": "password=hunter2secretvalue", "error": None,
+    })
+    eng = Engine()
+    res = eng.run_tool("dns_lookup", {"domain": "example.com"})
+
+    assert "AKIAIOSFODNN7EXAMPLE" not in res.get("stdout", ""), "AWS key leaked"
+    assert "hunter2secretvalue" not in res.get("stderr", ""), "password leaked"
+    print("  [OK] Engine output redacted")
+
+
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_") and callable(fn):

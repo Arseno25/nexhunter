@@ -20,9 +20,11 @@ from collections import OrderedDict
 from pathlib import Path
 from typing import Any
 
+from nexhunter.api import visual
 from nexhunter.core import tools as T
 from nexhunter.execution.cache import ResultCache
 from nexhunter.execution.models import ExecutionRecord, ExecutionStatus
+from nexhunter.execution.ratelimit import HostRateLimiter
 from nexhunter.execution.registry import ExecutionRegistry
 from nexhunter.execution.runner import ProcessRunner
 from nexhunter.execution.workspace import Workspace, WorkspaceError
@@ -40,25 +42,27 @@ _USE_COLOR = bool(os.environ.get("FORCE_COLOR")) or (
     not os.environ.get("NO_COLOR")
     and getattr(sys.stdout, "isatty", lambda: False)()
 )
+# Icons are forced to emoji (width-2) presentation via VS16 so the status
+# column keeps a constant visual width across every status.
 _STATUS_STYLE = {
-    "RUNNING": ("\033[38;5;51m", "▶"),
+    "RUNNING": ("\033[38;5;51m", "▶️"),
     "COMPLETED": ("\033[38;5;46m", "✅"),
     "FAILED": ("\033[38;5;196m", "❌"),
-    "TIMEOUT": ("\033[38;5;208m", "⏱"),
+    "TIMEOUT": ("\033[38;5;208m", "⏱️"),
     "TERMINATED": ("\033[38;5;208m", "🛑"),
     "BLOCKED": ("\033[38;5;129m", "🚫"),
 }
 
 
 def _tool_line(status: str, tool: str, target: str = "", extra: str = "") -> str:
-    """One-line, direct-style tool event for the logs."""
+    """One-line, direct-style tool event with aligned columns."""
     color, icon = _STATUS_STYLE.get(status, ("", "•"))
     token = f"{icon} {status:<10}"
     if _USE_COLOR and color:
         token = f"{color}{token}\033[0m"
-    dest = f"  →  {target}" if target else ""
+    dest = f"→ {target}" if target else ""
     tail = f"  {extra}" if extra else ""
-    return f"{token} {tool}{dest}{tail}"
+    return f"{token} {tool:<{visual.TOOL_COL}} {dest}{tail}".rstrip()
 
 
 class ExecutionService:
@@ -70,10 +74,13 @@ class ExecutionService:
         runner: ProcessRunner | None = None,
         redactor: SecretRedactor | None = None,
         cache: ResultCache | None = None,
+        rate_limiter: HostRateLimiter | None = None,
     ):
         self.registry = registry or ExecutionRegistry()
         self.runner = runner or ProcessRunner()
         self.redactor = redactor or SecretRedactor()
+        # Per-host pacing so parallel tool fan-out never self-DoSes a target.
+        self.rate = rate_limiter or HostRateLimiter.from_config()
         # Result cache for the one execution path. Only deterministic terminal
         # results are stored; see execution/cache.py.
         self.cache = cache or ResultCache.from_env()
@@ -231,12 +238,19 @@ class ExecutionService:
             return {"ok": False, "code": "BUILD_FAILED",
                     "error": f"failed to build command for {tool_name}"}
 
-        log.info(_tool_line("RUNNING", tool_name, spec.target_of(merged) or ""))
+        target = spec.target_of(merged) or ""
+        log.info(_tool_line("RUNNING", tool_name, target))
         t0 = time.time()
+        # Animated bar while the child runs (interactive TTY only; no-op when
+        # piped or on the server). Estimate is capped so quick tools still ease.
+        label = f"{tool_name}{f'  →  {target}' if target else ''}"
+        est = min(spec.timeout or 30, 30)
         # The runner needs a workdir for its stdout/stderr capture; a throwaway
         # temporary directory gives the process somewhere to run while leaving
         # nothing behind -- no persistent workspace, per the direct contract.
-        with tempfile.TemporaryDirectory(prefix="nexhunter-direct-") as scratch:
+        self.rate.acquire(target)
+        with tempfile.TemporaryDirectory(prefix="nexhunter-direct-") as scratch, \
+                visual.live_progress(label, estimate=est):
             result = self.runner.run(cmd, timeout=spec.timeout, workdir=Path(scratch))
         duration = time.time() - t0
 
@@ -298,6 +312,7 @@ class ExecutionService:
         def on_spawn(pid: int) -> None:
             record.pid = pid
 
+        self.rate.acquire(record.target or "")
         result = self.runner.run(
             cmd, timeout=timeout, workdir=workspace.root, cancel=cancel, on_spawn=on_spawn
         )
