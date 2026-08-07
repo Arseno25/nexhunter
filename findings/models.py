@@ -17,6 +17,7 @@ from enum import Enum
 from typing import Any
 
 from nexhunter.findings import attack
+from nexhunter.findings.gates import GateStatus
 
 
 class Severity(Enum):
@@ -173,7 +174,12 @@ class Finding:
     cve_ids: list[str] = field(default_factory=list)
     cwe_ids: list[str] = field(default_factory=list)
     cvss_score: float | None = None
+    cvss_vector: str | None = None  # e.g. "CVSS:3.1/AV:N/AC:L/..."; drives cvss_score when set
     location: str | None = None  # file path, URL path, or port
+    # 4-gate validation (findings/gates.py): unreviewed until an AI client or
+    # human reviewer submits verdicts via POST /api/findings/<id>/gates.
+    gate_status: str = GateStatus.UNREVIEWED.value
+    gate_notes: dict[str, str] = field(default_factory=dict)  # one entry per gate name
     attack_ids: list[str] = field(default_factory=list)  # MITRE ATT&CK
     artifacts: list[str] = field(default_factory=list)  # evidence files: screenshots, pcaps, …
     first_seen_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
@@ -193,12 +199,37 @@ class Finding:
         self.cwe_ids = [c.upper() for c in self.cwe_ids if _CWE.match(str(c))]
         self.attack_ids = [a.upper() for a in self.attack_ids if _ATTACK.match(str(a))]
 
-        if self.cvss_score is not None:
+        if self.cvss_vector:
+            # A vector is a verified assessment (attack vector, privileges,
+            # impact...); the score it implies overrides any bare number a
+            # caller also passed, the same way the fingerprint overrides a
+            # caller-supplied id. A malformed vector is dropped, not fatal --
+            # same restraint as a malformed cve_id/cwe_id above.
+            from nexhunter.findings.cvss import try_score_vector
+
+            result = try_score_vector(self.cvss_vector)
+            if result is not None:
+                self.cvss_vector = result.vector
+                self.cvss_score = result.base_score
+                # Never downgrade -- same invariant merge() already enforces
+                # for a repeat sighting: severity only ever goes up.
+                implied = normalize_severity(result.severity)
+                if implied.rank > self.severity.rank:
+                    self.severity = implied
+            else:
+                self.cvss_vector = None
+
+        if self.cvss_vector is None and self.cvss_score is not None:
             try:
                 score = float(self.cvss_score)
             except (TypeError, ValueError):
                 score = None
             self.cvss_score = score if score is not None and 0.0 <= score <= 10.0 else None
+
+        try:
+            self.gate_status = GateStatus(self.gate_status).value
+        except ValueError:
+            self.gate_status = GateStatus.UNREVIEWED.value
 
         # The knowledge base fills gaps a parser left open: ATT&CK techniques
         # derived from CWEs, and a concrete remediation when the tool provided
@@ -259,6 +290,13 @@ class Finding:
                     destination.append(item)
         if self.cvss_score is None:
             self.cvss_score = other.cvss_score
+            self.cvss_vector = other.cvss_vector
+        # A gate verdict is a deliberate review; a repeat tool sighting (which
+        # constructs `other` fresh, so it starts UNREVIEWED) must never reset
+        # it. Only adopt other's gate state when self was never reviewed.
+        if self.gate_status == GateStatus.UNREVIEWED.value and other.gate_status != GateStatus.UNREVIEWED.value:
+            self.gate_status = other.gate_status
+            self.gate_notes = dict(other.gate_notes)
         if not self.remediation:
             self.remediation = other.remediation
             self._remediation_generated = other._remediation_generated
@@ -287,7 +325,10 @@ class Finding:
             "attack_ids": self.attack_ids,
             "artifacts": self.artifacts,
             "cvss_score": self.cvss_score,
+            "cvss_vector": self.cvss_vector,
             "location": self.location,
+            "gate_status": self.gate_status,
+            "gate_notes": self.gate_notes,
             "is_vulnerability": self.is_vulnerability,
             "first_seen_at": self.first_seen_at.isoformat(),
             "last_seen_at": self.last_seen_at.isoformat(),
@@ -318,7 +359,10 @@ class Finding:
             attack_ids=data.get("attack_ids") or [],
             artifacts=data.get("artifacts") or [],
             cvss_score=data.get("cvss_score"),
+            cvss_vector=data.get("cvss_vector"),
             location=data.get("location"),
+            gate_status=data.get("gate_status", GateStatus.UNREVIEWED.value),
+            gate_notes=data.get("gate_notes") or {},
             first_seen_at=_dt("first_seen_at") or datetime.now(timezone.utc),
             last_seen_at=_dt("last_seen_at") or datetime.now(timezone.utc),
         )

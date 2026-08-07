@@ -48,6 +48,9 @@ cannot escalate its own risk ceiling.
   bars, and spinners for terminal and API consumers (`NO_COLOR` respected).
 - **Fast when you want it.** An LRU+TTL result cache and an optional in-process
   `direct` mode cut repeat work; process management lets you watch and stop runs.
+- **Finding validation.** CVSS 3.1 scoring is computed from a vector, not
+  guessed; the 4-gate exploitability check is answered by whoever reviews the
+  finding (AI or human), never invented by NexHunter's own code.
 - **Secrets redacted** from parameters, commands, logs, and output.
 
 ## How it works
@@ -262,6 +265,37 @@ Two bounds the AI cannot lift:
 Every step goes through the same `ExecutionService` as a manual call, so the loop
 cannot reach the OS any other way.
 
+## Finding validation
+
+A tool observation and a confirmed, submission-ready vulnerability are
+different claims. Two tools sit between them, both callable by any MCP
+client (or plain REST) — neither invents a value the caller didn't establish:
+
+```bash
+curl -X POST http://127.0.0.1:8888/api/cvss/score \
+     -d '{"vector":"CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"}'
+# {"ok":true,"vector":"CVSS:3.1/...","base_score":9.8,"severity":"critical"}
+
+curl -X POST http://127.0.0.1:8888/api/findings/<id>/gates \
+     -d '{"refutation":"pass","reachability":"pass","trigger":"pass","impact":"pass"}'
+```
+
+- **CVSS 3.1 scoring** is the official base-score formula over a vector
+  string — pure arithmetic, not a guess. A `Finding.cvss_vector` recomputes
+  `cvss_score` from it and raises `severity` to match, but never lowers a
+  severity already set higher. A malformed vector is rejected, not silently
+  dropped to a default.
+- **The 4-gate validator** (refutation → reachability → trigger → impact)
+  answers a question no tool output can settle on its own: is this actually
+  exploitable? That's a reasoning task, so NexHunter's code never answers it
+  — an AI client (or a human) reviews the finding via `get_finding` and
+  submits its own verdict per gate through `submit_finding_gates`. The code's
+  job is only the deterministic part: validating the four verdicts and
+  aggregating them (`refuted` on any `fail`, `needs_review` on `unsure` with
+  no `fail`, `confirmed` when all four `pass`). A gate verdict, once
+  recorded, survives a repeat tool sighting — merging a rerun never resets a
+  review.
+
 ## Execution modes
 
 Both modes share the registry, typed validation, redaction, and the risk
@@ -413,6 +447,9 @@ curl -X POST http://127.0.0.1:8888/api/command \
 | `POST /api/executions/{id}/terminate` | Stop a running execution and its children |
 | `POST /api/autonomous` · `GET /api/autonomous[/{id}]` | Start / poll an adaptive run |
 | `GET /api/findings` | Findings |
+| `GET /api/findings/{id}` | One finding, full evidence |
+| `POST /api/findings/{id}/gates` | Record a reviewed 4-gate verdict (refutation/reachability/trigger/impact) |
+| `POST /api/cvss/score` | CVSS 3.1 base score from a vector string |
 | `GET /api/mcp/profiles` | Profile definitions |
 | `GET /api/cache/stats` · `POST /api/cache/clear` | Result-cache telemetry / reset |
 | `GET /api/processes/list` · `/status/{pid}` · `POST /terminate/{pid}` | Live process management |

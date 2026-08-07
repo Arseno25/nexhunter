@@ -534,6 +534,63 @@ def findings() -> str:
 
 
 @mcp.tool()
+def get_finding(finding_id: str) -> str:
+    """Fetch one finding by id, with full evidence -- the context to reason
+    over before calling submit_finding_gates."""
+    return _render(api(f"/api/findings/{finding_id}"), indent=1)
+
+
+@mcp.tool()
+def score_cvss(vector: str) -> str:
+    """Compute a CVSS 3.1 base score from a vector string, e.g.
+    'CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H'. Pure arithmetic on a
+    vector you already assessed -- it does not guess one for you."""
+    return _render(api("/api/cvss/score", {"vector": vector}), indent=1)
+
+
+@mcp.tool()
+def submit_finding_gates(
+    finding_id: str,
+    refutation: str,
+    reachability: str,
+    trigger: str,
+    impact: str,
+    refutation_notes: str = "",
+    reachability_notes: str = "",
+    trigger_notes: str = "",
+    impact_notes: str = "",
+) -> str:
+    """Record your own verdict on the 4-gate check for one finding, after you
+    have reviewed it with get_finding: does the finding survive refutation
+    (can an existing guard concretely block it?), reachability (can the
+    vulnerable state exist live?), trigger (can an unprivileged actor execute
+    it?), and impact (material harm to an identifiable victim?).
+
+    Each of refutation/reachability/trigger/impact is 'pass' (gate survived),
+    'fail' (gate not survived -- refutes the finding outright), or 'unsure'
+    (evidence does not clearly settle it). This tool only validates and
+    aggregates your four verdicts into gate_status (confirmed / refuted /
+    needs_review) -- it does not judge the finding itself; that reasoning is
+    yours to do first."""
+    return _render(
+        api(
+            f"/api/findings/{finding_id}/gates",
+            {
+                "refutation": refutation,
+                "reachability": reachability,
+                "trigger": trigger,
+                "impact": impact,
+                "refutation_notes": refutation_notes,
+                "reachability_notes": reachability_notes,
+                "trigger_notes": trigger_notes,
+                "impact_notes": impact_notes,
+            },
+        ),
+        indent=1,
+    )
+
+
+@mcp.tool()
 def report(fmt: str = "markdown") -> str:
     """Generate assessment report: 'markdown' or 'json'."""
     return _render(api("/api/report", {"fmt": fmt}), indent=1)

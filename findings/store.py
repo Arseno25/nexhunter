@@ -134,6 +134,13 @@ class FindingStore:
                     return finding
         return None
 
+    def persist(self) -> None:
+        """Rewrite the store file. Call after mutating a Finding fetched via
+        get() in place (e.g. recording a gate verdict) -- add()/add_many()
+        persist automatically, direct mutation does not."""
+        with self._lock:
+            self._persist()
+
     def summary(self) -> dict:
         """Counts by severity and category, for dashboards and reports."""
         findings = self.list()

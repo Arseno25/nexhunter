@@ -109,6 +109,65 @@ def test_out_of_range_cvss_dropped():
     print("  [OK] Invalid scores dropped")
 
 
+def test_cvss_vector_drives_score_and_severity():
+    """A vector is a verified assessment: it computes the score (overriding
+    any bare number also passed) and raises severity to match, but never
+    lowers a severity the caller already set higher."""
+    print("[TEST] CVSS vector drives score and severity...")
+    critical_vector = "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"
+
+    finding = _finding(cvss_vector=critical_vector, cvss_score=1.0)
+    assert finding.cvss_score == 9.8, "vector overrides a bare cvss_score"
+    assert finding.severity is Severity.CRITICAL
+
+    low_vector = "CVSS:3.1/AV:L/AC:H/PR:H/UI:R/S:U/C:L/I:N/A:N"
+    stays_high = _finding(severity="critical", cvss_vector=low_vector)
+    assert stays_high.severity is Severity.CRITICAL, "vector must not downgrade an explicit severity"
+    assert stays_high.cvss_score == 1.8
+
+    print("  [OK] Vector drives score, raises but never lowers severity")
+
+
+def test_malformed_cvss_vector_dropped():
+    """A malformed vector is dropped, not fatal -- same restraint as a
+    malformed cve_id/cwe_id."""
+    print("[TEST] Malformed CVSS vector dropped...")
+    finding = _finding(cvss_vector="not a vector")
+    assert finding.cvss_vector is None
+    assert finding.cvss_score is None
+    print("  [OK] Malformed vector dropped, not fatal")
+
+
+def test_gate_status_defaults_unreviewed_and_round_trips():
+    """gate_status/gate_notes default to unreviewed and survive to_dict/from_dict."""
+    print("[TEST] Gate status default and round-trip...")
+    finding = _finding()
+    assert finding.gate_status == "unreviewed"
+    assert finding.gate_notes == {}
+
+    finding.gate_status = "confirmed"
+    finding.gate_notes = {"impact": "verified in a scoped test account"}
+    restored = Finding.from_dict(json.loads(json.dumps(finding.to_dict())))
+    assert restored.gate_status == "confirmed"
+    assert restored.gate_notes == {"impact": "verified in a scoped test account"}
+    print("  [OK] Gate state round-trips through to_dict/from_dict")
+
+
+def test_merge_preserves_gate_verdict_from_repeat_sighting():
+    """A gated finding seen again (fresh Finding, so it starts unreviewed)
+    must keep its verdict -- a repeat tool sighting is not a re-review."""
+    print("[TEST] Merge preserves an existing gate verdict...")
+    store = FindingStore()
+    gated = store.add(_finding())
+    gated.gate_status = "confirmed"
+    gated.gate_notes = {"impact": "confirmed"}
+
+    stored = store.add(_finding())  # same identity -> merges into `gated`
+    assert stored.gate_status == "confirmed"
+    assert stored.gate_notes == {"impact": "confirmed"}
+    print("  [OK] Gate verdict survives a repeat sighting")
+
+
 def test_observation_is_not_a_vulnerability():
     """Observations and vulnerabilities are distinct claims."""
     print("[TEST] Observation vs vulnerability...")
@@ -536,6 +595,10 @@ if __name__ == "__main__":
     test_cvss_thresholds()
     test_invalid_identifiers_dropped()
     test_out_of_range_cvss_dropped()
+    test_cvss_vector_drives_score_and_severity()
+    test_malformed_cvss_vector_dropped()
+    test_gate_status_defaults_unreviewed_and_round_trips()
+    test_merge_preserves_gate_verdict_from_repeat_sighting()
     test_observation_is_not_a_vulnerability()
     test_parser_failure_is_recorded_not_swallowed()
     test_fingerprint_is_stable_and_sha256()

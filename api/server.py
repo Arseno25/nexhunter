@@ -108,7 +108,7 @@ from nexhunter.api.visual import (
 from nexhunter.api.logging_setup import configure_logging
 from nexhunter.execution.service import ExecutionService
 from nexhunter.api import mcp_profiles
-from nexhunter.findings import export as findings_export
+from nexhunter.findings import cvss, export as findings_export, gates
 from nexhunter.findings.store import FindingStore
 from nexhunter.workflows.orchestrator import AutonomousOrchestrator
 from nexhunter.agents.param_optimizer import optimize_preview
@@ -479,6 +479,55 @@ def autonomous_get(run_id):
 @app.get("/api/findings/summary")
 def findings_summary():
     return jsonify({"ok": True, "summary": FINDINGS.summary()})
+
+
+@app.get("/api/findings/<finding_id>")
+def finding_get(finding_id):
+    finding = FINDINGS.get(finding_id)
+    if finding is None:
+        return jsonify({"ok": False, "error": "no such finding", "code": "NOT_FOUND"}), 404
+    return jsonify({"ok": True, "finding": finding.to_dict()})
+
+
+@app.post("/api/findings/<finding_id>/gates")
+def finding_gates_post(finding_id):
+    """Record the 4-gate verdict an AI client or human reviewer already
+    reasoned through -- this endpoint validates and aggregates, it never
+    decides a gate itself (see findings/gates.py)."""
+    finding = FINDINGS.get(finding_id)
+    if finding is None:
+        return jsonify({"ok": False, "error": "no such finding", "code": "NOT_FOUND"}), 404
+    if not gates.gateable(finding.is_vulnerability):
+        return jsonify({
+            "ok": False,
+            "error": f"category '{finding.category}' makes no exploit claim to gate",
+            "code": "NOT_GATEABLE",
+        }), 400
+
+    body = request.get_json(silent=True) or {}
+    try:
+        verdicts = gates.parse_verdicts(body)
+    except ValueError as exc:
+        return jsonify({"ok": False, "error": str(exc), "code": "INVALID_PARAMS"}), 400
+
+    finding.gate_status = gates.aggregate(verdicts).value
+    finding.gate_notes = gates.notes_from(body)
+    FINDINGS.persist()
+    return jsonify({"ok": True, "finding": finding.to_dict()})
+
+
+@app.post("/api/cvss/score")
+def cvss_score_post():
+    """Compute a CVSS 3.1 base score from a vector -- pure arithmetic, no
+    finding lookup, so an AI client can score a vector it is drafting before
+    deciding whether to attach it to a finding."""
+    body = request.get_json(silent=True) or {}
+    vector = str(body.get("vector", ""))
+    try:
+        result = cvss.score_vector(vector)
+    except ValueError as exc:
+        return jsonify({"ok": False, "error": str(exc), "code": "INVALID_VECTOR"}), 400
+    return jsonify({"ok": True, "vector": result.vector, "base_score": result.base_score, "severity": result.severity})
 
 
 @app.get("/api/findings/export")
