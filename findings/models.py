@@ -206,6 +206,16 @@ class Finding:
     # reconsidering a DEMOTED/NEEDS_REVIEW finding on a second signal.
     promoted_from: str = ""
     promotion_notes: str = ""
+    # Tamper-evident audit trail (findings/custody.py): callers append a
+    # link on every review-state change. Not appended automatically here --
+    # __post_init__ runs on every load from disk too, and a chain must only
+    # grow on a real event, not on every deserialization.
+    custody_chain: list[dict] = field(default_factory=list)
+    # AI-declared links to other findings, e.g. "auth bypass here enables
+    # the IDOR in finding X" -- related_finding_id -> relationship
+    # description. Populated by promote_finding and link_finding_chain;
+    # NexHunter never infers a chain on its own.
+    chain_links: dict[str, str] = field(default_factory=dict)
     attack_ids: list[str] = field(default_factory=list)  # MITRE ATT&CK
     artifacts: list[str] = field(default_factory=list)  # evidence files: screenshots, pcaps, …
     first_seen_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
@@ -346,6 +356,12 @@ class Finding:
             self.presubmission_notes = dict(other.presubmission_notes)
         # promoted_from/promotion_notes: a promotion is a terminal, deliberate
         # act -- never adopted from `other` and never cleared by a merge.
+        if not self.chain_links and other.chain_links:
+            self.chain_links = dict(other.chain_links)
+        # custody_chain: intentionally NOT touched here. A merge is a repeat
+        # tool sighting; the caller (FindingStore) appends a "re_observed"
+        # link with the sighting's own event data, which carries more
+        # information than blindly concatenating two chains would.
         if not self.remediation:
             self.remediation = other.remediation
             self._remediation_generated = other._remediation_generated
@@ -386,6 +402,8 @@ class Finding:
             "presubmission_notes": self.presubmission_notes,
             "promoted_from": self.promoted_from,
             "promotion_notes": self.promotion_notes,
+            "custody_chain": self.custody_chain,
+            "chain_links": self.chain_links,
             "disposition": self.disposition,
             "is_vulnerability": self.is_vulnerability,
             "first_seen_at": self.first_seen_at.isoformat(),
@@ -429,6 +447,8 @@ class Finding:
             presubmission_notes=data.get("presubmission_notes") or {},
             promoted_from=data.get("promoted_from", ""),
             promotion_notes=data.get("promotion_notes", ""),
+            custody_chain=data.get("custody_chain") or [],
+            chain_links=data.get("chain_links") or {},
             first_seen_at=_dt("first_seen_at") or datetime.now(timezone.utc),
             last_seen_at=_dt("last_seen_at") or datetime.now(timezone.utc),
         )

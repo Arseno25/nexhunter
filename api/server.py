@@ -108,7 +108,7 @@ from nexhunter.api.visual import (
 from nexhunter.api.logging_setup import configure_logging
 from nexhunter.execution.service import ExecutionService
 from nexhunter.api import mcp_profiles
-from nexhunter.findings import bounty_reports, cvss, export as findings_export, gates
+from nexhunter.findings import bounty_reports, custody, cvss, export as findings_export, gates, ledger, triage
 from nexhunter.findings.models import severity_from_rank
 from nexhunter.findings.store import FindingStore
 from nexhunter.workflows.orchestrator import AutonomousOrchestrator
@@ -482,6 +482,16 @@ def findings_summary():
     return jsonify({"ok": True, "summary": FINDINGS.summary()})
 
 
+def _link_findings(a, b, relationship: str) -> None:
+    """Record a chain link on both findings, so it's visible querying from
+    either side. b may be None (caller already validated it exists when
+    that matters); a no-op keeps callers simple."""
+    if b is None:
+        return
+    a.chain_links[b.id] = relationship
+    b.chain_links[a.id] = f"(reverse) {relationship}"
+
+
 @app.get("/api/findings/<finding_id>")
 def finding_get(finding_id):
     finding = FINDINGS.get(finding_id)
@@ -533,6 +543,7 @@ def finding_gates_post(finding_id):
         finding.attack_flow = [str(step) for step in (body.get("attack_flow") or [])]
     if "attack_chain_narrative" in body:
         finding.attack_chain_narrative = [str(step) for step in (body.get("attack_chain_narrative") or [])]
+    finding.custody_chain = custody.append(finding.custody_chain, "gated", {"gate_status": finding.gate_status})
     FINDINGS.persist()
     return jsonify({"ok": True, "finding": finding.to_dict()})
 
@@ -557,10 +568,12 @@ def finding_presubmission_post(finding_id):
     finding.presubmission_notes = {
         name: str(body.get(f"{name}_notes", "") or "") for name in gates.PRESUBMISSION_NAMES
     }
+    ready = gates.presubmission_ready(checklist)
+    finding.custody_chain = custody.append(finding.custody_chain, "presubmission", {"ready": ready})
     FINDINGS.persist()
     return jsonify({
         "ok": True,
-        "ready": gates.presubmission_ready(checklist),
+        "ready": ready,
         "finding": finding.to_dict(),
     })
 
@@ -600,6 +613,11 @@ def finding_promote_post(finding_id):
     finding.gate_status = gates.GateStatus.CONFIRMED.value
     note = reason if not related_ids else f"{reason} (related: {', '.join(related_ids)})"
     finding.promotion_notes = note
+    for related_id in related_ids:
+        _link_findings(finding, FINDINGS.get(related_id), f"promoted together: {reason}")
+    finding.custody_chain = custody.append(
+        finding.custody_chain, "promoted", {"promoted_from": current_status.value, "reason": reason}
+    )
     FINDINGS.persist()
     return jsonify({"ok": True, "finding": finding.to_dict()})
 
@@ -618,7 +636,92 @@ def finding_report_post(finding_id):
         report = bounty_reports.render(finding, platform)
     except ValueError as exc:
         return jsonify({"ok": False, "error": str(exc), "code": "INVALID_PARAMS"}), 400
+    finding.custody_chain = custody.append(finding.custody_chain, "reported", {"platform": platform.lower()})
+    FINDINGS.persist()
     return jsonify({"ok": True, "platform": platform.lower(), "report": report})
+
+
+@app.get("/api/findings/<finding_id>/custody")
+def finding_custody_get(finding_id):
+    """The tamper-evident audit trail for one finding: every review-state
+    change, hash-linked. `intact` recomputes every link's hash and checks it
+    against what's stored -- this doesn't prevent someone from rewriting the
+    stored file, it detects that they did."""
+    finding = FINDINGS.get(finding_id)
+    if finding is None:
+        return jsonify({"ok": False, "error": "no such finding", "code": "NOT_FOUND"}), 404
+    intact, reason = custody.verify(finding.custody_chain)
+    return jsonify({"ok": True, "intact": intact, "reason": reason, "chain": finding.custody_chain})
+
+
+@app.get("/api/findings/ledger")
+def findings_ledger_get():
+    """Store-wide integrity audit: does every confirmed/demoted finding
+    actually have evidence behind it, and is every finding's custody chain
+    intact. The store-wide analogue of the per-finding gate check."""
+    return jsonify({"ok": True, "issues": [i.to_dict() for i in ledger.audit(FINDINGS.list())]})
+
+
+@app.get("/api/findings/triage")
+def findings_triage_get():
+    """Bucket every recorded finding by disposition (confirmed / lead /
+    needs_review / demoted / refuted / unreviewed), most severe first within
+    each bucket -- the batch view for deciding what to work on next."""
+    buckets = triage.buckets(FINDINGS.list())
+    return jsonify({
+        "ok": True,
+        "buckets": {name: [f.to_dict() for f in findings] for name, findings in buckets.items()},
+        "counts": {name: len(findings) for name, findings in buckets.items()},
+    })
+
+
+@app.post("/api/findings/<finding_id>/chain")
+def finding_chain_post(finding_id):
+    """Declare a link to another finding without promoting either one --
+    e.g. two already-CONFIRMED findings worth reporting as a chain. Records
+    the link on both sides; never infers a link on its own."""
+    finding = FINDINGS.get(finding_id)
+    if finding is None:
+        return jsonify({"ok": False, "error": "no such finding", "code": "NOT_FOUND"}), 404
+    body = request.get_json(silent=True) or {}
+    related_id = str(body.get("related_finding_id") or "").strip()
+    relationship = str(body.get("relationship") or "").strip()
+    if not related_id or not relationship:
+        return jsonify({
+            "ok": False,
+            "error": "related_finding_id and relationship are both required",
+            "code": "INVALID_PARAMS",
+        }), 400
+    related = FINDINGS.get(related_id)
+    if related is None:
+        return jsonify({"ok": False, "error": f"related finding not found: {related_id}", "code": "INVALID_PARAMS"}), 400
+    _link_findings(finding, related, relationship)
+    finding.custody_chain = custody.append(finding.custody_chain, "chained", {"related_finding_id": related.id})
+    FINDINGS.persist()
+    return jsonify({"ok": True, "finding": finding.to_dict()})
+
+
+@app.get("/api/findings/<finding_id>/chain")
+def finding_chain_get(finding_id):
+    """The 1-hop kill-chain view: this finding plus a summary of everything
+    it's linked to (via promote_finding or link_finding_chain), so a report
+    can cite the whole chain without walking the store by hand."""
+    finding = FINDINGS.get(finding_id)
+    if finding is None:
+        return jsonify({"ok": False, "error": "no such finding", "code": "NOT_FOUND"}), 404
+    linked = []
+    for related_id, relationship in finding.chain_links.items():
+        related = FINDINGS.get(related_id)
+        if related is None:
+            continue  # the linked finding was evicted since the link was made
+        linked.append({
+            "id": related.id,
+            "title": related.title,
+            "severity": related.severity.value,
+            "disposition": related.disposition,
+            "relationship": relationship,
+        })
+    return jsonify({"ok": True, "finding": finding.to_dict(), "linked": linked})
 
 
 @app.post("/api/cvss/score")

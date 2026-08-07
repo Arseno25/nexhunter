@@ -346,10 +346,35 @@ curl -X POST http://127.0.0.1:8888/api/findings/<id>/gates \
   framework-specific anti-patterns (Django REST Framework, Express, Laravel,
   GraphQL, GitHub Actions), common false-positive patterns, impact tiers
   with severity floors, counter-arguments for a triager's pushback, plus
-  what gets rejected on sight and what's a known-safe pattern. Read-only
-  knowledge for an AI to consult before gate review, never an auto-filter —
-  matching a title against a string is not proof a finding lacks the chain
-  that makes it valid.
+  what gets rejected on sight and what's a known-safe pattern — and, for the
+  report itself, the title formula, the impact-statement formula, a
+  60-second pre-submit checklist, and tone rules (no hedging, present
+  tense, no em dashes). Read-only knowledge for an AI to consult, never an
+  auto-filter or an auto-formatter — matching a title against a string is
+  not proof a finding lacks the chain that makes it valid, and none of it
+  rewrites a sentence for you.
+- **Chain of custody, tamper-evident.** Every review-state change (created,
+  re-observed by a tool, gated, pre-submission checked, promoted, reported)
+  appends a hash-linked entry — `get_finding_custody(finding_id)`
+  (`GET /api/findings/{id}/custody`) reads the trail and recomputes every
+  hash to check it's `intact`. This doesn't stop someone from rewriting the
+  stored file; it makes an undetected rewrite impossible, which is what a
+  custody trail is for.
+- **`verify_ledger()`** (`GET /api/findings/ledger`) is the store-wide
+  analogue of the 4-gate check: does every `confirmed`/`demoted` finding
+  actually have evidence or an artifact behind it, and is every finding's
+  custody chain intact. Read-only — it reports issues, it never fixes or
+  drops a finding.
+- **`triage_findings()`** (`GET /api/findings/triage`) buckets everything
+  recorded so far by disposition, most severe first within each bucket —
+  the batch view for working confirmed/high-severity findings before leads.
+- **Chains without promotion.** `link_finding_chain(finding_id,
+  related_finding_id, relationship)` (`POST /api/findings/{id}/chain`)
+  records a link between two findings — e.g. two already-`confirmed`
+  findings worth citing together — without promoting either one.
+  `get_finding_chain(finding_id)` reads the 1-hop view back. `promote_finding`
+  also populates this structurally (not just as prose) when given
+  `related_finding_ids`.
 - **The whole flow is one MCP prompt.** `bugbounty_hunt(target)` is an MCP
   *prompt* (the protocol's own primitive for a reusable skill/workflow
   template) — recon → probe/scan → explore → the 4-gate check → score &
@@ -518,6 +543,10 @@ curl -X POST http://127.0.0.1:8888/api/command \
 | `POST /api/findings/{id}/gates` | Record a reviewed 4-gate verdict, plus optional confidence/severity flags and canonical-report narrative |
 | `POST /api/findings/{id}/presubmission` | Record the pre-submission checklist (reality/impact/dedup/report-quality) |
 | `POST /api/findings/{id}/promote` | Reconsider a demoted/needs-review finding on a second signal, move to confirmed |
+| `GET /api/findings/{id}/custody` | Tamper-evident audit trail for one finding, with hash verification |
+| `GET /api/findings/ledger` | Store-wide integrity audit: evidence-backed claims, custody chain intact |
+| `GET /api/findings/triage` | All findings bucketed by disposition, most severe first |
+| `POST /api/findings/{id}/chain` · `GET /api/findings/{id}/chain` | Declare / read a link between two findings |
 | `POST /api/findings/{id}/report` | Submission-ready report for a platform: hackerone/bugcrowd/intigriti/immunefi/generic |
 | `POST /api/cvss/score` | CVSS 3.1 base score from a vector string |
 | `GET /api/mcp/profiles` | Profile definitions |

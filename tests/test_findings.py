@@ -285,6 +285,47 @@ def test_merge_never_touches_promotion_audit_trail():
     print("  [OK] promotion audit trail untouched by merge")
 
 
+def test_custody_chain_and_chain_links_round_trip():
+    print("[TEST] custody_chain/chain_links round-trip through to_dict/from_dict...")
+    finding = _finding()
+    assert finding.custody_chain == []
+    assert finding.chain_links == {}
+    finding.custody_chain = [{"seq": 0, "event": "created", "data": {}, "timestamp": "t", "prev_hash": "0" * 64, "link_hash": "abc"}]
+    finding.chain_links = {"other-id": "enables this"}
+    restored = Finding.from_dict(json.loads(json.dumps(finding.to_dict())))
+    assert restored.custody_chain == finding.custody_chain
+    assert restored.chain_links == finding.chain_links
+    print("  [OK]")
+
+
+def test_store_add_appends_custody_created_then_re_observed():
+    """FindingStore.add() (not Finding itself) is responsible for appending
+    the created/re_observed custody events -- it's the only layer that knows
+    whether this call was a first sighting or a repeat."""
+    print("[TEST] store.add() appends 'created' then 're_observed' on repeat...")
+    store = FindingStore()
+    first = store.add(_finding())
+    assert [link["event"] for link in first.custody_chain] == ["created"]
+
+    second = store.add(_finding())  # same identity -> merges
+    assert second is first
+    assert [link["event"] for link in first.custody_chain] == ["created", "re_observed"]
+    print("  [OK]")
+
+
+def test_merge_adopts_chain_links_only_when_self_has_none():
+    print("[TEST] merge adopts other's chain_links only when self has none...")
+    store = FindingStore()
+    empty = store.add(_finding())
+    empty.chain_links = {}
+
+    linked = _finding()
+    linked.chain_links = {"related-id": "chains into this"}
+    merged = store.add(linked)
+    assert merged.chain_links == {"related-id": "chains into this"}
+    print("  [OK]")
+
+
 def test_observation_is_not_a_vulnerability():
     """Observations and vulnerabilities are distinct claims."""
     print("[TEST] Observation vs vulnerability...")
@@ -725,6 +766,9 @@ if __name__ == "__main__":
     test_promotion_fields_round_trip()
     test_merge_preserves_narrative_and_presubmission_alongside_gate_state()
     test_merge_never_touches_promotion_audit_trail()
+    test_custody_chain_and_chain_links_round_trip()
+    test_store_add_appends_custody_created_then_re_observed()
+    test_merge_adopts_chain_links_only_when_self_has_none()
     test_observation_is_not_a_vulnerability()
     test_parser_failure_is_recorded_not_swallowed()
     test_fingerprint_is_stable_and_sha256()

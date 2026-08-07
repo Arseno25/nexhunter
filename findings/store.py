@@ -9,6 +9,7 @@ from pathlib import Path
 
 from loguru import logger
 
+from nexhunter.findings import custody
 from nexhunter.findings.models import Category, Finding, Severity
 from nexhunter.security.redaction import SecretRedactor
 
@@ -87,10 +88,12 @@ class FindingStore:
         existing = self._by_fingerprint.get(finding.fingerprint)
         if existing is not None:
             existing.merge(finding)
+            existing.custody_chain = custody.append(existing.custody_chain, "re_observed", {"tool": finding.tool})
             return existing
 
         if len(self._by_fingerprint) >= self.max_findings:
             self._evict_lowest_locked()
+        finding.custody_chain = custody.append(finding.custody_chain, "created", {"tool": finding.tool})
         self._by_fingerprint[finding.fingerprint] = finding
         return finding
 

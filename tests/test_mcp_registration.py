@@ -84,6 +84,29 @@ def test_gap_closing_tools_are_registered():
     print("  [OK]")
 
 
+def test_second_pass_gap_closing_tools_are_registered():
+    """custody/ledger/triage/chain tools -- the batch of gaps closed in the
+    second audit pass -- must be reachable the same way."""
+    print("[TEST] custody/ledger/triage/chain tools are registered...")
+    names = _tool_names()
+    for tool in ("get_finding_custody", "verify_ledger", "triage_findings", "link_finding_chain", "get_finding_chain"):
+        assert tool in names, f"{tool} not registered"
+    print("  [OK]")
+
+
+def test_finding_patterns_resource_has_report_quality_reference():
+    """The resource must also carry the report-quality formulas/checklist/
+    tone rules added in the second audit pass, not just the first pass's
+    attack-vector/false-positive content."""
+    print("[TEST] nexhunter://findings/patterns resource has report-quality reference...")
+    import json
+
+    payload = json.loads(M.resource_finding_patterns())
+    for key in ("title_formula", "title_formula_examples", "impact_statement_formula", "presubmit_checklist", "tone_rules"):
+        assert key in payload and payload[key], f"missing or empty: {key}"
+    print("  [OK]")
+
+
 def test_finding_patterns_resource_has_expanded_content():
     """The nexhunter://findings/patterns resource must expose all of the
     curated reference, not just the original two lists."""

@@ -709,6 +709,58 @@ def promote_finding(finding_id: str, reason: str, related_finding_ids: list[str]
 
 
 @mcp.tool()
+def get_finding_custody(finding_id: str) -> str:
+    """The tamper-evident audit trail for one finding: every review-state
+    change (created, re-observed, gated, presubmission, promoted, reported),
+    hash-linked. `intact: false` means a stored link's data doesn't match
+    its recorded hash -- something in the trail was altered after being
+    written."""
+    return _render(api(f"/api/findings/{finding_id}/custody"), indent=1)
+
+
+@mcp.tool()
+def verify_ledger() -> str:
+    """Store-wide integrity audit: every confirmed/demoted finding checked
+    for evidence actually backing the claim, every finding's custody chain
+    checked for tampering. Empty `issues` means the store checks out; this
+    tool only reports problems, it never fixes or drops a finding."""
+    return _render(api("/api/findings/ledger"), indent=1)
+
+
+@mcp.tool()
+def triage_findings() -> str:
+    """Every recorded finding bucketed by disposition (confirmed / lead /
+    needs_review / demoted / refuted / unreviewed), most severe first within
+    each bucket -- the batch view for deciding what to work on next, or what
+    to write up now versus what still needs another look."""
+    return _render(api("/api/findings/triage"), indent=1)
+
+
+@mcp.tool()
+def link_finding_chain(finding_id: str, related_finding_id: str, relationship: str) -> str:
+    """Declare a link between two findings without promoting either one --
+    e.g. two already-CONFIRMED findings worth citing together in a report
+    ("auth bypass in A enables the IDOR in B"). Records the link on both
+    sides. Never infers a chain on its own; state the relationship in your
+    own words."""
+    return _render(
+        api(
+            f"/api/findings/{finding_id}/chain",
+            {"related_finding_id": related_finding_id, "relationship": relationship},
+        ),
+        indent=1,
+    )
+
+
+@mcp.tool()
+def get_finding_chain(finding_id: str) -> str:
+    """The 1-hop chain view for one finding: itself plus a summary
+    (id/title/severity/disposition/relationship) of everything it's linked
+    to via promote_finding or link_finding_chain."""
+    return _render(api(f"/api/findings/{finding_id}/chain"), indent=1)
+
+
+@mcp.tool()
 def report(fmt: str = "markdown") -> str:
     """Generate assessment report: 'markdown' or 'json'."""
     return _render(api("/api/report", {"fmt": fmt}), indent=1)
@@ -903,9 +955,12 @@ def resource_finding_patterns() -> str:
     anti-patterns), what to reject on sight (ALWAYS_REJECTED), what's a
     known-safe pattern (SAFE_PATTERNS), what's a common false positive
     (COMMON_FALSE_POSITIVES), impact tiers with severity floors
-    (IMPACT_TIERS), and counter-arguments for a triager's pushback
-    (SEVERITY_ESCALATION). Read before reasoning through submit_finding_gates
-    -- knowledge, not an auto-filter; nothing here decides a finding for you."""
+    (IMPACT_TIERS), counter-arguments for a triager's pushback
+    (SEVERITY_ESCALATION), and report-quality formulas/checklists/tone rules
+    for writing the report itself. Read before reasoning through
+    submit_finding_gates and before calling bounty_report -- knowledge, not
+    an auto-filter or an auto-formatter; nothing here decides a finding or
+    rewrites a sentence for you."""
     return _render({
         "attack_vectors": patterns.ATTACK_VECTORS,
         "universal_patterns": list(patterns.UNIVERSAL_PATTERNS),
@@ -915,6 +970,11 @@ def resource_finding_patterns() -> str:
         "common_false_positives": list(patterns.COMMON_FALSE_POSITIVES),
         "impact_tiers": list(patterns.IMPACT_TIERS),
         "severity_escalation": patterns.SEVERITY_ESCALATION,
+        "title_formula": patterns.TITLE_FORMULA,
+        "title_formula_examples": patterns.TITLE_FORMULA_EXAMPLES,
+        "impact_statement_formula": patterns.IMPACT_STATEMENT_FORMULA,
+        "presubmit_checklist": list(patterns.PRESUBMIT_CHECKLIST),
+        "tone_rules": list(patterns.TONE_RULES),
     })
 
 
@@ -986,7 +1046,13 @@ If a DEMOTED or NEEDS_REVIEW finding later gets a second, independent signal (th
 
 ## PHASE 5 -- Score & Report
 
-For a CONFIRMED or DEMOTED finding that passed the pre-submission checklist: compute `score_cvss(vector)` for an honest severity number (never eyeball it), then `bounty_report(finding_id, platform)` for a submission-ready write-up -- platform is 'hackerone', 'bugcrowd', 'intigriti', 'immunefi', or 'generic'. Impact narrative comes straight from the impact-gate reasoning you already wrote; if a triager pushes back on severity, `nexhunter://findings/patterns`'s severity_escalation table has counter-arguments for the common objections. Nothing is invented at report time that wasn't already argued during validation.
+Working a longer list of findings? Call `triage_findings()` first -- everything recorded so far, bucketed by disposition and sorted most severe first, so you work the confirmed/high-severity ones before the leads.
+
+For a CONFIRMED or DEMOTED finding that passed the pre-submission checklist: compute `score_cvss(vector)` for an honest severity number (never eyeball it), then `bounty_report(finding_id, platform)` for a submission-ready write-up -- platform is 'hackerone', 'bugcrowd', 'intigriti', 'immunefi', or 'generic'. Impact narrative comes straight from the impact-gate reasoning you already wrote; if a triager pushes back on severity, `nexhunter://findings/patterns`'s severity_escalation table has counter-arguments for the common objections. Before you send it, that same resource has the title_formula, impact_statement_formula, presubmit_checklist, and tone_rules -- run the report text past them (no hedging, present tense, title follows `[Class] in [endpoint] allows [actor] to [impact]`). Nothing is invented at report time that wasn't already argued during validation.
+
+Two findings worth citing together, but you're not promoting either one? `link_finding_chain(finding_id, related_finding_id, relationship)` records the connection on both sides; `get_finding_chain(finding_id)` reads it back.
+
+Every mutation on a finding (gated, presubmission, promoted, reported) appends to a tamper-evident audit trail -- `get_finding_custody(finding_id)` reads it, and `verify_ledger()` checks the whole store at once: every confirmed/demoted finding actually has evidence behind it, and every custody chain still hashes out. Run it before a batch of reports goes out.
 """
 
 

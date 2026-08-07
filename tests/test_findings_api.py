@@ -454,6 +454,110 @@ def test_promote_finding_validates_related_ids(base_url):
     print("  [OK]")
 
 
+def test_custody_endpoint_records_creation_and_gating(base_url):
+    print("[TEST] GET /api/findings/<id>/custody records creation then gating...")
+    finding = server.FINDINGS.add(
+        Finding(tool="nuclei", target="custody.example", title="XSS", category=Category.VULNERABILITY.value)
+    )
+    _post(
+        f"{base_url}/api/findings/{finding.id}/gates",
+        {"refutation": "pass", "reachability": "pass", "trigger": "pass", "impact": "pass"},
+    )
+    status, body = _get(f"{base_url}/api/findings/{finding.id}/custody")
+    assert status == 200
+    assert body["intact"] is True
+    events = [link["event"] for link in body["chain"]]
+    assert events == ["created", "gated"]
+    print("  [OK]")
+
+
+def test_custody_endpoint_missing_finding_404s(base_url):
+    print("[TEST] GET /api/findings/<id>/custody 404s on an unknown finding...")
+    status, _ = _get(f"{base_url}/api/findings/does-not-exist/custody")
+    assert status == 404
+    print("  [OK]")
+
+
+def test_ledger_endpoint_flags_confirmed_with_no_evidence(base_url):
+    print("[TEST] GET /api/findings/ledger flags a confirmed finding with no evidence...")
+    finding = server.FINDINGS.add(
+        Finding(tool="nuclei", target="ledger.example", title="No evidence", category=Category.VULNERABILITY.value)
+    )
+    _post(
+        f"{base_url}/api/findings/{finding.id}/gates",
+        {"refutation": "pass", "reachability": "pass", "trigger": "pass", "impact": "pass"},
+    )
+    status, body = _get(f"{base_url}/api/findings/ledger")
+    assert status == 200
+    assert any(i["finding_id"] == finding.id and i["kind"] == "no_evidence" for i in body["issues"])
+    print("  [OK]")
+
+
+def test_triage_endpoint_buckets_by_disposition(base_url):
+    print("[TEST] GET /api/findings/triage buckets recorded findings...")
+    finding = server.FINDINGS.add(
+        Finding(tool="nuclei", target="triage.example", title="Triage me", category=Category.VULNERABILITY.value)
+    )
+    _post(
+        f"{base_url}/api/findings/{finding.id}/gates",
+        {"refutation": "pass", "reachability": "pass", "trigger": "pass", "impact": "pass"},
+    )
+    status, body = _get(f"{base_url}/api/findings/triage")
+    assert status == 200
+    assert any(f["id"] == finding.id for f in body["buckets"]["confirmed"])
+    assert body["counts"]["confirmed"] >= 1
+    print("  [OK]")
+
+
+def test_chain_endpoint_links_two_findings_bidirectionally(base_url):
+    print("[TEST] POST/GET /api/findings/<id>/chain links two findings both ways...")
+    a = server.FINDINGS.add(Finding(tool="nuclei", target="chain-a.example", title="Auth bypass", category=Category.VULNERABILITY.value))
+    b = server.FINDINGS.add(Finding(tool="nuclei", target="chain-b.example", title="IDOR", category=Category.VULNERABILITY.value))
+    status, body = _post(
+        f"{base_url}/api/findings/{a.id}/chain",
+        {"related_finding_id": b.id, "relationship": "enables the IDOR"},
+    )
+    assert status == 200
+    assert body["finding"]["chain_links"][b.id] == "enables the IDOR"
+
+    status, chain_a = _get(f"{base_url}/api/findings/{a.id}/chain")
+    assert status == 200
+    assert chain_a["linked"][0]["id"] == b.id
+    assert chain_a["linked"][0]["relationship"] == "enables the IDOR"
+
+    status, chain_b = _get(f"{base_url}/api/findings/{b.id}/chain")
+    assert chain_b["linked"][0]["id"] == a.id
+    assert chain_b["linked"][0]["relationship"] == "(reverse) enables the IDOR"
+    print("  [OK]")
+
+
+def test_chain_endpoint_rejects_unknown_related_finding(base_url):
+    print("[TEST] POST /api/findings/<id>/chain rejects an unknown related finding...")
+    a = server.FINDINGS.add(Finding(tool="nuclei", target="chain-c.example", title="Solo", category=Category.VULNERABILITY.value))
+    status, body = _post(
+        f"{base_url}/api/findings/{a.id}/chain",
+        {"related_finding_id": "does-not-exist", "relationship": "whatever"},
+    )
+    assert status == 400
+    assert body["code"] == "INVALID_PARAMS"
+    print("  [OK]")
+
+
+def test_promote_finding_populates_structured_chain_links(base_url):
+    print("[TEST] POST /api/findings/<id>/promote also populates chain_links, not just prose...")
+    a = server.FINDINGS.add(Finding(tool="nuclei", target="chain-d.example", title="Demoted one", category=Category.VULNERABILITY.value))
+    b = server.FINDINGS.add(Finding(tool="nuclei", target="chain-e.example", title="Confirmed elsewhere", category=Category.VULNERABILITY.value))
+    _post(f"{base_url}/api/findings/{a.id}/gates", {"refutation": "pass", "reachability": "pass", "trigger": "demote", "impact": "pass"})
+    _post(f"{base_url}/api/findings/{b.id}/gates", {"refutation": "pass", "reachability": "pass", "trigger": "pass", "impact": "pass"})
+    status, body = _post(
+        f"{base_url}/api/findings/{a.id}/promote",
+        {"reason": "same root cause as b", "related_finding_ids": [b.id]},
+    )
+    assert status == 200
+    assert b.id in body["finding"]["chain_links"]
+    print("  [OK]")
+
+
 def test_finding_gates_survives_re_sighting(base_url):
     """A gated finding seen again by the tool (same fingerprint) must keep
     its gate verdict -- merge() must never silently reset review state."""

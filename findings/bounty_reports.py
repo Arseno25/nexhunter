@@ -169,8 +169,12 @@ def _context(finding: Finding) -> _Context:
 
 def _section(title: str, body: str) -> str:
     """Omit a section entirely when there's nothing to put in it, rather
-    than rendering an empty heading a reviewer has to read past."""
-    return f"## {title}\n\n{body}\n\n" if body.strip() else ""
+    than rendering an empty heading a reviewer has to read past. The leading
+    `---` matches the Canonical Report Format's divider rule: one between
+    the metadata strip and the first section, and between every section
+    after it -- appearing only on sections that actually render means no
+    dangling divider before an omitted one."""
+    return f"---\n\n## {title}\n\n{body}\n\n" if body.strip() else ""
 
 
 def to_hackerone(finding: Finding) -> str:

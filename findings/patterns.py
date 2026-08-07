@@ -216,6 +216,49 @@ IMPACT_TIERS: tuple[dict[str, object], ...] = (
     {"tier": "T4", "meaning": "none -- do not report", "examples": "CSP report-only, banner/version without an exploit, self-XSS, logout CSRF", "severity_floor": "informational (0.0)"},
 )
 
+# Report-quality formulas and rules. Plain reference text -- code cannot
+# enforce a title's wording or a sentence's tone, only surface the rule so
+# whoever writes the report (an AI or a human) follows it deliberately.
+TITLE_FORMULA = "[Bug Class] in [Exact Endpoint/Feature] allows [attacker role] to [impact] [victim scope]"
+TITLE_FORMULA_EXAMPLES: dict[str, str] = {
+    "good": "IDOR in /api/v2/invoices/{id} allows authenticated user to read any customer's invoice data",
+    "bad": "IDOR vulnerability found",
+}
+
+IMPACT_STATEMENT_FORMULA = (
+    "An [attacker with X access level] can [exact action] by [method], resulting in [business harm]. "
+    "This requires [prerequisites] and leaves [detection/reversibility]."
+)
+
+# The 60-second pass right before submitting -- distinct from
+# PRESUBMISSION_NAMES (gates.py), which is the 4-item structural checklist
+# a reviewer explicitly attests to; this is the finer-grained format pass.
+PRESUBMIT_CHECKLIST: tuple[str, ...] = (
+    "Title follows the formula: [Class] in [endpoint] allows [actor] to [impact]",
+    "First sentence states the exact impact in plain English",
+    "Steps to Reproduce has an exact, copy-paste-ready HTTP request",
+    "A response showing the bug is included (screenshot or response body)",
+    "Two test accounts were used, not just one account testing itself",
+    "CVSS score is calculated and included",
+    "Recommended fix is one sentence, not a lecture",
+    "No typos in the endpoint path or parameter names",
+    "Report is under 600 words -- triagers skim long reports",
+    "Claimed severity matches the impact actually described",
+)
+
+# Writing-style rules for the report prose itself -- code cannot rewrite an
+# AI's sentence for it, only name the rule so it's followed on the way in,
+# not fixed on the way out.
+TONE_RULES: tuple[str, ...] = (
+    "No hedging: never write 'may', 'could potentially', 'it is possible that' -- if the evidence supports it, state it as fact.",
+    "Present tense throughout.",
+    "Start sentences with the impact, not the vulnerability name.",
+    "Write like explaining to a competent developer, not a textbook.",
+    "One concrete example beats three abstract sentences.",
+    "No em dashes, and no 'comprehensive' / 'leverage' / 'seamless' / 'ensure'.",
+    "No tables, no collapsible sections, no emoji in the report body.",
+)
+
 __all__ = [
     "ALWAYS_REJECTED",
     "SAFE_PATTERNS",
@@ -225,4 +268,9 @@ __all__ = [
     "COMMON_FALSE_POSITIVES",
     "SEVERITY_ESCALATION",
     "IMPACT_TIERS",
+    "TITLE_FORMULA",
+    "TITLE_FORMULA_EXAMPLES",
+    "IMPACT_STATEMENT_FORMULA",
+    "PRESUBMIT_CHECKLIST",
+    "TONE_RULES",
 ]

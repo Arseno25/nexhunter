@@ -14,9 +14,14 @@ from nexhunter.findings.patterns import (
     ATTACK_VECTORS,
     COMMON_FALSE_POSITIVES,
     FRAMEWORK_ANTIPATTERNS,
+    IMPACT_STATEMENT_FORMULA,
     IMPACT_TIERS,
+    PRESUBMIT_CHECKLIST,
     SAFE_PATTERNS,
     SEVERITY_ESCALATION,
+    TITLE_FORMULA,
+    TITLE_FORMULA_EXAMPLES,
+    TONE_RULES,
     UNIVERSAL_PATTERNS,
 )
 
@@ -94,6 +99,29 @@ def test_impact_tiers_are_ordered_and_well_formed():
     print("  [OK]")
 
 
+def test_title_formula_contains_placeholders_and_matches_good_example():
+    print("[TEST] TITLE_FORMULA has placeholders, TITLE_FORMULA_EXAMPLES has good/bad...")
+    assert "[Bug Class]" in TITLE_FORMULA and "[Exact Endpoint" in TITLE_FORMULA
+    assert set(TITLE_FORMULA_EXAMPLES) == {"good", "bad"}
+    assert TITLE_FORMULA_EXAMPLES["good"].strip() and TITLE_FORMULA_EXAMPLES["bad"].strip()
+    print("  [OK]")
+
+
+def test_impact_statement_formula_has_placeholders():
+    print("[TEST] IMPACT_STATEMENT_FORMULA has the expected placeholders...")
+    for placeholder in ("[exact action]", "[business harm]", "[prerequisites]"):
+        assert placeholder in IMPACT_STATEMENT_FORMULA
+    print("  [OK]")
+
+
+def test_presubmit_checklist_and_tone_rules_non_empty():
+    print("[TEST] PRESUBMIT_CHECKLIST and TONE_RULES are non-empty string tuples...")
+    for name, items in (("PRESUBMIT_CHECKLIST", PRESUBMIT_CHECKLIST), ("TONE_RULES", TONE_RULES)):
+        assert isinstance(items, tuple) and items
+        assert all(isinstance(i, str) and i.strip() for i in items), f"{name} has a bad entry"
+    print("  [OK]")
+
+
 if __name__ == "__main__":
     print("\n=== Patterns Tests ===\n")
     test_reference_lists_are_non_empty_strings()
@@ -103,4 +131,7 @@ if __name__ == "__main__":
     test_common_false_positives_have_pattern_and_reality()
     test_severity_escalation_is_non_empty_string_map()
     test_impact_tiers_are_ordered_and_well_formed()
+    test_title_formula_contains_placeholders_and_matches_good_example()
+    test_impact_statement_formula_has_placeholders()
+    test_presubmit_checklist_and_tone_rules_non_empty()
     print("\n=== All Patterns Tests Passed ===\n")

@@ -233,6 +233,22 @@ def test_immunefi_asset_type_and_tech_stack_from_evidence_only():
     print("  [OK]")
 
 
+def test_dividers_appear_between_rendered_sections_only():
+    print("[TEST] '---' divider precedes every rendered section, never an omitted one...")
+    finding = _finding()
+    finding.gate_status = "confirmed"
+    finding.gate_notes = {"impact": "impact text"}
+    report = br.render(finding, "hackerone")
+    assert "---\n\n## Summary" in report
+    assert "---\n\n## Impact" in report
+    # Steps To Reproduce and Supporting Material are empty for this finding
+    # (no evidence, no references/artifacts) -- must not leave a dangling
+    # divider where they were omitted.
+    assert "---\n\n## Steps To Reproduce" not in report
+    assert "\n\n\n---\n\n---\n\n" not in report  # no back-to-back dividers
+    print("  [OK]")
+
+
 def test_narrative_sections_appear_in_every_platform_template():
     print("[TEST] Root Cause/Attack Flow/Attack Chain wired into every platform, not just generic...")
     finding = _finding()
