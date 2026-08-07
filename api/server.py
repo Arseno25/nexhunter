@@ -512,6 +512,11 @@ def finding_gates_post(finding_id):
 
     finding.gate_status = gates.aggregate(verdicts).value
     finding.gate_notes = gates.notes_from(body)
+    # Confidence flags are opt-in: omit all of them and review_confidence
+    # stays None (never scored), same as before this existed.
+    flags = {name: bool(body.get(name)) for name in gates.CONFIDENCE_DEDUCTIONS}
+    if any(name in body for name in gates.CONFIDENCE_DEDUCTIONS):
+        finding.review_confidence = gates.confidence_score(flags)
     FINDINGS.persist()
     return jsonify({"ok": True, "finding": finding.to_dict()})
 

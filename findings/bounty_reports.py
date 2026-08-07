@@ -22,7 +22,7 @@ Two restraint rules carried over from the rest of findings/:
 import json
 from dataclasses import dataclass
 
-from nexhunter.findings import attack
+from nexhunter.findings import attack, gates
 from nexhunter.findings.models import Finding
 
 # Bugcrowd's own 5-point priority scale; this is a documented, deterministic
@@ -40,6 +40,7 @@ _BUGCROWD_PRIORITY = {
 class _Context:
     finding: Finding
     gate_note: str
+    depth_note: str
     cwe_line: str
     attack_line: str
     cvss_line: str
@@ -47,6 +48,7 @@ class _Context:
     references_block: str
     artifacts_block: str
     impact_text: str
+    remediation_text: str
 
 
 def _gate_note(finding: Finding) -> str:
@@ -55,9 +57,29 @@ def _gate_note(finding: Finding) -> str:
     labels = {
         "unreviewed": "**Not yet reviewed** -- no 4-gate verdict has been recorded for this finding.",
         "needs_review": "**Needs review** -- at least one gate came back unsure; verify before submitting.",
+        "demoted": "**Demoted** -- clears all four gates, but under a caveat (e.g. requires a "
+                   "privileged actor, or impact is bounded) that argues for a lower severity than claimed.",
         "refuted": "**Refuted** -- this finding failed the 4-gate check. Submitting it as-is is not recommended.",
     }
     return labels.get(finding.gate_status, "") + "\n\n"
+
+
+def _depth_note(depth: str) -> str:
+    """Below full confidence, the report itself says what was withheld and
+    why -- silently thinning a report reads as a weaker bug than it is,
+    which is its own kind of dishonesty."""
+    if depth == "lead":
+        return (
+            "**Lead only** -- review confidence is below 60. Proof of concept and "
+            "remediation are withheld until this is confirmed further; treat this as "
+            "something to track, not something to submit yet.\n\n"
+        )
+    if depth == "partial":
+        return (
+            "**Partial confidence** -- review confidence is 60-79. Remediation is "
+            "withheld until this is confirmed further.\n\n"
+        )
+    return ""
 
 
 def _cwe_line(finding: Finding) -> str:
@@ -109,16 +131,24 @@ def _impact_text(finding: Finding) -> str:
 
 
 def _context(finding: Finding) -> _Context:
+    depth = gates.report_depth(finding.review_confidence)
+    # 'lead': no PoC, no fix -- confidence too low to hand a defender either.
+    # 'partial': PoC stays (it's what earns confidence back), fix withheld.
+    evidence_block = "" if depth == "lead" else _evidence_block(finding)
+    artifacts_block = "" if depth == "lead" else _artifacts_block(finding)
+    remediation_text = "" if depth in ("lead", "partial") else (finding.remediation or "")
     return _Context(
         finding=finding,
         gate_note=_gate_note(finding),
+        depth_note=_depth_note(depth),
         cwe_line=_cwe_line(finding),
         attack_line=_attack_line(finding),
         cvss_line=_cvss_line(finding),
-        evidence_block=_evidence_block(finding),
+        evidence_block=evidence_block,
         references_block=_references_block(finding),
-        artifacts_block=_artifacts_block(finding),
+        artifacts_block=artifacts_block,
         impact_text=_impact_text(finding),
+        remediation_text=remediation_text,
     )
 
 
@@ -134,6 +164,7 @@ def to_hackerone(finding: Finding) -> str:
         f"# {finding.title}",
         "",
         ctx.gate_note,
+        ctx.depth_note,
         f"**Severity:** {finding.severity.value.title()}  ",
         f"**CVSS:** {ctx.cvss_line}  ",
         f"**Weakness:** {ctx.cwe_line or 'not classified'}",
@@ -153,6 +184,7 @@ def to_bugcrowd(finding: Finding) -> str:
         f"# {finding.title}",
         "",
         ctx.gate_note,
+        ctx.depth_note,
         f"**Bug URL:** {finding.location or finding.target}  ",
         f"**Bug Category (CWE):** {ctx.cwe_line or 'not classified'}  ",
         f"**Priority:** {priority} (mapped from {finding.severity.value} severity, CVSS {ctx.cvss_line})",
@@ -161,7 +193,7 @@ def to_bugcrowd(finding: Finding) -> str:
     lines.append(_section("Description", finding.description or finding.title))
     lines.append(_section("Steps to Reproduce", ctx.evidence_block))
     lines.append(_section("Impact", ctx.impact_text))
-    lines.append(_section("Suggested Remediation", finding.remediation or ""))
+    lines.append(_section("Suggested Remediation", ctx.remediation_text))
     lines.append(_section("References", ctx.references_block))
     return "\n".join(lines).strip() + "\n"
 
@@ -172,6 +204,7 @@ def to_intigriti(finding: Finding) -> str:
         f"# {finding.title}",
         "",
         ctx.gate_note,
+        ctx.depth_note,
         f"**Domain:** {finding.target}  ",
         f"**Vulnerability Type (CWE):** {ctx.cwe_line or 'not classified'}  ",
         f"**Severity (CVSS):** {ctx.cvss_line}  ",
@@ -191,6 +224,7 @@ def to_immunefi(finding: Finding) -> str:
         f"# {finding.title}",
         "",
         ctx.gate_note,
+        ctx.depth_note,
         f"**NexHunter severity:** {finding.severity.value.title()} (CVSS {ctx.cvss_line})  ",
         "**Immunefi Impact Category:** _not auto-assigned -- Immunefi rates by fund-loss/",
         "downtime category (Critical/High/Medium/Low), not CVSS; pick the matching category",
@@ -200,7 +234,7 @@ def to_immunefi(finding: Finding) -> str:
     lines.append(_section("Bug Description", finding.description or finding.title))
     lines.append(_section("Impact", ctx.impact_text))
     lines.append(_section("Proof of Concept", ctx.evidence_block or ctx.artifacts_block))
-    lines.append(_section("Recommendation", finding.remediation or ""))
+    lines.append(_section("Recommendation", ctx.remediation_text))
     return "\n".join(lines).strip() + "\n"
 
 
@@ -210,6 +244,7 @@ def to_generic(finding: Finding) -> str:
         f"# {finding.title}",
         "",
         ctx.gate_note,
+        ctx.depth_note,
         f"**Target:** {finding.target}  ",
         f"**Severity:** {finding.severity.value.title()} (CVSS {ctx.cvss_line})  ",
         f"**Confidence:** {finding.confidence.value}  ",
@@ -220,7 +255,7 @@ def to_generic(finding: Finding) -> str:
     lines.append(_section("Description", finding.description or finding.title))
     lines.append(_section("Impact", ctx.impact_text))
     lines.append(_section("Steps to Reproduce", ctx.evidence_block))
-    lines.append(_section("Remediation", finding.remediation or ""))
+    lines.append(_section("Remediation", ctx.remediation_text))
     lines.append(_section("References", ctx.references_block))
     lines.append(_section("Artifacts", ctx.artifacts_block))
     return "\n".join(lines).strip() + "\n"

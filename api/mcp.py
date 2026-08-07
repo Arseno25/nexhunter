@@ -39,6 +39,7 @@ from fastmcp import FastMCP
 from nexhunter.core import tools as T
 from nexhunter.api import mcp_profiles
 from nexhunter.api.logging_setup import InterceptHandler
+from nexhunter.findings import patterns
 
 log = logging.getLogger("nexhunter.mcp")
 
@@ -578,12 +579,14 @@ def submit_finding_gates(
     vulnerable state exist live?), trigger (can an unprivileged actor execute
     it?), and impact (material harm to an identifiable victim?).
 
-    Each of refutation/reachability/trigger/impact is 'pass' (gate survived),
-    'fail' (gate not survived -- refutes the finding outright), or 'unsure'
-    (evidence does not clearly settle it). This tool only validates and
-    aggregates your four verdicts into gate_status (confirmed / refuted /
-    needs_review) -- it does not judge the finding itself; that reasoning is
-    yours to do first."""
+    Each of refutation/reachability/trigger/impact is 'pass' (gate survived
+    cleanly), 'fail' (gate not survived -- refutes the finding outright),
+    'demote' (gate technically clears, but under a caveat -- e.g. only a
+    privileged actor can trigger it, or impact is bounded -- that argues for
+    lower severity, not rejection), or 'unsure' (evidence does not clearly
+    settle it). This tool only validates and aggregates your four verdicts
+    into gate_status (confirmed / demoted / refuted / needs_review) -- it
+    does not judge the finding itself; that reasoning is yours to do first."""
     return _render(
         api(
             f"/api/findings/{finding_id}/gates",
@@ -788,6 +791,16 @@ def resource_executions() -> str:
 def resource_findings() -> str:
     """Findings recorded so far."""
     return _render(api("/api/findings"))
+
+
+@mcp.resource("nexhunter://findings/patterns")
+def resource_finding_patterns() -> str:
+    """Curated reference for gate review: bug classes bug bounty programs
+    reject on sight without a chain to real impact (ALWAYS_REJECTED), and
+    patterns that look alarming but are widely treated as by-design or
+    already mitigated (SAFE_PATTERNS). Read before reasoning through
+    submit_finding_gates -- not an auto-filter, just a second opinion."""
+    return _render({"always_rejected": list(patterns.ALWAYS_REJECTED), "safe_patterns": list(patterns.SAFE_PATTERNS)})
 
 
 @mcp.resource("nexhunter://system/status")

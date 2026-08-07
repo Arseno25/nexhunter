@@ -168,6 +168,39 @@ def test_merge_preserves_gate_verdict_from_repeat_sighting():
     print("  [OK] Gate verdict survives a repeat sighting")
 
 
+def test_review_confidence_out_of_range_dropped():
+    """Same restraint as cvss_score: an invalid value is dropped, not clamped."""
+    print("[TEST] Out-of-range review_confidence dropped...")
+    assert _finding(review_confidence=150).review_confidence is None
+    assert _finding(review_confidence=-1).review_confidence is None
+    assert _finding(review_confidence="not a number").review_confidence is None
+    assert _finding(review_confidence=72).review_confidence == 72
+    print("  [OK] Invalid confidence dropped")
+
+
+def test_review_confidence_round_trips():
+    print("[TEST] review_confidence survives to_dict/from_dict...")
+    finding = _finding(review_confidence=65)
+    restored = Finding.from_dict(json.loads(json.dumps(finding.to_dict())))
+    assert restored.review_confidence == 65
+    print("  [OK] review_confidence round-trips")
+
+
+def test_merge_preserves_review_confidence_alongside_gate_state():
+    """review_confidence travels with gate_status/gate_notes on merge -- it
+    was set as part of the same review, so it can't be adopted separately."""
+    print("[TEST] Merge preserves review_confidence with the gate verdict...")
+    store = FindingStore()
+    gated = store.add(_finding())
+    gated.gate_status = "demoted"
+    gated.review_confidence = 55
+
+    stored = store.add(_finding())
+    assert stored.gate_status == "demoted"
+    assert stored.review_confidence == 55
+    print("  [OK] review_confidence survives a repeat sighting")
+
+
 def test_observation_is_not_a_vulnerability():
     """Observations and vulnerabilities are distinct claims."""
     print("[TEST] Observation vs vulnerability...")
@@ -599,6 +632,9 @@ if __name__ == "__main__":
     test_malformed_cvss_vector_dropped()
     test_gate_status_defaults_unreviewed_and_round_trips()
     test_merge_preserves_gate_verdict_from_repeat_sighting()
+    test_review_confidence_out_of_range_dropped()
+    test_review_confidence_round_trips()
+    test_merge_preserves_review_confidence_alongside_gate_state()
     test_observation_is_not_a_vulnerability()
     test_parser_failure_is_recorded_not_swallowed()
     test_fingerprint_is_stable_and_sha256()

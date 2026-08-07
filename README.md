@@ -187,6 +187,7 @@ narrows the registry to one job.
 | `nexhunter-core` | 17 | Status, findings, executions, passive stable checks only |
 | `nexhunter-recon` | 30 | Host discovery, DNS, subdomains, service identification |
 | `nexhunter-web` | 45 | Content discovery, injection testing, template scanning, TLS, browser crawl |
+| `nexhunter-bugbounty` | 97 | web + api + recon + osint + auth + crypto — one-stop for public bounty programs |
 | `nexhunter-api` | 9 | Schema and parameter discovery (arjun), JWT, GraphQL |
 | `nexhunter-code` | 18 | Static analysis, secret scanning, dependency review |
 | `nexhunter-cloud` | 10 | Read-only cloud posture |
@@ -291,10 +292,11 @@ curl -X POST http://127.0.0.1:8888/api/findings/<id>/gates \
   — an AI client (or a human) reviews the finding via `get_finding` and
   submits its own verdict per gate through `submit_finding_gates`. The code's
   job is only the deterministic part: validating the four verdicts and
-  aggregating them (`refuted` on any `fail`, `needs_review` on `unsure` with
-  no `fail`, `confirmed` when all four `pass`). A gate verdict, once
-  recorded, survives a repeat tool sighting — merging a rerun never resets a
-  review.
+  aggregating them (`refuted` on any `fail`; `demoted` on any `demote` with
+  no `fail` — clears, but under a caveat that argues for lower severity;
+  `needs_review` on `unsure` with neither; `confirmed` when all four `pass`
+  cleanly). A gate verdict, once recorded, survives a repeat tool sighting —
+  merging a rerun never resets a review.
 - **Submission-ready reports.** `bounty_report(finding_id, platform)` (or
   `POST /api/findings/{id}/report`) renders one finding for HackerOne,
   Bugcrowd, Intigriti, Immunefi, or a generic format. An unreviewed or
@@ -303,6 +305,20 @@ curl -X POST http://127.0.0.1:8888/api/findings/<id>/gates \
   never invented from evidence that doesn't describe one; Immunefi's
   fund-loss-based severity category is explicitly left for a human to pick
   rather than faked from a CVSS score that measures something else.
+- **Confidence-scored reports.** `submit_finding_gates` optionally takes
+  named deduction flags (partial attack path, bounded impact, requires a
+  specific state, requires user interaction, fix partially mitigates); each
+  present flag costs a fixed number of points off 100. A report at ≥ 80
+  renders in full, 60–79 keeps the PoC but withholds remediation, and below
+  60 renders as a lead only — no PoC, no remediation — rather than dressing
+  an unconfirmed finding up as submission-ready. Unscored (the default)
+  always renders in full: this is opt-in, not a penalty for skipping it.
+- **`nexhunter://findings/patterns`** is a curated reference of bug classes
+  bug bounty programs reject on sight (open redirect alone, self-XSS,
+  missing security headers alone, …) and patterns that look alarming but are
+  widely treated as by-design. It's read-only knowledge for an AI to consult
+  before gate review, never an auto-filter — matching a title against a
+  string is not proof a finding lacks the chain that makes it valid.
 
 ## Execution modes
 

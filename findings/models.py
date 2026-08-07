@@ -180,6 +180,10 @@ class Finding:
     # human reviewer submits verdicts via POST /api/findings/<id>/gates.
     gate_status: str = GateStatus.UNREVIEWED.value
     gate_notes: dict[str, str] = field(default_factory=dict)  # one entry per gate name
+    # 0-100, set alongside a gate verdict (findings/gates.py confidence_score);
+    # None means never scored, distinct from Confidence above, which is a
+    # parser's confidence in the raw observation, set before any review.
+    review_confidence: int | None = None
     attack_ids: list[str] = field(default_factory=list)  # MITRE ATT&CK
     artifacts: list[str] = field(default_factory=list)  # evidence files: screenshots, pcaps, …
     first_seen_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
@@ -230,6 +234,13 @@ class Finding:
             self.gate_status = GateStatus(self.gate_status).value
         except ValueError:
             self.gate_status = GateStatus.UNREVIEWED.value
+
+        if self.review_confidence is not None:
+            try:
+                confidence = int(self.review_confidence)
+            except (TypeError, ValueError):
+                confidence = None
+            self.review_confidence = confidence if confidence is not None and 0 <= confidence <= 100 else None
 
         # The knowledge base fills gaps a parser left open: ATT&CK techniques
         # derived from CWEs, and a concrete remediation when the tool provided
@@ -297,6 +308,7 @@ class Finding:
         if self.gate_status == GateStatus.UNREVIEWED.value and other.gate_status != GateStatus.UNREVIEWED.value:
             self.gate_status = other.gate_status
             self.gate_notes = dict(other.gate_notes)
+            self.review_confidence = other.review_confidence
         if not self.remediation:
             self.remediation = other.remediation
             self._remediation_generated = other._remediation_generated
@@ -329,6 +341,7 @@ class Finding:
             "location": self.location,
             "gate_status": self.gate_status,
             "gate_notes": self.gate_notes,
+            "review_confidence": self.review_confidence,
             "is_vulnerability": self.is_vulnerability,
             "first_seen_at": self.first_seen_at.isoformat(),
             "last_seen_at": self.last_seen_at.isoformat(),
@@ -363,6 +376,7 @@ class Finding:
             location=data.get("location"),
             gate_status=data.get("gate_status", GateStatus.UNREVIEWED.value),
             gate_notes=data.get("gate_notes") or {},
+            review_confidence=data.get("review_confidence"),
             first_seen_at=_dt("first_seen_at") or datetime.now(timezone.utc),
             last_seen_at=_dt("last_seen_at") or datetime.now(timezone.utc),
         )

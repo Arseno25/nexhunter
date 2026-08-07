@@ -45,6 +45,15 @@ def test_unreviewed_finding_gets_warning_banner():
     print("  [OK]")
 
 
+def test_demoted_finding_gets_caveat_banner():
+    print("[TEST] demoted finding surfaces the caveat, not silence...")
+    finding = _finding()
+    finding.gate_status = "demoted"
+    report = br.render(finding, "hackerone")
+    assert "Demoted" in report
+    print("  [OK]")
+
+
 def test_refuted_finding_gets_warning_banner():
     print("[TEST] refuted finding surfaces a warning too...")
     finding = _finding()
@@ -122,6 +131,51 @@ def test_unknown_platform_rejected():
     print("[TEST] unknown platform name raises ValueError...")
     with pytest.raises(ValueError, match="unknown platform"):
         br.render(_finding(), "notaplatform")
+    print("  [OK]")
+
+
+def test_lead_depth_withholds_poc_and_remediation():
+    print("[TEST] review_confidence < 60 withholds PoC and remediation...")
+    finding = _finding(evidence={"request": "GET /users/2"})
+    finding.review_confidence = 40
+    report = br.render(finding, "generic")
+    assert "Lead only" in report
+    assert "GET /users/2" not in report
+    assert "Verify the authenticated user owns" not in report
+    print("  [OK]")
+
+
+def test_partial_depth_keeps_poc_withholds_remediation():
+    print("[TEST] review_confidence 60-79 keeps PoC, withholds remediation...")
+    finding = _finding(evidence={"request": "GET /users/2"})
+    finding.review_confidence = 70
+    report = br.render(finding, "generic")
+    assert "Partial confidence" in report
+    assert "GET /users/2" in report
+    assert "Verify the authenticated user owns" not in report
+    print("  [OK]")
+
+
+def test_full_depth_at_or_above_eighty():
+    print("[TEST] review_confidence >= 80 renders everything, no depth banner...")
+    finding = _finding(evidence={"request": "GET /users/2"})
+    finding.review_confidence = 80
+    report = br.render(finding, "generic")
+    assert "Lead only" not in report
+    assert "Partial confidence" not in report
+    assert "GET /users/2" in report
+    assert "Verify the authenticated user owns" in report
+    print("  [OK]")
+
+
+def test_never_scored_defaults_to_full():
+    print("[TEST] a finding never scored for confidence renders in full...")
+    finding = _finding(evidence={"request": "GET /users/2"})
+    assert finding.review_confidence is None
+    report = br.render(finding, "generic")
+    assert "Lead only" not in report
+    assert "Partial confidence" not in report
+    assert "GET /users/2" in report
     print("  [OK]")
 
 

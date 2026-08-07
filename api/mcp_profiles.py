@@ -75,6 +75,18 @@ PROFILES: dict[str, Profile] = {
         categories=("web",),
         risk_levels=("passive", "active", "intrusive"),
     ),
+    "nexhunter-bugbounty": Profile(
+        name="nexhunter-bugbounty",
+        description="One-stop profile for public web/API bug bounty programs: content "
+                    "discovery, injection testing, subdomain/asset recon, OSINT, "
+                    "credential/auth attacks, and TLS checks. Pairs with the finding-"
+                    "validation tools (get_finding, submit_finding_gates, score_cvss, "
+                    "bounty_report), which are always available regardless of profile. "
+                    "Intrusive scanners included - the autonomy ceiling still clamps "
+                    "them in autonomous runs.",
+        categories=("web", "api", "recon", "osint", "auth", "crypto"),
+        risk_levels=("passive", "active", "intrusive"),
+    ),
     "nexhunter-api": Profile(
         name="nexhunter-api",
         description="API surface testing: schema discovery, parameter discovery, GraphQL.",

@@ -142,6 +142,57 @@ def test_finding_gates_needs_review_on_unsure(base_url):
     print("  [OK]")
 
 
+def test_finding_gates_scores_confidence_when_flags_given(base_url):
+    print("[TEST] POST /api/findings/<id>/gates computes review_confidence from flags...")
+    finding = server.FINDINGS.add(
+        Finding(tool="nuclei", target="confidence-test.example", title="Blind SSRF", category=Category.VULNERABILITY.value)
+    )
+    status, body = _post(
+        f"{base_url}/api/findings/{finding.id}/gates",
+        {
+            "refutation": "pass", "reachability": "pass", "trigger": "pass", "impact": "pass",
+            "partial_attack_path": True, "requires_user_interaction": True,
+        },
+    )
+    assert status == 200
+    assert body["finding"]["review_confidence"] == 100 - 20 - 10
+    print("  [OK]")
+
+
+def test_finding_gates_leaves_confidence_unscored_without_flags(base_url):
+    print("[TEST] POST /api/findings/<id>/gates leaves review_confidence None with no flags given...")
+    finding = server.FINDINGS.add(
+        Finding(tool="nuclei", target="confidence-test-2.example", title="XXE", category=Category.VULNERABILITY.value)
+    )
+    status, body = _post(
+        f"{base_url}/api/findings/{finding.id}/gates",
+        {"refutation": "pass", "reachability": "pass", "trigger": "pass", "impact": "pass"},
+    )
+    assert status == 200
+    assert body["finding"]["review_confidence"] is None
+    print("  [OK]")
+
+
+def test_finding_gates_demotes_on_demote_with_no_fail(base_url):
+    print("[TEST] POST /api/findings/<id>/gates demotes on DEMOTE with no FAIL...")
+    finding = server.FINDINGS.add(
+        Finding(tool="nuclei", target="gates-test-7.example", title="Role bypass", category=Category.VULNERABILITY.value)
+    )
+    status, body = _post(
+        f"{base_url}/api/findings/{finding.id}/gates",
+        {
+            "refutation": "pass",
+            "reachability": "pass",
+            "trigger": "demote",
+            "impact": "pass",
+            "trigger_notes": "only a trusted admin role can reach this path in normal operation",
+        },
+    )
+    assert status == 200
+    assert body["finding"]["gate_status"] == "demoted"
+    print("  [OK]")
+
+
 def test_finding_gates_rejects_observation_category(base_url):
     print("[TEST] POST /api/findings/<id>/gates refuses a non-vulnerability finding...")
     finding = server.FINDINGS.add(
