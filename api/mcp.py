@@ -572,6 +572,27 @@ def submit_finding_gates(
     reachability_notes: str = "",
     trigger_notes: str = "",
     impact_notes: str = "",
+    # Confidence deductions (all optional; omit all five to leave the
+    # finding unscored). Each true flag costs fixed points off 100 and
+    # scales what bounty_report renders: >=80 full, 60-79 PoC without a
+    # remediation claim, <60 lead-only (no PoC, no remediation).
+    partial_attack_path: bool = False,
+    bounded_impact: bool = False,
+    requires_specific_state: bool = False,
+    requires_user_interaction: bool = False,
+    fix_partially_mitigates: bool = False,
+    # Severity adjustments (distinct from confidence -- "how bad", not "how
+    # sure"). Each true flag costs one severity rank, floored at info.
+    timing_dependent: bool = False,
+    requires_large_capital: bool = False,
+    bounded_uncompounding_impact: bool = False,
+    fix_deployed_not_reviewed: bool = False,
+    # Canonical-report narrative (all optional). Rendered by bounty_report
+    # only if you provide them -- never invented from evidence that isn't a
+    # step sequence.
+    root_cause: str = "",
+    attack_flow: list[str] | None = None,
+    attack_chain_narrative: list[str] | None = None,
 ) -> str:
     """Record your own verdict on the 4-gate check for one finding, after you
     have reviewed it with get_finding: does the finding survive refutation
@@ -585,8 +606,12 @@ def submit_finding_gates(
     privileged actor can trigger it, or impact is bounded -- that argues for
     lower severity, not rejection), or 'unsure' (evidence does not clearly
     settle it). This tool only validates and aggregates your four verdicts
-    into gate_status (confirmed / demoted / refuted / needs_review) -- it
-    does not judge the finding itself; that reasoning is yours to do first."""
+    into gate_status (confirmed / demoted / refuted / needs_review) -- and,
+    if you also mark it below-60-confidence, into disposition 'lead' -- it
+    does not judge the finding itself; that reasoning is yours to do first.
+
+    All the flag parameters are opt-in: leave them all False/empty and
+    nothing about confidence, severity, or the narrative sections changes."""
     return _render(
         api(
             f"/api/findings/{finding_id}/gates",
@@ -599,7 +624,85 @@ def submit_finding_gates(
                 "reachability_notes": reachability_notes,
                 "trigger_notes": trigger_notes,
                 "impact_notes": impact_notes,
+                "partial_attack_path": partial_attack_path,
+                "bounded_impact": bounded_impact,
+                "requires_specific_state": requires_specific_state,
+                "requires_user_interaction": requires_user_interaction,
+                "fix_partially_mitigates": fix_partially_mitigates,
+                "timing_dependent": timing_dependent,
+                "requires_large_capital": requires_large_capital,
+                "bounded_uncompounding_impact": bounded_uncompounding_impact,
+                "fix_deployed_not_reviewed": fix_deployed_not_reviewed,
+                "root_cause": root_cause,
+                "attack_flow": attack_flow or [],
+                "attack_chain_narrative": attack_chain_narrative or [],
             },
+        ),
+        indent=1,
+    )
+
+
+@mcp.tool()
+def submit_presubmission_checklist(
+    finding_id: str,
+    reality_check: bool,
+    impact_validated: bool,
+    deduplication_checked: bool,
+    report_quality_checked: bool,
+    reality_check_notes: str = "",
+    impact_validated_notes: str = "",
+    deduplication_checked_notes: str = "",
+    report_quality_checked_notes: str = "",
+) -> str:
+    """Record the pre-submission checklist -- a different question from
+    submit_finding_gates: not "is this exploitable" but "is the writeup
+    itself ready to send".
+
+    reality_check: confirmed with a live HTTP response, a code trace with
+    exact line numbers, or a reproduction -- not "reading the code, it looks
+    like...". impact_validated: you can state "an attacker can X, resulting
+    in Y" with both blanks concrete, not "potentially"/"theoretically".
+    deduplication_checked: you searched disclosed reports / the issue
+    tracker for this program and found no exact match -- NexHunter has no
+    tool to verify this happened, only to record that you say you did it.
+    report_quality_checked: the title follows [bug class] in [endpoint]
+    allows [actor] to [impact], and the PoC is copy-pasteable.
+
+    All four must be true for `ready: true` in the response; this tool
+    validates the shape and computes readiness, it never marks an item true
+    for you."""
+    return _render(
+        api(
+            f"/api/findings/{finding_id}/presubmission",
+            {
+                "reality_check": reality_check,
+                "impact_validated": impact_validated,
+                "deduplication_checked": deduplication_checked,
+                "report_quality_checked": report_quality_checked,
+                "reality_check_notes": reality_check_notes,
+                "impact_validated_notes": impact_validated_notes,
+                "deduplication_checked_notes": deduplication_checked_notes,
+                "report_quality_checked_notes": report_quality_checked_notes,
+            },
+        ),
+        indent=1,
+    )
+
+
+@mcp.tool()
+def promote_finding(finding_id: str, reason: str, related_finding_ids: list[str] | None = None) -> str:
+    """Reconsider a DEMOTED or NEEDS_REVIEW finding on a second, independent
+    signal -- e.g. the same root cause confirmed in a different finding, or
+    a second review pass converging on the same conclusion -- and promote it
+    to CONFIRMED. Only findings currently DEMOTED or NEEDS_REVIEW are
+    promotable; a REFUTED finding already failed a gate outright, and there
+    is nothing to promote a CONFIRMED finding from. `reason` is required and
+    recorded verbatim -- this tool never decides promotion is warranted,
+    only records that you did and why."""
+    return _render(
+        api(
+            f"/api/findings/{finding_id}/promote",
+            {"reason": reason, "related_finding_ids": related_finding_ids or []},
         ),
         indent=1,
     )
@@ -795,12 +898,24 @@ def resource_findings() -> str:
 
 @mcp.resource("nexhunter://findings/patterns")
 def resource_finding_patterns() -> str:
-    """Curated reference for gate review: bug classes bug bounty programs
-    reject on sight without a chain to real impact (ALWAYS_REJECTED), and
-    patterns that look alarming but are widely treated as by-design or
-    already mitigated (SAFE_PATTERNS). Read before reasoning through
-    submit_finding_gates -- not an auto-filter, just a second opinion."""
-    return _render({"always_rejected": list(patterns.ALWAYS_REJECTED), "safe_patterns": list(patterns.SAFE_PATTERNS)})
+    """Curated bug-bounty hunting reference: what to look for (attack
+    vectors by category, the 6 universal patterns, framework-specific
+    anti-patterns), what to reject on sight (ALWAYS_REJECTED), what's a
+    known-safe pattern (SAFE_PATTERNS), what's a common false positive
+    (COMMON_FALSE_POSITIVES), impact tiers with severity floors
+    (IMPACT_TIERS), and counter-arguments for a triager's pushback
+    (SEVERITY_ESCALATION). Read before reasoning through submit_finding_gates
+    -- knowledge, not an auto-filter; nothing here decides a finding for you."""
+    return _render({
+        "attack_vectors": patterns.ATTACK_VECTORS,
+        "universal_patterns": list(patterns.UNIVERSAL_PATTERNS),
+        "framework_antipatterns": patterns.FRAMEWORK_ANTIPATTERNS,
+        "always_rejected": list(patterns.ALWAYS_REJECTED),
+        "safe_patterns": list(patterns.SAFE_PATTERNS),
+        "common_false_positives": list(patterns.COMMON_FALSE_POSITIVES),
+        "impact_tiers": list(patterns.IMPACT_TIERS),
+        "severity_escalation": patterns.SEVERITY_ESCALATION,
+    })
 
 
 def _phase_tools(categories: tuple[str, ...], limit: int = 8) -> str:
@@ -847,7 +962,7 @@ Content discovery, injection testing, credential/auth attacks, TLS checks. This 
 
 {_phase_tools(("web", "api", "auth", "crypto"), limit=10)}
 
-Before creating a finding, skim `nexhunter://findings/patterns` -- programs reject some bug classes on sight (open redirect alone, self-XSS with no escalation, missing security headers alone, ...) unless you have a concrete chain past them.
+Before creating a finding, read `nexhunter://findings/patterns` -- attack vectors by category, the 6 universal patterns that recur across every stack, framework-specific anti-patterns, common false positives, and impact tiers with severity floors. It also has the ALWAYS_REJECTED/SAFE_PATTERNS checklist: some bug classes get rejected on sight (open redirect alone, self-XSS with no escalation, missing security headers alone, ...) unless you have a concrete chain past them.
 
 ## PHASE 4 -- Validate (the 4-gate check)
 
@@ -860,11 +975,18 @@ Nothing gets reported on your say-so alone. For every candidate finding, call `g
 
 Each gate is `pass` (clears cleanly), `fail` (kills the finding outright), `demote` (clears, but under a caveat -- e.g. only a privileged actor can trigger it -- that argues for lower severity, not rejection), or `unsure` (evidence doesn't settle it -- flags for manual review). NexHunter aggregates your four verdicts into one status in code; it never invents a verdict for you.
 
-Optionally, mark which confidence deductions apply (partial_attack_path, bounded_impact, requires_specific_state, requires_user_interaction, fix_partially_mitigates) -- each costs fixed points off 100, and the final report is scaled to what that score actually earned: full write-up at 80+, PoC without a remediation claim at 60-79, lead-only (no PoC, no fix) below 60.
+In the same call, three families of optional flags refine the outcome, all opt-in:
+  - **Confidence** (partial_attack_path, bounded_impact, requires_specific_state, requires_user_interaction, fix_partially_mitigates) -- each costs points off 100, and scales the final report: full write-up at 80+, PoC without a remediation claim at 60-79, lead-only (no PoC, no fix) below 60. A CONFIRMED/DEMOTED finding scored below 60 gets disposition `lead`, not `confirmed` -- track it, don't submit it yet.
+  - **Severity adjustment** (timing_dependent, requires_large_capital, bounded_uncompounding_impact, fix_deployed_not_reviewed) -- a different axis: each costs one severity rank (critical -> high -> ... -> info), because the attack is real but constrained, not because you're unsure it's real.
+  - **Canonical narrative** (root_cause, attack_flow, attack_chain_narrative) -- optional prose/step-lists that flow straight into the report's Root Cause / Attack Flow / Realistic Attack Chain sections. Skip them and those sections simply don't render -- nothing is invented to fill them.
+
+Before submitting, run the pre-submission checklist with `submit_presubmission_checklist` -- a different question from the gates above: not "is this exploitable" but "is the writeup ready to send". reality_check (confirmed live, not just read in code), impact_validated (one concrete "attacker can X, resulting in Y" sentence), deduplication_checked (searched disclosed reports for this program -- NexHunter has no search tool, this just records that you did), report_quality_checked (title follows [class] in [endpoint] allows [actor] to [impact]; PoC is copy-pasteable). All four must be true before you write the report.
+
+If a DEMOTED or NEEDS_REVIEW finding later gets a second, independent signal (the same root cause confirmed in another finding, a second pass converging on the same read), call `promote_finding(finding_id, reason, related_finding_ids)` to move it to CONFIRMED -- state why; this tool records the promotion, it doesn't decide it's warranted.
 
 ## PHASE 5 -- Score & Report
 
-For a CONFIRMED or DEMOTED finding: compute `score_cvss(vector)` for an honest severity number (never eyeball it), then `bounty_report(finding_id, platform)` for a submission-ready write-up -- platform is 'hackerone', 'bugcrowd', 'intigriti', 'immunefi', or 'generic'. Impact narrative in the report comes straight from the impact-gate reasoning you already wrote; nothing is invented at report time that wasn't already argued during validation.
+For a CONFIRMED or DEMOTED finding that passed the pre-submission checklist: compute `score_cvss(vector)` for an honest severity number (never eyeball it), then `bounty_report(finding_id, platform)` for a submission-ready write-up -- platform is 'hackerone', 'bugcrowd', 'intigriti', 'immunefi', or 'generic'. Impact narrative comes straight from the impact-gate reasoning you already wrote; if a triager pushes back on severity, `nexhunter://findings/patterns`'s severity_escalation table has counter-arguments for the common objections. Nothing is invented at report time that wasn't already argued during validation.
 """
 
 

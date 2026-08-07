@@ -313,12 +313,43 @@ curl -X POST http://127.0.0.1:8888/api/findings/<id>/gates \
   60 renders as a lead only — no PoC, no remediation — rather than dressing
   an unconfirmed finding up as submission-ready. Unscored (the default)
   always renders in full: this is opt-in, not a penalty for skipping it.
-- **`nexhunter://findings/patterns`** is a curated reference of bug classes
-  bug bounty programs reject on sight (open redirect alone, self-XSS,
-  missing security headers alone, …) and patterns that look alarming but are
-  widely treated as by-design. It's read-only knowledge for an AI to consult
-  before gate review, never an auto-filter — matching a title against a
-  string is not proof a finding lacks the chain that makes it valid.
+- **Severity adjustment, a separate axis from confidence.** Confidence asks
+  "how sure are we"; this asks "how bad is it, given constraints on the
+  attack itself." `submit_finding_gates` also takes deduction flags for that
+  axis (timing-dependent, requires disproportionate capital, bounded/
+  non-compounding impact, a fix already deployed outside the reviewed
+  snapshot) — each costs one severity rank, computed in code from flags the
+  reviewer asserted, never guessed from evidence.
+- **`disposition`: the one field that tells you what to do with a finding.**
+  Folds the gate outcome and the confidence score together — a `confirmed`
+  finding scored below 60 is `lead`, not something to hand over as
+  report-ready, without a second field to check. `refuted` and
+  `needs_review` pass through unchanged regardless of confidence.
+- **The pre-submission checklist is a different question from the 4 gates.**
+  Those ask "is this exploitable"; `submit_presubmission_checklist`
+  (`POST /api/findings/{id}/presubmission`) asks "is the writeup ready to
+  send" — confirmed live (not just read in code), impact stated as one
+  concrete sentence, checked against disclosed/duplicate reports, title and
+  PoC quality met. Deduplication needs a live search NexHunter has no tool
+  for; this endpoint records that the reviewer says they checked, it cannot
+  verify the search happened.
+- **Promotion, for a second signal.** `promote_finding(finding_id, reason,
+  related_finding_ids)` (`POST /api/findings/{id}/promote`) reconsiders a
+  `demoted` or `needs_review` finding when something independent supports it
+  — the same root cause confirmed elsewhere, a second review pass
+  converging on the same read — and moves it to `confirmed`. Restricted to
+  those two starting states; a `refuted` finding already failed a gate
+  outright. The tool never decides promotion is warranted, only records that
+  the caller did and why.
+- **`nexhunter://findings/patterns`** is the curated hunting reference:
+  attack vectors by category, the 6 patterns that recur across every stack,
+  framework-specific anti-patterns (Django REST Framework, Express, Laravel,
+  GraphQL, GitHub Actions), common false-positive patterns, impact tiers
+  with severity floors, counter-arguments for a triager's pushback, plus
+  what gets rejected on sight and what's a known-safe pattern. Read-only
+  knowledge for an AI to consult before gate review, never an auto-filter —
+  matching a title against a string is not proof a finding lacks the chain
+  that makes it valid.
 - **The whole flow is one MCP prompt.** `bugbounty_hunt(target)` is an MCP
   *prompt* (the protocol's own primitive for a reusable skill/workflow
   template) — recon → probe/scan → explore → the 4-gate check → score &
@@ -484,7 +515,9 @@ curl -X POST http://127.0.0.1:8888/api/command \
 | `POST /api/autonomous` · `GET /api/autonomous[/{id}]` | Start / poll an adaptive run |
 | `GET /api/findings` | Findings |
 | `GET /api/findings/{id}` | One finding, full evidence |
-| `POST /api/findings/{id}/gates` | Record a reviewed 4-gate verdict (refutation/reachability/trigger/impact) |
+| `POST /api/findings/{id}/gates` | Record a reviewed 4-gate verdict, plus optional confidence/severity flags and canonical-report narrative |
+| `POST /api/findings/{id}/presubmission` | Record the pre-submission checklist (reality/impact/dedup/report-quality) |
+| `POST /api/findings/{id}/promote` | Reconsider a demoted/needs-review finding on a second signal, move to confirmed |
 | `POST /api/findings/{id}/report` | Submission-ready report for a platform: hackerone/bugcrowd/intigriti/immunefi/generic |
 | `POST /api/cvss/score` | CVSS 3.1 base score from a vector string |
 | `GET /api/mcp/profiles` | Profile definitions |

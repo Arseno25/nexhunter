@@ -184,3 +184,64 @@ def test_case_insensitive_platform_name():
     finding = _finding()
     assert br.render(finding, "HackerOne") == br.render(finding, "hackerone")
     print("  [OK]")
+
+
+def test_root_cause_and_attack_flow_render_only_when_supplied():
+    print("[TEST] Root Cause / Attack Flow sections omitted when empty, present when set...")
+    bare = _finding()
+    report_bare = br.render(bare, "generic")
+    assert "## Root Cause" not in report_bare
+    assert "## Attack Flow" not in report_bare
+
+    filled = _finding()
+    filled.root_cause = "get_object_or_404 used with no ownership check"
+    filled.attack_flow = ["authenticate as low-priv user", "request another user's resource by id"]
+    report_filled = br.render(filled, "generic")
+    assert "## Root Cause" in report_filled
+    assert "get_object_or_404 used with no ownership check" in report_filled
+    assert "## Attack Flow" in report_filled
+    assert "1. authenticate as low-priv user" in report_filled
+    assert "2. request another user's resource by id" in report_filled
+    print("  [OK]")
+
+
+def test_realistic_attack_chain_renders_only_when_supplied():
+    print("[TEST] Realistic Attack Chain section omitted when empty, present when set...")
+    bare = _finding()
+    assert "## Realistic Attack Chain" not in br.render(bare, "generic")
+
+    filled = _finding()
+    filled.attack_chain_narrative = ["enumerate booking IDs", "exfiltrate PII for every booking in range"]
+    report = br.render(filled, "generic")
+    assert "## Realistic Attack Chain" in report
+    assert "1. enumerate booking IDs" in report
+    assert "2. exfiltrate PII for every booking in range" in report
+    print("  [OK]")
+
+
+def test_immunefi_asset_type_and_tech_stack_from_evidence_only():
+    print("[TEST] Immunefi Asset Type/Tech Stack render only when evidence provides them...")
+    bare = _finding()
+    report_bare = br.render(bare, "immunefi")
+    assert "**Asset Type:**" not in report_bare
+    assert "**Blockchain/Tech Stack:**" not in report_bare
+
+    filled = _finding(evidence={"asset_type": "Smart Contract", "tech_stack": "Solidity / EVM"})
+    report_filled = br.render(filled, "immunefi")
+    assert "**Asset Type:** Smart Contract" in report_filled
+    assert "**Blockchain/Tech Stack:** Solidity / EVM" in report_filled
+    print("  [OK]")
+
+
+def test_narrative_sections_appear_in_every_platform_template():
+    print("[TEST] Root Cause/Attack Flow/Attack Chain wired into every platform, not just generic...")
+    finding = _finding()
+    finding.root_cause = "root cause text"
+    finding.attack_flow = ["flow step"]
+    finding.attack_chain_narrative = ["chain step"]
+    for platform in sorted(set(br.PLATFORMS)):
+        report = br.render(finding, platform)
+        assert "root cause text" in report, f"{platform} dropped Root Cause"
+        assert "flow step" in report, f"{platform} dropped Attack Flow"
+        assert "chain step" in report, f"{platform} dropped Realistic Attack Chain"
+    print("  [OK]")

@@ -151,15 +151,127 @@ def report_depth(confidence: int | None) -> str:
     return "lead"
 
 
+class Disposition(str, Enum):
+    """The finding's final word, folding the gate outcome and the review
+    confidence into one value -- what a reviewer actually needs to know:
+    "what do I do with this." Distinct from GateStatus, which only answers
+    "did the four gates clear" -- a CONFIRMED finding with a confidence
+    score too low to stand behind is not report-ready yet, and burying that
+    inside a "confirmed" label is exactly the kind of overclaim this project
+    refuses to make.
+    """
+
+    UNREVIEWED = "unreviewed"
+    CONFIRMED = "confirmed"
+    DEMOTED = "demoted"
+    REFUTED = "refuted"
+    NEEDS_REVIEW = "needs_review"
+    LEAD = "lead"  # survived the gates, but confidence is too low to submit
+
+
+def disposition(gate_status: GateStatus, review_confidence: int | None) -> Disposition:
+    """Combine a gate status with a confidence score into one disposition.
+
+    Only CONFIRMED/DEMOTED can become LEAD -- a finding that failed a gate is
+    REFUTED regardless of confidence, and NEEDS_REVIEW already means "not
+    settled" without a confidence score saying so a second way.
+    """
+    if gate_status in (GateStatus.CONFIRMED, GateStatus.DEMOTED) and review_confidence is not None and review_confidence < 60:
+        return Disposition.LEAD
+    return Disposition(gate_status.value)
+
+
+# Severity Adjustment: a distinct axis from confidence. Confidence asks "how
+# much of this is demonstrated, versus argued"; this asks "how bad is it,
+# given constraints on the attack itself." Each flag the reviewer marks true
+# costs one severity rank (critical -> high -> medium -> low -> info), floor
+# at info -- never negative, never invented from evidence that doesn't state
+# the constraint.
+SEVERITY_ADJUSTMENTS: dict[str, str] = {
+    "timing_dependent": "requires a specific timing window (e.g. within one block or request cycle)",
+    "requires_large_capital": "requires capital disproportionate to a realistic attacker for this target",
+    "bounded_uncompounding_impact": "impact is real but capped -- cannot compound, scale, or repeat",
+    "fix_deployed_not_reviewed": "a fix is already deployed on the live target, just not in the reviewed snapshot",
+}
+
+
+def adjust_severity_rank(rank: int, flags: dict[str, bool]) -> int:
+    """Lower a Severity.rank by one step per true flag, floored at 0 (info).
+
+    Returns a plain int rank rather than a Severity so this module never
+    needs to import Severity from models.py (which already imports this
+    module) -- callers convert with models.severity_from_rank.
+    """
+    steps = sum(1 for key in SEVERITY_ADJUSTMENTS if flags.get(key))
+    return max(0, rank - steps)
+
+
+# Pre-submission checklist: a different question from the 4 exploitability
+# gates above. Those ask "is this real and exploitable"; this asks "is the
+# writeup itself ready to send" -- confirmed with live evidence (not just
+# code reading), the impact stated as one concrete sentence, checked against
+# disclosed/duplicate reports, and the report quality (title formula, a
+# copy-pasteable PoC) actually met. Deduplication in particular needs a live
+# search NexHunter has no tool for -- this module can't verify it, only
+# record that the reviewer says they did it.
+PRESUBMISSION_NAMES: tuple[str, ...] = (
+    "reality_check",           # confirmed live (HTTP response, code trace with line numbers, or reproduction), not speculation
+    "impact_validated",        # "an attacker can X, resulting in Y" -- both blanks concrete, not "potentially"/"theoretically"
+    "deduplication_checked",   # searched disclosed reports / issue tracker for this program, found no exact match
+    "report_quality_checked",  # title follows [class] in [endpoint] allows [actor] to [impact]; PoC is copy-pasteable
+)
+
+
+def parse_presubmission(payload: dict) -> dict[str, bool]:
+    """Parse and validate the four pre-submission checklist fields.
+
+    Same contract as parse_verdicts: raises naming what's missing, never
+    defaults a missing item to True.
+    """
+    missing = [name for name in PRESUBMISSION_NAMES if name not in payload]
+    if missing:
+        raise ValueError(f"missing pre-submission checklist item(s): {', '.join(missing)}")
+    return {name: bool(payload[name]) for name in PRESUBMISSION_NAMES}
+
+
+def presubmission_ready(checklist: dict[str, bool]) -> bool:
+    """True only when every checklist item is true -- one missed item and
+    the finding is not ready to submit, matching the reference's own rule
+    ("fail any gate -> KILL/DEMOTE, don't submit")."""
+    return all(checklist.get(name) for name in PRESUBMISSION_NAMES)
+
+
+# Promotion: reconsidering a DEMOTED or NEEDS_REVIEW finding when a second,
+# independent signal supports it (e.g. the same root cause confirmed
+# elsewhere, or a second reviewer pass converges on the same conclusion).
+# Restricted to those two starting statuses -- promoting a REFUTED finding
+# contradicts a gate that already failed outright, and CONFIRMED/UNREVIEWED
+# have nothing to promote from.
+PROMOTABLE_FROM: frozenset[GateStatus] = frozenset({GateStatus.DEMOTED, GateStatus.NEEDS_REVIEW})
+
+
+def promotable(gate_status: GateStatus) -> bool:
+    return gate_status in PROMOTABLE_FROM
+
+
 __all__ = [
     "GateVerdict",
     "GateStatus",
     "GATE_NAMES",
     "CONFIDENCE_DEDUCTIONS",
+    "Disposition",
+    "SEVERITY_ADJUSTMENTS",
+    "PRESUBMISSION_NAMES",
+    "PROMOTABLE_FROM",
     "aggregate",
     "parse_verdicts",
     "notes_from",
     "gateable",
     "confidence_score",
     "report_depth",
+    "disposition",
+    "adjust_severity_rank",
+    "parse_presubmission",
+    "presubmission_ready",
+    "promotable",
 ]

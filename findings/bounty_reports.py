@@ -49,6 +49,9 @@ class _Context:
     artifacts_block: str
     impact_text: str
     remediation_text: str
+    root_cause_text: str
+    attack_flow_block: str
+    attack_chain_block: str
 
 
 def _gate_note(finding: Finding) -> str:
@@ -130,6 +133,15 @@ def _impact_text(finding: Finding) -> str:
     return finding.gate_notes.get("impact", "")
 
 
+def _numbered_block(steps: list[str]) -> str:
+    """Canonical Format's Attack Flow / Realistic Attack Chain: one-line
+    numbered steps, actor + action. Empty when the reviewer supplied
+    nothing -- never invented from evidence that isn't a step sequence."""
+    if not steps:
+        return ""
+    return "\n".join(f"{i}. {step}" for i, step in enumerate(steps, start=1))
+
+
 def _context(finding: Finding) -> _Context:
     depth = gates.report_depth(finding.review_confidence)
     # 'lead': no PoC, no fix -- confidence too low to hand a defender either.
@@ -149,6 +161,9 @@ def _context(finding: Finding) -> _Context:
         artifacts_block=artifacts_block,
         impact_text=_impact_text(finding),
         remediation_text=remediation_text,
+        root_cause_text=finding.root_cause,
+        attack_flow_block=_numbered_block(finding.attack_flow),
+        attack_chain_block=_numbered_block(finding.attack_chain_narrative),
     )
 
 
@@ -171,9 +186,12 @@ def to_hackerone(finding: Finding) -> str:
         "",
     ]
     lines.append(_section("Summary", finding.description or finding.title))
+    lines.append(_section("Root Cause", ctx.root_cause_text))
+    lines.append(_section("Attack Flow", ctx.attack_flow_block))
     lines.append(_section("Steps To Reproduce", ctx.evidence_block))
     lines.append(_section("Supporting Material/References", ctx.references_block or ctx.artifacts_block))
     lines.append(_section("Impact", ctx.impact_text))
+    lines.append(_section("Realistic Attack Chain", ctx.attack_chain_block))
     return "\n".join(lines).strip() + "\n"
 
 
@@ -191,8 +209,11 @@ def to_bugcrowd(finding: Finding) -> str:
         "",
     ]
     lines.append(_section("Description", finding.description or finding.title))
+    lines.append(_section("Root Cause", ctx.root_cause_text))
+    lines.append(_section("Attack Flow", ctx.attack_flow_block))
     lines.append(_section("Steps to Reproduce", ctx.evidence_block))
     lines.append(_section("Impact", ctx.impact_text))
+    lines.append(_section("Realistic Attack Chain", ctx.attack_chain_block))
     lines.append(_section("Suggested Remediation", ctx.remediation_text))
     lines.append(_section("References", ctx.references_block))
     return "\n".join(lines).strip() + "\n"
@@ -212,28 +233,45 @@ def to_intigriti(finding: Finding) -> str:
         "",
     ]
     lines.append(_section("Description", finding.description or finding.title))
+    lines.append(_section("Root Cause", ctx.root_cause_text))
+    lines.append(_section("Attack Flow", ctx.attack_flow_block))
     lines.append(_section("Impact", ctx.impact_text))
     lines.append(_section("Steps to Reproduce", ctx.evidence_block))
     lines.append(_section("Proof of Concept", ctx.artifacts_block))
+    lines.append(_section("Realistic Attack Chain", ctx.attack_chain_block))
     return "\n".join(lines).strip() + "\n"
 
 
 def to_immunefi(finding: Finding) -> str:
     ctx = _context(finding)
+    # Asset Type / Blockchain-Tech Stack: Immunefi's own required metadata.
+    # Only rendered when the finding's evidence actually names them -- never
+    # guessed, since NexHunter has no smart-contract tooling to derive them.
+    asset_type = str(finding.evidence.get("asset_type", "") or "")
+    tech_stack = str(finding.evidence.get("tech_stack", "") or "")
     lines = [
         f"# {finding.title}",
         "",
         ctx.gate_note,
         ctx.depth_note,
         f"**NexHunter severity:** {finding.severity.value.title()} (CVSS {ctx.cvss_line})  ",
+    ]
+    if asset_type:
+        lines.append(f"**Asset Type:** {asset_type}  ")
+    if tech_stack:
+        lines.append(f"**Blockchain/Tech Stack:** {tech_stack}  ")
+    lines += [
         "**Immunefi Impact Category:** _not auto-assigned -- Immunefi rates by fund-loss/",
         "downtime category (Critical/High/Medium/Low), not CVSS; pick the matching category",
         "from the target program's severity matrix before submitting._",
         "",
     ]
     lines.append(_section("Bug Description", finding.description or finding.title))
+    lines.append(_section("Root Cause", ctx.root_cause_text))
+    lines.append(_section("Attack Flow", ctx.attack_flow_block))
     lines.append(_section("Impact", ctx.impact_text))
     lines.append(_section("Proof of Concept", ctx.evidence_block or ctx.artifacts_block))
+    lines.append(_section("Realistic Attack Chain", ctx.attack_chain_block))
     lines.append(_section("Recommendation", ctx.remediation_text))
     return "\n".join(lines).strip() + "\n"
 
@@ -253,7 +291,10 @@ def to_generic(finding: Finding) -> str:
         "",
     ]
     lines.append(_section("Description", finding.description or finding.title))
+    lines.append(_section("Root Cause", ctx.root_cause_text))
+    lines.append(_section("Attack Flow", ctx.attack_flow_block))
     lines.append(_section("Impact", ctx.impact_text))
+    lines.append(_section("Realistic Attack Chain", ctx.attack_chain_block))
     lines.append(_section("Steps to Reproduce", ctx.evidence_block))
     lines.append(_section("Remediation", ctx.remediation_text))
     lines.append(_section("References", ctx.references_block))

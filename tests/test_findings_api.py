@@ -269,6 +269,191 @@ def test_finding_report_endpoint_missing_finding_404s(base_url):
     print("  [OK]")
 
 
+def test_finding_gates_applies_severity_adjustment(base_url):
+    print("[TEST] POST /api/findings/<id>/gates lowers severity via adjustment flags...")
+    finding = server.FINDINGS.add(
+        Finding(
+            tool="nuclei", target="severity-adj.example", title="Timing-dependent race",
+            category=Category.VULNERABILITY.value, severity="critical",
+        )
+    )
+    status, body = _post(
+        f"{base_url}/api/findings/{finding.id}/gates",
+        {
+            "refutation": "pass", "reachability": "pass", "trigger": "pass", "impact": "pass",
+            "timing_dependent": True, "requires_large_capital": True,
+        },
+    )
+    assert status == 200
+    assert body["finding"]["severity"] == "medium"  # critical(4) - 2 flags = rank 2 = medium
+    print("  [OK]")
+
+
+def test_finding_gates_no_severity_flags_leaves_severity_unchanged(base_url):
+    print("[TEST] POST /api/findings/<id>/gates leaves severity alone with no flags...")
+    finding = server.FINDINGS.add(
+        Finding(
+            tool="nuclei", target="severity-adj-2.example", title="No adjustment",
+            category=Category.VULNERABILITY.value, severity="high",
+        )
+    )
+    status, body = _post(
+        f"{base_url}/api/findings/{finding.id}/gates",
+        {"refutation": "pass", "reachability": "pass", "trigger": "pass", "impact": "pass"},
+    )
+    assert status == 200
+    assert body["finding"]["severity"] == "high"
+    print("  [OK]")
+
+
+def test_finding_gates_captures_canonical_narrative(base_url):
+    print("[TEST] POST /api/findings/<id>/gates captures root_cause/attack_flow/attack_chain_narrative...")
+    finding = server.FINDINGS.add(
+        Finding(tool="nuclei", target="narrative.example", title="IDOR", category=Category.VULNERABILITY.value)
+    )
+    status, body = _post(
+        f"{base_url}/api/findings/{finding.id}/gates",
+        {
+            "refutation": "pass", "reachability": "pass", "trigger": "pass", "impact": "pass",
+            "root_cause": "missing ownership check",
+            "attack_flow": ["step one", "step two"],
+            "attack_chain_narrative": ["chain step"],
+        },
+    )
+    assert status == 200
+    assert body["finding"]["root_cause"] == "missing ownership check"
+    assert body["finding"]["attack_flow"] == ["step one", "step two"]
+    assert body["finding"]["attack_chain_narrative"] == ["chain step"]
+    print("  [OK]")
+
+
+def test_presubmission_endpoint_reports_ready(base_url):
+    print("[TEST] POST /api/findings/<id>/presubmission reports ready when all true...")
+    finding = server.FINDINGS.add(
+        Finding(tool="nuclei", target="presub.example", title="XSS", category=Category.VULNERABILITY.value)
+    )
+    status, body = _post(
+        f"{base_url}/api/findings/{finding.id}/presubmission",
+        {
+            "reality_check": True, "impact_validated": True,
+            "deduplication_checked": True, "report_quality_checked": True,
+        },
+    )
+    assert status == 200
+    assert body["ready"] is True
+    assert body["finding"]["presubmission_checklist"]["reality_check"] is True
+    print("  [OK]")
+
+
+def test_presubmission_endpoint_reports_not_ready(base_url):
+    print("[TEST] POST /api/findings/<id>/presubmission reports not ready when one item is false...")
+    finding = server.FINDINGS.add(
+        Finding(tool="nuclei", target="presub-2.example", title="SQLi", category=Category.VULNERABILITY.value)
+    )
+    status, body = _post(
+        f"{base_url}/api/findings/{finding.id}/presubmission",
+        {
+            "reality_check": True, "impact_validated": True,
+            "deduplication_checked": False, "report_quality_checked": True,
+        },
+    )
+    assert status == 200
+    assert body["ready"] is False
+    print("  [OK]")
+
+
+def test_presubmission_endpoint_rejects_missing_item(base_url):
+    print("[TEST] POST /api/findings/<id>/presubmission rejects an incomplete checklist...")
+    finding = server.FINDINGS.add(
+        Finding(tool="nuclei", target="presub-3.example", title="LFI", category=Category.VULNERABILITY.value)
+    )
+    status, body = _post(
+        f"{base_url}/api/findings/{finding.id}/presubmission",
+        {"reality_check": True, "impact_validated": True},
+    )
+    assert status == 400
+    assert body["code"] == "INVALID_PARAMS"
+    print("  [OK]")
+
+
+def test_presubmission_endpoint_missing_finding_404s(base_url):
+    print("[TEST] POST /api/findings/<id>/presubmission 404s on an unknown finding...")
+    status, body = _post(
+        f"{base_url}/api/findings/does-not-exist/presubmission",
+        {"reality_check": True, "impact_validated": True, "deduplication_checked": True, "report_quality_checked": True},
+    )
+    assert status == 404
+    print("  [OK]")
+
+
+def test_promote_finding_demoted_to_confirmed(base_url):
+    print("[TEST] POST /api/findings/<id>/promote moves DEMOTED to CONFIRMED...")
+    finding = server.FINDINGS.add(
+        Finding(tool="nuclei", target="promote.example", title="Role bypass", category=Category.VULNERABILITY.value)
+    )
+    _post(
+        f"{base_url}/api/findings/{finding.id}/gates",
+        {"refutation": "pass", "reachability": "pass", "trigger": "demote", "impact": "pass"},
+    )
+    status, body = _post(
+        f"{base_url}/api/findings/{finding.id}/promote",
+        {"reason": "same root cause confirmed in a second, independent finding"},
+    )
+    assert status == 200
+    assert body["finding"]["gate_status"] == "confirmed"
+    assert body["finding"]["promoted_from"] == "demoted"
+    assert "same root cause confirmed" in body["finding"]["promotion_notes"]
+    print("  [OK]")
+
+
+def test_promote_finding_rejects_confirmed(base_url):
+    print("[TEST] POST /api/findings/<id>/promote refuses a finding that isn't DEMOTED/NEEDS_REVIEW...")
+    finding = server.FINDINGS.add(
+        Finding(tool="nuclei", target="promote-2.example", title="Already confirmed", category=Category.VULNERABILITY.value)
+    )
+    _post(
+        f"{base_url}/api/findings/{finding.id}/gates",
+        {"refutation": "pass", "reachability": "pass", "trigger": "pass", "impact": "pass"},
+    )
+    status, body = _post(f"{base_url}/api/findings/{finding.id}/promote", {"reason": "trying anyway"})
+    assert status == 400
+    assert body["code"] == "NOT_PROMOTABLE"
+    print("  [OK]")
+
+
+def test_promote_finding_requires_reason(base_url):
+    print("[TEST] POST /api/findings/<id>/promote requires a non-empty reason...")
+    finding = server.FINDINGS.add(
+        Finding(tool="nuclei", target="promote-3.example", title="Needs reason", category=Category.VULNERABILITY.value)
+    )
+    _post(
+        f"{base_url}/api/findings/{finding.id}/gates",
+        {"refutation": "pass", "reachability": "pass", "trigger": "unsure", "impact": "pass"},
+    )
+    status, body = _post(f"{base_url}/api/findings/{finding.id}/promote", {"reason": ""})
+    assert status == 400
+    assert body["code"] == "INVALID_PARAMS"
+    print("  [OK]")
+
+
+def test_promote_finding_validates_related_ids(base_url):
+    print("[TEST] POST /api/findings/<id>/promote rejects an unknown related_finding_id...")
+    finding = server.FINDINGS.add(
+        Finding(tool="nuclei", target="promote-4.example", title="Bad related id", category=Category.VULNERABILITY.value)
+    )
+    _post(
+        f"{base_url}/api/findings/{finding.id}/gates",
+        {"refutation": "pass", "reachability": "pass", "trigger": "demote", "impact": "pass"},
+    )
+    status, body = _post(
+        f"{base_url}/api/findings/{finding.id}/promote",
+        {"reason": "chained", "related_finding_ids": ["does-not-exist"]},
+    )
+    assert status == 400
+    assert body["code"] == "INVALID_PARAMS"
+    print("  [OK]")
+
+
 def test_finding_gates_survives_re_sighting(base_url):
     """A gated finding seen again by the tool (same fingerprint) must keep
     its gate verdict -- merge() must never silently reset review state."""

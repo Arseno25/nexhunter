@@ -17,6 +17,7 @@ from enum import Enum
 from typing import Any
 
 from nexhunter.findings import attack
+from nexhunter.findings import gates
 from nexhunter.findings.gates import GateStatus
 
 
@@ -41,6 +42,13 @@ _SEVERITY_RANK = {
     Severity.LOW: 1,
     Severity.INFO: 0,
 }
+
+_SEVERITY_BY_RANK = {rank: severity for severity, rank in _SEVERITY_RANK.items()}
+
+
+def severity_from_rank(rank: int) -> Severity:
+    """Inverse of Severity.rank, clamped to the valid 0-4 range."""
+    return _SEVERITY_BY_RANK[max(0, min(4, rank))]
 
 # How other tools spell the same thing.
 _SEVERITY_ALIASES = {
@@ -184,6 +192,20 @@ class Finding:
     # None means never scored, distinct from Confidence above, which is a
     # parser's confidence in the raw observation, set before any review.
     review_confidence: int | None = None
+    # Canonical-report narrative, supplied by the reviewer alongside a gate
+    # verdict -- never fabricated from evidence that doesn't describe them.
+    root_cause: str = ""
+    attack_flow: list[str] = field(default_factory=list)  # one line per step
+    attack_chain_narrative: list[str] = field(default_factory=list)  # one line per step
+    # Pre-submission checklist (findings/gates.py PRESUBMISSION_NAMES):
+    # "is the writeup ready to send", distinct from the 4 exploitability
+    # gates above ("is this real and exploitable").
+    presubmission_checklist: dict[str, bool] = field(default_factory=dict)
+    presubmission_notes: dict[str, str] = field(default_factory=dict)
+    # Promotion audit trail: set only by POST /api/findings/<id>/promote,
+    # reconsidering a DEMOTED/NEEDS_REVIEW finding on a second signal.
+    promoted_from: str = ""
+    promotion_notes: str = ""
     attack_ids: list[str] = field(default_factory=list)  # MITRE ATT&CK
     artifacts: list[str] = field(default_factory=list)  # evidence files: screenshots, pcaps, …
     first_seen_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
@@ -275,6 +297,13 @@ class Finding:
         return hashlib.sha256(material.encode()).hexdigest()
 
     @property
+    def disposition(self) -> str:
+        """The final word: gate outcome folded with review confidence. See
+        gates.Disposition -- a CONFIRMED finding scored below 60 confidence
+        is a 'lead', not something to hand over as report-ready."""
+        return gates.disposition(GateStatus(self.gate_status), self.review_confidence).value
+
+    @property
     def is_vulnerability(self) -> bool:
         """True only for categories that actually assert a weakness."""
         return self.category in {
@@ -309,6 +338,14 @@ class Finding:
             self.gate_status = other.gate_status
             self.gate_notes = dict(other.gate_notes)
             self.review_confidence = other.review_confidence
+            self.root_cause = other.root_cause
+            self.attack_flow = list(other.attack_flow)
+            self.attack_chain_narrative = list(other.attack_chain_narrative)
+        if not self.presubmission_checklist and other.presubmission_checklist:
+            self.presubmission_checklist = dict(other.presubmission_checklist)
+            self.presubmission_notes = dict(other.presubmission_notes)
+        # promoted_from/promotion_notes: a promotion is a terminal, deliberate
+        # act -- never adopted from `other` and never cleared by a merge.
         if not self.remediation:
             self.remediation = other.remediation
             self._remediation_generated = other._remediation_generated
@@ -342,6 +379,14 @@ class Finding:
             "gate_status": self.gate_status,
             "gate_notes": self.gate_notes,
             "review_confidence": self.review_confidence,
+            "root_cause": self.root_cause,
+            "attack_flow": self.attack_flow,
+            "attack_chain_narrative": self.attack_chain_narrative,
+            "presubmission_checklist": self.presubmission_checklist,
+            "presubmission_notes": self.presubmission_notes,
+            "promoted_from": self.promoted_from,
+            "promotion_notes": self.promotion_notes,
+            "disposition": self.disposition,
             "is_vulnerability": self.is_vulnerability,
             "first_seen_at": self.first_seen_at.isoformat(),
             "last_seen_at": self.last_seen_at.isoformat(),
@@ -377,6 +422,13 @@ class Finding:
             gate_status=data.get("gate_status", GateStatus.UNREVIEWED.value),
             gate_notes=data.get("gate_notes") or {},
             review_confidence=data.get("review_confidence"),
+            root_cause=data.get("root_cause", ""),
+            attack_flow=data.get("attack_flow") or [],
+            attack_chain_narrative=data.get("attack_chain_narrative") or [],
+            presubmission_checklist=data.get("presubmission_checklist") or {},
+            presubmission_notes=data.get("presubmission_notes") or {},
+            promoted_from=data.get("promoted_from", ""),
+            promotion_notes=data.get("promotion_notes", ""),
             first_seen_at=_dt("first_seen_at") or datetime.now(timezone.utc),
             last_seen_at=_dt("last_seen_at") or datetime.now(timezone.utc),
         )

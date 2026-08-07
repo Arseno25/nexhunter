@@ -109,6 +109,7 @@ from nexhunter.api.logging_setup import configure_logging
 from nexhunter.execution.service import ExecutionService
 from nexhunter.api import mcp_profiles
 from nexhunter.findings import bounty_reports, cvss, export as findings_export, gates
+from nexhunter.findings.models import severity_from_rank
 from nexhunter.findings.store import FindingStore
 from nexhunter.workflows.orchestrator import AutonomousOrchestrator
 from nexhunter.agents.param_optimizer import optimize_preview
@@ -514,9 +515,91 @@ def finding_gates_post(finding_id):
     finding.gate_notes = gates.notes_from(body)
     # Confidence flags are opt-in: omit all of them and review_confidence
     # stays None (never scored), same as before this existed.
-    flags = {name: bool(body.get(name)) for name in gates.CONFIDENCE_DEDUCTIONS}
+    confidence_flags = {name: bool(body.get(name)) for name in gates.CONFIDENCE_DEDUCTIONS}
     if any(name in body for name in gates.CONFIDENCE_DEDUCTIONS):
-        finding.review_confidence = gates.confidence_score(flags)
+        finding.review_confidence = gates.confidence_score(confidence_flags)
+    # Severity adjustment: a distinct axis (how bad, given constraints) from
+    # confidence (how sure). Also opt-in, also applied only from flags the
+    # reviewer explicitly asserted.
+    severity_flags = {name: bool(body.get(name)) for name in gates.SEVERITY_ADJUSTMENTS}
+    if any(name in body for name in gates.SEVERITY_ADJUSTMENTS):
+        adjusted_rank = gates.adjust_severity_rank(finding.severity.rank, severity_flags)
+        finding.severity = severity_from_rank(adjusted_rank)
+    # Canonical-report narrative: optional, rendered only when supplied --
+    # bounty_reports.py never fabricates these from evidence.
+    if "root_cause" in body:
+        finding.root_cause = str(body.get("root_cause") or "")
+    if "attack_flow" in body:
+        finding.attack_flow = [str(step) for step in (body.get("attack_flow") or [])]
+    if "attack_chain_narrative" in body:
+        finding.attack_chain_narrative = [str(step) for step in (body.get("attack_chain_narrative") or [])]
+    FINDINGS.persist()
+    return jsonify({"ok": True, "finding": finding.to_dict()})
+
+
+@app.post("/api/findings/<finding_id>/presubmission")
+def finding_presubmission_post(finding_id):
+    """Record the pre-submission checklist (reality check, impact validated,
+    deduplication checked, report quality checked) -- a different question
+    from the 4 exploitability gates: is the writeup itself ready to send.
+    Deduplication needs a live search NexHunter has no tool for; this
+    endpoint validates and records what the reviewer says they checked, it
+    cannot verify the search happened."""
+    finding = FINDINGS.get(finding_id)
+    if finding is None:
+        return jsonify({"ok": False, "error": "no such finding", "code": "NOT_FOUND"}), 404
+    body = request.get_json(silent=True) or {}
+    try:
+        checklist = gates.parse_presubmission(body)
+    except ValueError as exc:
+        return jsonify({"ok": False, "error": str(exc), "code": "INVALID_PARAMS"}), 400
+    finding.presubmission_checklist = checklist
+    finding.presubmission_notes = {
+        name: str(body.get(f"{name}_notes", "") or "") for name in gates.PRESUBMISSION_NAMES
+    }
+    FINDINGS.persist()
+    return jsonify({
+        "ok": True,
+        "ready": gates.presubmission_ready(checklist),
+        "finding": finding.to_dict(),
+    })
+
+
+@app.post("/api/findings/<finding_id>/promote")
+def finding_promote_post(finding_id):
+    """Reconsider a DEMOTED or NEEDS_REVIEW finding on a second, independent
+    signal (e.g. the same root cause confirmed elsewhere) -- promotes to
+    CONFIRMED. Never decides whether promotion is warranted; that's the
+    caller's reasoning, given in `reason`. Restricted to DEMOTED/NEEDS_REVIEW:
+    a REFUTED finding already failed a gate outright, and CONFIRMED has
+    nothing to promote from."""
+    finding = FINDINGS.get(finding_id)
+    if finding is None:
+        return jsonify({"ok": False, "error": "no such finding", "code": "NOT_FOUND"}), 404
+    current_status = gates.GateStatus(finding.gate_status)
+    if not gates.promotable(current_status):
+        return jsonify({
+            "ok": False,
+            "error": f"gate_status '{current_status.value}' is not promotable "
+                     f"(only {sorted(s.value for s in gates.PROMOTABLE_FROM)} are)",
+            "code": "NOT_PROMOTABLE",
+        }), 400
+    body = request.get_json(silent=True) or {}
+    reason = str(body.get("reason") or "").strip()
+    if not reason:
+        return jsonify({"ok": False, "error": "reason is required", "code": "INVALID_PARAMS"}), 400
+    related_ids = [str(i) for i in (body.get("related_finding_ids") or [])]
+    missing_related = [i for i in related_ids if FINDINGS.get(i) is None]
+    if missing_related:
+        return jsonify({
+            "ok": False,
+            "error": f"related_finding_ids not found: {missing_related}",
+            "code": "INVALID_PARAMS",
+        }), 400
+    finding.promoted_from = current_status.value
+    finding.gate_status = gates.GateStatus.CONFIRMED.value
+    note = reason if not related_ids else f"{reason} (related: {', '.join(related_ids)})"
+    finding.promotion_notes = note
     FINDINGS.persist()
     return jsonify({"ok": True, "finding": finding.to_dict()})
 

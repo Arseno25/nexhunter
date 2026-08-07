@@ -73,6 +73,33 @@ def test_no_raw_command_tool():
     print("  [OK] run_command removed")
 
 
+def test_gap_closing_tools_are_registered():
+    """submit_presubmission_checklist and promote_finding must be reachable
+    the same way the rest of the finding-validation surface is -- as
+    hand-written MCP tools, always registered regardless of --profile."""
+    print("[TEST] submit_presubmission_checklist and promote_finding are registered...")
+    names = _tool_names()
+    assert "submit_presubmission_checklist" in names
+    assert "promote_finding" in names
+    print("  [OK]")
+
+
+def test_finding_patterns_resource_has_expanded_content():
+    """The nexhunter://findings/patterns resource must expose all of the
+    curated reference, not just the original two lists."""
+    print("[TEST] nexhunter://findings/patterns resource has the full reference...")
+    import json
+
+    payload = json.loads(M.resource_finding_patterns())
+    for key in (
+        "attack_vectors", "universal_patterns", "framework_antipatterns",
+        "always_rejected", "safe_patterns", "common_false_positives",
+        "impact_tiers", "severity_escalation",
+    ):
+        assert key in payload and payload[key], f"missing or empty: {key}"
+    print("  [OK]")
+
+
 def test_bugbounty_hunt_prompt_is_discoverable():
     """The bug-bounty skill is an MCP prompt: any client that connects sees
     it via the standard prompt-listing capability, no separate config beyond
@@ -95,7 +122,8 @@ def test_bugbounty_hunt_prompt_reflects_live_registry():
 
     non_tool_words = {
         "run_tool", "get_finding", "submit_finding_gates", "score_cvss", "bounty_report",
-        "pass", "fail", "demote", "unsure",
+        "submit_presubmission_checklist", "promote_finding",
+        "pass", "fail", "demote", "unsure", "confirmed", "lead",
     }
     named = set(re.findall(r"`([a-z][a-z0-9_]+)`", rendered)) - non_tool_words
     from nexhunter.core import tools as T

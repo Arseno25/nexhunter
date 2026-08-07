@@ -201,6 +201,90 @@ def test_merge_preserves_review_confidence_alongside_gate_state():
     print("  [OK] review_confidence survives a repeat sighting")
 
 
+def test_disposition_property_reflects_gate_status_and_confidence():
+    print("[TEST] Finding.disposition folds gate_status and review_confidence...")
+    finding = _finding()
+    assert finding.disposition == "unreviewed"
+    finding.gate_status = "confirmed"
+    assert finding.disposition == "confirmed"
+    finding.review_confidence = 40
+    assert finding.disposition == "lead"
+    print("  [OK] disposition computed, not stored")
+
+
+def test_canonical_narrative_fields_default_empty_and_round_trip():
+    print("[TEST] root_cause/attack_flow/attack_chain_narrative default empty, round-trip...")
+    finding = _finding()
+    assert finding.root_cause == ""
+    assert finding.attack_flow == []
+    assert finding.attack_chain_narrative == []
+
+    finding.root_cause = "missing ownership check in get_object_or_404"
+    finding.attack_flow = ["authenticate as low-priv user", "request another user's resource"]
+    finding.attack_chain_narrative = ["enumerate IDs", "exfiltrate every record in range"]
+    restored = Finding.from_dict(json.loads(json.dumps(finding.to_dict())))
+    assert restored.root_cause == finding.root_cause
+    assert restored.attack_flow == finding.attack_flow
+    assert restored.attack_chain_narrative == finding.attack_chain_narrative
+    print("  [OK] narrative fields round-trip")
+
+
+def test_presubmission_checklist_round_trips():
+    print("[TEST] presubmission_checklist/notes round-trip...")
+    finding = _finding()
+    finding.presubmission_checklist = {"reality_check": True, "impact_validated": False}
+    finding.presubmission_notes = {"impact_validated": "impact statement still too vague"}
+    restored = Finding.from_dict(json.loads(json.dumps(finding.to_dict())))
+    assert restored.presubmission_checklist == finding.presubmission_checklist
+    assert restored.presubmission_notes == finding.presubmission_notes
+    print("  [OK] presubmission state round-trips")
+
+
+def test_promotion_fields_round_trip():
+    print("[TEST] promoted_from/promotion_notes round-trip...")
+    finding = _finding()
+    finding.promoted_from = "demoted"
+    finding.promotion_notes = "same root cause confirmed in finding abc123"
+    restored = Finding.from_dict(json.loads(json.dumps(finding.to_dict())))
+    assert restored.promoted_from == "demoted"
+    assert restored.promotion_notes == "same root cause confirmed in finding abc123"
+    print("  [OK] promotion audit trail round-trips")
+
+
+def test_merge_preserves_narrative_and_presubmission_alongside_gate_state():
+    """A repeat tool sighting must not wipe out review narrative or the
+    pre-submission checklist any more than it wipes out the gate verdict."""
+    print("[TEST] Merge preserves narrative and presubmission state...")
+    store = FindingStore()
+    gated = store.add(_finding())
+    gated.gate_status = "confirmed"
+    gated.root_cause = "missing ownership check"
+    gated.attack_flow = ["step one"]
+    gated.presubmission_checklist = {"reality_check": True}
+
+    stored = store.add(_finding())
+    assert stored.root_cause == "missing ownership check"
+    assert stored.attack_flow == ["step one"]
+    assert stored.presubmission_checklist == {"reality_check": True}
+    print("  [OK] narrative and presubmission state survive a repeat sighting")
+
+
+def test_merge_never_touches_promotion_audit_trail():
+    """A promotion is a terminal, deliberate act -- a repeat tool sighting
+    must never adopt, clear, or overwrite it."""
+    print("[TEST] Merge never touches promoted_from/promotion_notes...")
+    store = FindingStore()
+    promoted = store.add(_finding())
+    promoted.gate_status = "confirmed"
+    promoted.promoted_from = "demoted"
+    promoted.promotion_notes = "confirmed elsewhere"
+
+    stored = store.add(_finding())
+    assert stored.promoted_from == "demoted"
+    assert stored.promotion_notes == "confirmed elsewhere"
+    print("  [OK] promotion audit trail untouched by merge")
+
+
 def test_observation_is_not_a_vulnerability():
     """Observations and vulnerabilities are distinct claims."""
     print("[TEST] Observation vs vulnerability...")
@@ -635,6 +719,12 @@ if __name__ == "__main__":
     test_review_confidence_out_of_range_dropped()
     test_review_confidence_round_trips()
     test_merge_preserves_review_confidence_alongside_gate_state()
+    test_disposition_property_reflects_gate_status_and_confidence()
+    test_canonical_narrative_fields_default_empty_and_round_trip()
+    test_presubmission_checklist_round_trips()
+    test_promotion_fields_round_trip()
+    test_merge_preserves_narrative_and_presubmission_alongside_gate_state()
+    test_merge_never_touches_promotion_audit_trail()
     test_observation_is_not_a_vulnerability()
     test_parser_failure_is_recorded_not_swallowed()
     test_fingerprint_is_stable_and_sha256()
