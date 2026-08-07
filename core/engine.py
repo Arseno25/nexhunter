@@ -10,9 +10,9 @@ from typing import Any
 from nexhunter.core import tools as T
 from nexhunter.core.config import (
     CACHE_MAX,
-    MAX_PARALLEL_WORKERS,
     FINDING_DEDUP_ENABLED,
 )
+from nexhunter.core.scaling import adaptive_worker_count
 from nexhunter.findings.models import Finding
 from nexhunter.security.redaction import SecretRedactor
 
@@ -110,7 +110,7 @@ class Engine:
     def parallel(self, jobs: dict[str, Any]) -> dict:
         """Execute multiple functions in parallel."""
         out: dict[str, Any] = {}
-        max_workers = min(MAX_PARALLEL_WORKERS, len(jobs) or 1)
+        max_workers = adaptive_worker_count(len(jobs))
         with ThreadPoolExecutor(max_workers=max_workers) as ex:
             futs = {ex.submit(fn): n for n, fn in jobs.items()}
             for f in as_completed(futs):

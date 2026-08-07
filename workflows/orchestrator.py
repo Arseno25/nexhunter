@@ -32,7 +32,8 @@ from enum import Enum
 from collections.abc import Sequence
 
 from nexhunter.core import tools as T
-from nexhunter.core.config import MAX_PARALLEL_WORKERS, WORKFLOW_TIMEOUT
+from nexhunter.core.config import WORKFLOW_TIMEOUT
+from nexhunter.core.scaling import adaptive_worker_count
 from nexhunter.execution.recovery import ExecutionRecovery
 from nexhunter.core.risk import RiskLevel
 from nexhunter.agents.profiler import Profiler, TargetProfile
@@ -591,7 +592,7 @@ class AutonomousOrchestrator:
                 for key, tool, params, direct in jobs
             }
         out: dict = {}
-        workers = min(MAX_PARALLEL_WORKERS, len(jobs))
+        workers = adaptive_worker_count(len(jobs))
         with ThreadPoolExecutor(max_workers=workers) as pool:
             futures = {
                 pool.submit(self._run_one, tool, params, direct): key
