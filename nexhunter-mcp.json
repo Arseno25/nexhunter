@@ -2,12 +2,16 @@
   "mcpServers": {
     "nexhunter": {
       "type": "local",
-      "command": "python",
+      "command": "/path/to/nexhunter/.venv/bin/python",
       "args": [
         "-m",
         "nexhunter.api.mcp",
         "--server",
-        "http://127.0.0.1:8888"
+        "http://127.0.0.1:8888",
+        "--profile",
+        "nexhunter-web",
+        "--tool-limit",
+        "40"
       ],
       "enabled": true,
       "timeout": 600000,
