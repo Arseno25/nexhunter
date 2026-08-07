@@ -607,7 +607,13 @@ def cmd_doctor(args):
     """Check that this installation can actually run."""
     from nexhunter.cli import doctor
 
-    return doctor.run(check_versions=not args.no_versions, show_all_tools=args.all)
+    return doctor.run(
+        check_versions=not args.no_versions,
+        show_all_tools=args.all,
+        do_install=args.install,
+        assume_yes=args.yes,
+        dry_run=args.dry_run,
+    )
 
 
 def cmd_registry(args):
@@ -752,6 +758,14 @@ def main(argv=None):
     doctor_parser = sub.add_parser("doctor", help="check this installation can run (no server needed)")
     doctor_parser.add_argument("--all", action="store_true", help="list every missing stable tool")
     doctor_parser.add_argument("--no-versions", action="store_true", help="skip version probes (faster)")
+    doctor_parser.add_argument(
+        "--install", action="store_true",
+        help="install missing stable tools via their known recipe (apt/go/pipx); shows a plan and asks first",
+    )
+    doctor_parser.add_argument("--yes", action="store_true", help="with --install, skip the confirmation prompt")
+    doctor_parser.add_argument(
+        "--dry-run", action="store_true", help="with --install, print the install plan without running it",
+    )
 
     registry_parser = sub.add_parser("registry", help="inspect the tool registry (no server needed)")
     registry_sub = registry_parser.add_subparsers(dest="registry_cmd", required=True)

@@ -1,12 +1,15 @@
 """`nexhunter doctor` - check that this installation can actually run.
 
-Reports what is true about the current environment. It never changes anything
-and never installs a binary: the point is to tell an operator what will and
-will not work, not to fix it for them.
+Reports what is true about the current environment. By default it changes
+nothing: the point is to tell an operator what will and will not work. The
+opt-in ``--install`` flag is the one exception -- it runs the known install
+recipe (apt/go/pipx) for each missing tool, after showing the plan and asking
+for confirmation. Without ``--install`` no binary is ever touched.
 """
 
 import os
 import platform
+import subprocess
 import sys
 from pathlib import Path
 
@@ -122,8 +125,81 @@ def _check_execution() -> tuple[str, str]:
         return FAIL, f"Process execution failed: {exc}"
 
 
-def run(check_versions: bool = True, show_all_tools: bool = False) -> int:
-    """Print the report. Returns a process exit code: 0 unless something failed."""
+def _install_missing(missing: list[tuple[str, str]], assume_yes: bool, dry_run: bool) -> None:
+    """Install missing binaries via their known recipes (used by --install).
+
+    ``missing`` is a list of (tool_name, binary). Shows the plan first, asks to
+    confirm (unless assume_yes), then runs each recipe and re-checks the binary.
+    A tool with no recipe, or whose installer (apt/go/pipx) is not on PATH, is
+    reported and skipped -- never guessed at.
+    """
+    from nexhunter.cli import installer as I
+
+    planned: list = []
+    no_recipe: list[tuple[str, str]] = []
+    for name, binary in missing:
+        recipe = I.recipe_for(binary)
+        (planned.append((name, binary, recipe)) if recipe else no_recipe.append((name, binary)))
+
+    print("Install plan")
+    for name, binary, recipe in planned:
+        note = "" if I.method_available(recipe.method) else f"   ({recipe.method} NOT on PATH)"
+        print(f"  {name} ({binary}): {I.command_str(recipe)}{note}")
+    for name, binary in no_recipe:
+        print(f"  {name} ({binary}): no known recipe -- install manually")
+    if not planned:
+        print("  Nothing installable: no known recipes for the missing tools.\n")
+        return
+    print()
+
+    if dry_run:
+        print("(dry run: nothing was installed)\n")
+        return
+    if not assume_yes:
+        try:
+            reply = input(f"Install {len(planned)} tool(s) with the commands above? [y/N] ").strip().lower()
+        except EOFError:
+            reply = ""
+        if reply not in {"y", "yes"}:
+            print("Aborted; nothing installed.\n")
+            return
+
+    installed = failed = skipped = 0
+    for name, binary, recipe in planned:
+        if not I.method_available(recipe.method):
+            print(f"  {MISSING} {name}: {recipe.method} not installed, skipped")
+            skipped += 1
+            continue
+        if check_binary(binary, with_version=False).installed:  # a prior step may have provided it
+            print(f"  {OK} {name}: already present")
+            continue
+        print(f"  $ {I.command_str(recipe)}")
+        try:
+            proc = subprocess.run(I.command_for(recipe), check=False)  # noqa: S603 - argv from fixed recipe table
+            if proc.returncode == 0 and check_binary(binary, with_version=False).installed:
+                print(f"  {OK} {name} installed")
+                installed += 1
+            else:
+                print(f"  {FAIL} {name}: exit {proc.returncode}")
+                failed += 1
+        except Exception as exc:  # noqa: BLE001 - reported per tool, loop continues
+            print(f"  {FAIL} {name}: {exc}")
+            failed += 1
+    print(f"\nInstalled {installed}, failed {failed}, skipped {skipped}.\n")
+
+
+def run(
+    check_versions: bool = True,
+    show_all_tools: bool = False,
+    do_install: bool = False,
+    assume_yes: bool = False,
+    dry_run: bool = False,
+) -> int:
+    """Print the report. Returns a process exit code: 0 unless something failed.
+
+    With ``do_install`` the missing stable tools that have a known recipe are
+    installed after the report (see :func:`_install_missing`).
+    """
     sections: list[tuple[str, list[tuple[str, str]]]] = []
 
     core = [
@@ -147,18 +223,19 @@ def run(check_versions: bool = True, show_all_tools: bool = False) -> int:
     stable_specs = [spec for spec in T.TOOLS.values() if spec.maturity == "stable"]
     tool_rows = []
     installed_count = 0
+    missing_specs: list[tuple[str, str]] = []  # (name, binary) for --install
     for spec in sorted(stable_specs, key=lambda s: s.name):
         status = check_binary(spec.binary, with_version=check_versions)
         if status.installed:
             installed_count += 1
             version = f" {status.version}" if status.version else ""
             tool_rows.append((OK, f"{spec.name} ({spec.binary}{version})"))
-        elif show_all_tools:
-            tool_rows.append((MISSING, f"{spec.name} ({spec.binary})"))
-    if not show_all_tools:
-        missing = len(stable_specs) - installed_count
-        if missing:
-            tool_rows.append((MISSING, f"{missing} other stable tools not installed (--all to list)"))
+        else:
+            missing_specs.append((spec.name, spec.binary))
+            if show_all_tools:
+                tool_rows.append((MISSING, f"{spec.name} ({spec.binary})"))
+    if not show_all_tools and missing_specs:
+        tool_rows.append((MISSING, f"{len(missing_specs)} other stable tools not installed (--all to list)"))
     sections.append((f"Stable tools ({installed_count}/{len(stable_specs)} installed)", tool_rows))
 
     per_category: dict[str, list[int]] = {}
@@ -186,6 +263,16 @@ def run(check_versions: bool = True, show_all_tools: bool = False) -> int:
             elif marker in (WARN, MISSING):
                 warnings += 1
         print()
+
+    if do_install:
+        _install_missing(missing_specs, assume_yes=assume_yes, dry_run=dry_run)
+    elif missing_specs:
+        from nexhunter.cli import installer as I
+
+        installable = sum(1 for _, binary in missing_specs if I.recipe_for(binary))
+        if installable:
+            print(f"{installable} of the missing stable tools have a known recipe -- "
+                  f"run 'doctor --install' to install them.\n")
 
     if failures:
         print(f"{failures} failure(s), {warnings} warning(s). NexHunter will not run correctly.\n")
