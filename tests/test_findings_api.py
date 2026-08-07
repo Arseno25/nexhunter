@@ -170,6 +170,54 @@ def test_finding_gates_rejects_bad_verdict(base_url):
     print("  [OK]")
 
 
+def test_finding_report_endpoint(base_url):
+    print("[TEST] POST /api/findings/<id>/report renders a platform report...")
+    finding = server.FINDINGS.add(
+        Finding(
+            tool="nuclei",
+            target="report-test.example",
+            title="Reflected XSS",
+            category=Category.VULNERABILITY.value,
+            description="Unescaped query param reflected into the page.",
+        )
+    )
+    status, body = _post(f"{base_url}/api/findings/{finding.id}/report", {"platform": "hackerone"})
+    assert status == 200
+    assert body["ok"] is True
+    assert body["platform"] == "hackerone"
+    assert "Reflected XSS" in body["report"]
+    print("  [OK]")
+
+
+def test_finding_report_endpoint_defaults_to_generic(base_url):
+    print("[TEST] POST /api/findings/<id>/report defaults to 'generic' platform...")
+    finding = server.FINDINGS.add(
+        Finding(tool="nuclei", target="report-test-2.example", title="Open redirect", category=Category.VULNERABILITY.value)
+    )
+    status, body = _post(f"{base_url}/api/findings/{finding.id}/report", {})
+    assert status == 200
+    assert body["platform"] == "generic"
+    print("  [OK]")
+
+
+def test_finding_report_endpoint_rejects_bad_platform(base_url):
+    print("[TEST] POST /api/findings/<id>/report rejects an unknown platform...")
+    finding = server.FINDINGS.add(
+        Finding(tool="nuclei", target="report-test-3.example", title="SSRF", category=Category.VULNERABILITY.value)
+    )
+    status, body = _post(f"{base_url}/api/findings/{finding.id}/report", {"platform": "notaplatform"})
+    assert status == 400
+    assert body["code"] == "INVALID_PARAMS"
+    print("  [OK]")
+
+
+def test_finding_report_endpoint_missing_finding_404s(base_url):
+    print("[TEST] POST /api/findings/<id>/report 404s on an unknown finding...")
+    status, body = _post(f"{base_url}/api/findings/does-not-exist/report", {"platform": "hackerone"})
+    assert status == 404
+    print("  [OK]")
+
+
 def test_finding_gates_survives_re_sighting(base_url):
     """A gated finding seen again by the tool (same fingerprint) must keep
     its gate verdict -- merge() must never silently reset review state."""

@@ -295,6 +295,14 @@ curl -X POST http://127.0.0.1:8888/api/findings/<id>/gates \
   no `fail`, `confirmed` when all four `pass`). A gate verdict, once
   recorded, survives a repeat tool sighting — merging a rerun never resets a
   review.
+- **Submission-ready reports.** `bounty_report(finding_id, platform)` (or
+  `POST /api/findings/{id}/report`) renders one finding for HackerOne,
+  Bugcrowd, Intigriti, Immunefi, or a generic format. An unreviewed or
+  refuted finding still renders — with a warning banner, not silence. Impact
+  narrative comes from the reviewer's own `submit_finding_gates` reasoning,
+  never invented from evidence that doesn't describe one; Immunefi's
+  fund-loss-based severity category is explicitly left for a human to pick
+  rather than faked from a CVSS score that measures something else.
 
 ## Execution modes
 
@@ -449,6 +457,7 @@ curl -X POST http://127.0.0.1:8888/api/command \
 | `GET /api/findings` | Findings |
 | `GET /api/findings/{id}` | One finding, full evidence |
 | `POST /api/findings/{id}/gates` | Record a reviewed 4-gate verdict (refutation/reachability/trigger/impact) |
+| `POST /api/findings/{id}/report` | Submission-ready report for a platform: hackerone/bugcrowd/intigriti/immunefi/generic |
 | `POST /api/cvss/score` | CVSS 3.1 base score from a vector string |
 | `GET /api/mcp/profiles` | Profile definitions |
 | `GET /api/cache/stats` · `POST /api/cache/clear` | Result-cache telemetry / reset |

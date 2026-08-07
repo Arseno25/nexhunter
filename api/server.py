@@ -108,7 +108,7 @@ from nexhunter.api.visual import (
 from nexhunter.api.logging_setup import configure_logging
 from nexhunter.execution.service import ExecutionService
 from nexhunter.api import mcp_profiles
-from nexhunter.findings import cvss, export as findings_export, gates
+from nexhunter.findings import bounty_reports, cvss, export as findings_export, gates
 from nexhunter.findings.store import FindingStore
 from nexhunter.workflows.orchestrator import AutonomousOrchestrator
 from nexhunter.agents.param_optimizer import optimize_preview
@@ -514,6 +514,23 @@ def finding_gates_post(finding_id):
     finding.gate_notes = gates.notes_from(body)
     FINDINGS.persist()
     return jsonify({"ok": True, "finding": finding.to_dict()})
+
+
+@app.post("/api/findings/<finding_id>/report")
+def finding_report_post(finding_id):
+    """Render one finding as a submission-ready report for a bug bounty
+    platform (body: {"platform": "hackerone|h1|bugcrowd|intigriti|immunefi|generic"},
+    default generic)."""
+    finding = FINDINGS.get(finding_id)
+    if finding is None:
+        return jsonify({"ok": False, "error": "no such finding", "code": "NOT_FOUND"}), 404
+    body = request.get_json(silent=True) or {}
+    platform = str(body.get("platform", "generic"))
+    try:
+        report = bounty_reports.render(finding, platform)
+    except ValueError as exc:
+        return jsonify({"ok": False, "error": str(exc), "code": "INVALID_PARAMS"}), 400
+    return jsonify({"ok": True, "platform": platform.lower(), "report": report})
 
 
 @app.post("/api/cvss/score")

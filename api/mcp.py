@@ -541,6 +541,18 @@ def get_finding(finding_id: str) -> str:
 
 
 @mcp.tool()
+def bounty_report(finding_id: str, platform: str = "generic") -> str:
+    """Render one finding as a submission-ready report. platform: 'hackerone'
+    (or 'h1'), 'bugcrowd', 'intigriti', 'immunefi', or 'generic' (default).
+    Pulls in whatever the finding already has -- CVSS, CWE, ATT&CK,
+    remediation, evidence -- plus the impact reasoning from a prior
+    submit_finding_gates call, if there was one. An unreviewed or refuted
+    finding still renders, but with a warning banner up front rather than
+    presenting it as confirmed."""
+    return _render(api(f"/api/findings/{finding_id}/report", {"platform": platform}), indent=1)
+
+
+@mcp.tool()
 def score_cvss(vector: str) -> str:
     """Compute a CVSS 3.1 base score from a vector string, e.g.
     'CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H'. Pure arithmetic on a
