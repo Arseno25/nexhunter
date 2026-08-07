@@ -134,7 +134,7 @@ class ExecutionService:
         cache_key: str | None = None
         if self.cache.enabled and spec.cacheable and not no_cache:
             probe_merged, probe_err = spec.normalize(params)
-            if probe_err is None:
+            if probe_err is None and probe_merged is not None:
                 cache_key = ResultCache.key_for(tool_name, probe_merged)
                 cached = self.cache.get(cache_key)
                 if cached is not None:
@@ -142,7 +142,7 @@ class ExecutionService:
 
         record = ExecutionRecord(
             tool_name=tool_name,
-            risk_level=spec.risk_level,
+            risk_level=spec.risk_level or "active",
             redacted_parameters=self.redactor.redact_dict(dict(params)),
         )
         self.registry.add(record)
@@ -152,6 +152,8 @@ class ExecutionService:
         merged, err = spec.normalize(params)
         if err is not None:
             return self._fail(record, "INVALID_PARAMS", err, blocked=True)
+        if merged is None:
+            return self._fail(record, "INVALID_PARAMS", "parameter normalization failed", blocked=True)
 
         # Re-redact from the normalized values, using the schema's own notion of
         # which parameters are credentials rather than a name heuristic.
@@ -223,6 +225,8 @@ class ExecutionService:
         merged, err = spec.normalize(params)
         if err is not None:
             return {"ok": False, "code": "INVALID_PARAMS", "error": err}
+        if merged is None:
+            return {"ok": False, "code": "INVALID_PARAMS", "error": "parameter normalization failed"}
 
         # Cache probe: same key as the state-machine path, so both modes share
         # one cache. Only deterministic outcomes are ever stored.
@@ -284,7 +288,9 @@ class ExecutionService:
         # Only deterministic terminal outcomes enter the cache; a timeout or
         # termination is a fact about this run, not a durable answer.
         if cache_key and not result.timed_out and not result.terminated:
-            self.cache.put(cache_key, payload, None)
+            # Direct path has no execution record; an empty id keeps the type
+            # honest (put expects str) and the cache entry self-describing.
+            self.cache.put(cache_key, payload, "")
         status = payload.get("status")
         if status == "completed":
             log.info(_tool_line("COMPLETED", tool_name, payload["target"] or "", f"{duration:.2f}s"))

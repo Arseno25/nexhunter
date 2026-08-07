@@ -1,4 +1,10 @@
-fastmcp>=2.0
+# nexhunter - minimal runtime dependencies
+# For dev/install: pip install -e "[dev]"
+# For api: pip install -e "[api]"
+# For mcp: pip install -e "[mcp]"
+
+defusedxml>=0.7
 flask>=3.0
 loguru>=0.7.3
 psutil>=5.9
+fastmcp>=2.0

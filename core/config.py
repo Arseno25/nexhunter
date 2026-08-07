@@ -21,6 +21,7 @@ TOOL_TIMEOUTS = {
     "nuclei_scan": 600,
     "ffuf_scan": 600,
     "gobuster_dir": 600,
+    "dirsearch": 600,   # default 300s always timed out; 600s gives a single wordlist pass
     "sqlmap_scan": 900,
     "nikto_scan": 600,
     "httpx_probe": 120,

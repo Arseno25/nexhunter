@@ -201,5 +201,6 @@ def categories(registry: dict | None = None) -> dict[str, int]:
     source = registry if registry is not None else T.TOOLS
     counts: dict[str, int] = {}
     for spec in source.values():
-        counts[spec.category] = counts.get(spec.category, 0) + 1
+        category = spec.category or "other"
+        counts[category] = counts.get(category, 0) + 1
     return dict(sorted(counts.items(), key=lambda kv: kv[1], reverse=True))

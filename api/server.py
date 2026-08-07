@@ -123,12 +123,15 @@ from nexhunter.execution.http_lab import (
 log = logging.getLogger("nexhunter.server")
 
 FINDINGS = FindingStore()
-# Engine mirrors every finding it records into FINDINGS, and reads the store
-# back for summaries and reports: one registry, whichever path produced it.
-ENGINE = Engine(finding_store=FINDINGS)
 # Single execution path shared with the MCP server: validate, build, run,
 # record. Nothing else in this module spawns a process.
 EXEC = ExecutionService()
+# Engine mirrors every finding it records into FINDINGS, and reads the store
+# back for summaries and reports: one registry, whichever path produced it.
+# Wiring EXEC in means probe/portscan/webscan/recon/assess all route through
+# the single execution path -- they produce ExecutionRecords, appear in
+# /api/executions, and share the same cache, rate limiter, and redactor.
+ENGINE = Engine(finding_store=FINDINGS, exec_service=EXEC)
 # Autonomous, adaptive assessment. Drives EXEC, so every step it takes runs on
 # exactly the same terms as a manual call.
 ORCHESTRATOR = AutonomousOrchestrator(execution_service=EXEC, finding_store=FINDINGS)

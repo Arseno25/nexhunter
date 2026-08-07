@@ -121,6 +121,9 @@ def review_plan(target: str, steps, risk_ceiling: str = "active") -> dict:
             invalid.append({"tool": str(step), "reason": "step must be an object with tool and params"})
             continue
         tool = step.get("tool")
+        if not isinstance(tool, str):
+            invalid.append({"tool": tool, "reason": "step.tool must be a string"})
+            continue
         params = step.get("params") or {}
         spec = T.get_tool_spec(tool)
         if spec is None:
@@ -240,7 +243,7 @@ class AdaptivePlanner:
             steps.append(PlannedStep(
                 tool=tool_name,
                 reason=reason,
-                risk_level=spec.risk_level,
+                risk_level=spec.risk_level or "active",
                 phase=phase,
             ))
         return steps

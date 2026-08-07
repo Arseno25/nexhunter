@@ -283,7 +283,7 @@ TOOLS = {
             name="dirsearch",
             binary="dirsearch",
             description="Directory/file discovery",
-            params={"url": None, "extensions": "php,asp,aspx,jsp,html,js", "threads": 40},
+            params={"url": None, "extensions": "php,asp,aspx,jsp,html,js", "threads": 10},
             timeout=300,
             builder=lambda p: [
                 "dirsearch",

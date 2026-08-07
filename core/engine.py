@@ -13,7 +13,7 @@ from nexhunter.core.config import (
     FINDING_DEDUP_ENABLED,
 )
 from nexhunter.core.scaling import adaptive_worker_count
-from nexhunter.findings.models import Finding
+from nexhunter.findings.models import Finding, normalize_severity
 from nexhunter.security.redaction import SecretRedactor
 
 SEVERITY_ORDER = {"critical": 0, "high": 1, "medium": 2, "low": 3, "info": 4}
@@ -43,13 +43,18 @@ class WorkflowContext:
 class Engine:
     """Orchestration engine with caching, parallel exec, finding tracking."""
 
-    def __init__(self, finding_store=None):
+    def __init__(self, finding_store=None, exec_service=None):
         self.findings: list[Finding] = []
         self._finding_sigs = set()
         # Shared finding store: the single registry when wired (see
         # api/server.py). Consumers read the store; self.findings stays as the
         # legacy list for callers that never pass a store.
         self._store = finding_store
+        # When wired, run_tool() delegates to the single execution path so
+        # all legacy API calls (probe/portscan/webscan/recon/assess) produce
+        # ExecutionRecords, appear in /api/executions, and share the same
+        # cache, rate limiter, and redactor as /api/command.
+        self._exec = exec_service
         # LRU cache: OrderedDict; hits move the entry to the end, eviction
         # drops the least-recently-used entry from the front.
         self._cache: OrderedDict[str, dict] = OrderedDict()
@@ -87,7 +92,25 @@ class Engine:
         return res
 
     def run_tool(self, name: str, params: dict) -> dict:
-        """Run tool with validation and stats."""
+        """Run tool with validation and stats.
+
+        When an ExecutionService is wired (the production path), every call
+        routes through it so probe/portscan/webscan/recon/assess all produce
+        ExecutionRecords, appear in /api/executions, and share the same cache,
+        rate limiter, and redactor as /api/command.  The legacy cached path
+        stays as the fallback for standalone/test use without a service.
+        """
+        if self._exec is not None:
+            # Use the single execution path. run_direct() returns a result dict
+            # that is structurally compatible with what _cached_run returns:
+            # {ok, stdout, stderr, exit, cached, ...}.
+            t0 = time.time()
+            res = self._exec.run_direct(name, params)
+            elapsed = time.time() - t0
+            self._tool_stats.setdefault(name, []).append(elapsed)
+            self._tool_stats[name] = self._tool_stats[name][-20:]
+            return res
+
         spec = T.get_tool_spec(name)
         if not spec:
             return {"ok": False, "error": f"unknown tool: {name}", "stdout": "", "stderr": "", "exit": -1}
@@ -99,9 +122,11 @@ class Engine:
         cmd = spec.build_cmd(params)
         if not cmd:
             return {"ok": False, "error": f"failed to build command for {name}", "stdout": "", "stderr": "", "exit": -1}
+        # ponytail: _cached_run expects list; ShellCommand(str) stringifies
+        argv = cmd if isinstance(cmd, list) else [str(cmd)]
 
         t0 = time.time()
-        res = self._cached_run(cmd, spec.timeout)
+        res = self._cached_run(argv, spec.timeout)
         elapsed = time.time() - t0
         self._tool_stats.setdefault(name, []).append(elapsed)
         self._tool_stats[name] = self._tool_stats[name][-20:]
@@ -194,7 +219,7 @@ class Engine:
                         tool="nmap",
                         target=h["addr"],
                         title=f"open {p['proto']}/{p['port']} - {p['service'] or 'unknown'}",
-                        severity=sev,
+                        severity=normalize_severity(sev),
                         evidence={"detail": evidence} if evidence else {},
                     )
                 )
@@ -225,7 +250,7 @@ class Engine:
                             tool="nuclei",
                             target=n["matched"] or target,
                             title=n["name"] or n["template"],
-                            severity=n["severity"] or "info",
+                            severity=normalize_severity(n["severity"] or "info"),
                             evidence={"detail": n["description"]} if n.get("description") else {},
                         )
                     )
@@ -248,7 +273,7 @@ class Engine:
             if results.get(name, {}).get("ok"):
                 subs.update(line.strip() for line in results[name]["stdout"].splitlines() if line.strip())
         for s in sorted(subs):
-            self.add(Finding(tool="recon", target=domain, title=f"subdomain: {s}", severity="info"))
+            self.add(Finding(tool="recon", target=domain, title=f"subdomain: {s}", severity=normalize_severity("info")))
         return {"ok": True, "domain": domain, "tools_run": sorted(results), "subdomains": sorted(subs)}
 
     def assess(self, target: str) -> dict:
@@ -288,7 +313,7 @@ class Engine:
                     tool="sqlmap",
                     target=target,
                     title="query parameter present - manual sqlmap check advised",
-                    severity="info",
+                    severity=normalize_severity("info"),
                     evidence={"detail": "auto-injection testing skipped to limit noise; run sqlmap_scan directly"},
                 )
             )

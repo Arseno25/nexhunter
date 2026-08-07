@@ -270,12 +270,12 @@ class ToolSelector:
             score, reasons = result
             if score < obj.threshold:
                 continue
-            risk = risk_level_from_str(spec.risk_level)
+            risk = risk_level_from_str(spec.risk_level or "active")
             scored.append(ScoredTool(
                 name=spec.name,
-                category=spec.category,
-                risk_level=spec.risk_level,
-                phase=CATEGORY_PHASE.get(spec.category, "assessment"),
+                category=spec.category or "other",
+                risk_level=spec.risk_level or "active",
+                phase=CATEGORY_PHASE.get(spec.category or "other", "assessment"),
                 score=score,
                 available=spec.available,
                 within_ceiling=_RISK_ORDER.get(risk, 1) <= ceiling_rank,

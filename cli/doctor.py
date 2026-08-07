@@ -75,18 +75,22 @@ def _check_destructive_flags() -> list[tuple[str, str]]:
 
 def _check_dependencies() -> list[tuple[str, str]]:
     results = []
-    for module, purpose in (
-        ("fastmcp", "MCP server"),
-        ("flask", "API server"),
-        ("defusedxml", "safe XML parsing"),
+    # defusedxml is a base dependency (pyproject.toml `dependencies`) -- missing
+    # it means the install itself is broken, so it's a hard FAIL. fastmcp and
+    # flask are opt-in extras (`[mcp]`, `[api]`); the minimal install runs the
+    # CLI, the registry, and the execution layer without them by design, so a
+    # missing one is a capability gap (WARN), not a broken install.
+    for module, purpose, extra, marker_if_missing in (
+        ("fastmcp", "MCP server", "mcp", WARN),
+        ("flask", "API server", "api", WARN),
+        ("defusedxml", "safe XML parsing", None, FAIL),
     ):
         try:
             __import__(module)
             results.append((OK, f"{module} available ({purpose})"))
         except ImportError:
-            # Python dependencies are part of the install, unlike optional tool
-            # binaries: a missing one means the server or bridge cannot start.
-            results.append((FAIL, f"{module} not installed ({purpose} unavailable)"))
+            hint = f" (pip install nexhunter[{extra}])" if extra else ""
+            results.append((marker_if_missing, f"{module} not installed ({purpose} unavailable){hint}"))
     return results
 
 
@@ -240,7 +244,8 @@ def run(
 
     per_category: dict[str, list[int]] = {}
     for spec in T.TOOLS.values():
-        bucket = per_category.setdefault(spec.category, [0, 0])
+        category = spec.category or "other"
+        bucket = per_category.setdefault(category, [0, 0])
         bucket[1] += 1
         if spec.available:
             bucket[0] += 1

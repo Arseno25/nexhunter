@@ -219,14 +219,14 @@ def to_sarif(findings: Sequence[Finding], tool_name: str = "NexHunter") -> str:
     Each distinct finding title becomes a rule, and each finding an occurrence
     of it, which is the shape SARIF consumers expect.
     """
-    rules = {}
+    rules: dict[str, dict[str, Any]] = {}
     results = []
 
     for finding in findings:
         rule_id = finding.title.strip().lower().replace(" ", "-")[:64] or "finding"
 
         if rule_id not in rules:
-            rule = {
+            rule: dict[str, Any] = {
                 "id": rule_id,
                 "name": finding.title[:120],
                 "shortDescription": {"text": finding.title},
@@ -238,9 +238,9 @@ def to_sarif(findings: Sequence[Finding], tool_name: str = "NexHunter") -> str:
                 },
             }
             if finding.cwe_ids:
-                rule["properties"]["cwe"] = finding.cwe_ids
+                rule["properties"]["cwe"] = list(finding.cwe_ids)
             if finding.attack_ids:
-                rule["properties"]["attack"] = finding.attack_ids
+                rule["properties"]["attack"] = list(finding.attack_ids)
             if finding.references:
                 rule["helpUri"] = finding.references[0]
             rules[rule_id] = rule

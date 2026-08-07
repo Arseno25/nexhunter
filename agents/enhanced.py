@@ -305,8 +305,8 @@ class CTFSolverAgent(Agent):
         for hint in hints_map.get(challenge_type, []):
             analyzer.add_hint(hint)
 
-        installed = []
-        missing = []
+        installed: list[str] = []
+        missing: list[str] = []
         for name in analyzer.get_recommended_tools():
             spec = T.get_tool_spec(name)
             (installed if (spec and spec.available) else missing).append(name)

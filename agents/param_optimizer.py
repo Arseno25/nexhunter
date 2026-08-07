@@ -258,7 +258,7 @@ def optimize_preview(target: str, tool: str, objective: str = "standard") -> dic
 
     normalized, err = spec.normalize(params)
     command = None
-    if err is None:
+    if err is None and normalized is not None:
         try:
             command = spec.build_cmd(normalized)
         except Exception as exc:  # noqa: BLE001 - a bad build is data, not a crash

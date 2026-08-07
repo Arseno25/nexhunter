@@ -310,10 +310,10 @@ def live_progress(
             # Fill/percent shift blue -> cyan -> green as the run advances, so a
             # long-running tool never looks stuck on one flat color.
             tier = "BLUE" if frac < 0.34 else "CYAN" if frac < 0.67 else "GREEN"
-            spin = _paint(next(frames), tier, "BOLD", color=color)
-            bar = render_progress_bar(frac, width=22, color=color,
-                                      show_percent=False, fill_color=tier)
-            elapsed_txt = _paint(f"{elapsed:6.1f}s", "GRAY", color=color)
+            spin = _paint(next(frames), tier, "BOLD", color=bool(color))
+            bar = render_progress_bar(frac, width=22, color=bool(color),
+                                       show_percent=False, fill_color=tier)
+            elapsed_txt = _paint(f"{elapsed:6.1f}s", "GRAY", color=bool(color))
             # Elapsed is the only number here (fixed width, stays aligned run to
             # run); the variable-length label trails so it never shifts it.
             stream.write(f"\r{spin} {bar} {elapsed_txt}  {label}\033[K")

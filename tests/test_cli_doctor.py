@@ -146,10 +146,14 @@ def test_doctor_reports_tool_maturity(tmp: Path):
 
 
 def test_doctor_flags_missing_api_dependency(tmp: Path):
-    """A missing flask must surface in doctor: the server cannot start without it.
+    """A missing flask must surface in doctor, but not fail the whole report:
+    flask is the opt-in `[api]` extra (pyproject.toml), not a base dependency
+    -- the minimal install (CLI, registry, execution layer) is supported
+    without it by design.
 
     Regression: setup scripts installed only [mcp,browser], the server failed
-    right after a "successful" setup, and doctor did not notice.
+    right after a "successful" setup, and doctor did not notice. Doctor must
+    still surface the gap (WARN) even though it isn't a broken install (FAIL).
     """
     from unittest import mock
 
@@ -165,8 +169,8 @@ def test_doctor_flags_missing_api_dependency(tmp: Path):
     with _Env(NEXHUNTER_DATA_DIR=str(tmp)), mock.patch("builtins.__import__", no_flask), redirect_stdout(buffer):
         code = doctor.run(check_versions=False)
     assert "flask not installed (API server unavailable)" in buffer.getvalue()
-    assert code == 1, "a broken API install should fail doctor"
-    print("  [OK] missing flask detected and reported")
+    assert code == 0, "a missing opt-in extra is a capability gap, not a broken install"
+    print("  [OK] missing flask detected and reported, doesn't fail the minimal install")
     assert "defusedxml not installed" not in buffer.getvalue(), "unrelated deps must stay imported"
 
 

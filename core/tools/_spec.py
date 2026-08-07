@@ -569,17 +569,25 @@ class ToolSpec:
         return ""
 
     def validate(self, user_params: dict) -> tuple[bool, str | None]:
-        """Validate user params against the typed schema. Return (ok, error)."""
-        _, error = P.validate_params(self.param_specs or (), user_params or {})
+        """Validate user params against the typed schema. Return (ok, error).
+
+        Unknown parameters are silently dropped: the builder only uses declared
+        params, so an extra key (e.g. 'severity' from an orchestrator that
+        applies it to all tools) cannot change what the command does and should
+        not block the run. Required missing params still fail.
+        """
+        _, error = P.validate_params(self.param_specs or (), user_params or {}, reject_unknown=False)
         return (error is None), error
 
     def normalize(self, user_params: dict) -> tuple[dict | None, str | None]:
         """Validate and return normalized values, or an error.
 
-        Command builders receive the normalized values, so a builder never sees
-        a raw caller-supplied string.
+        Command builders receive the normalized values so a builder never sees
+        a raw caller-supplied string. Unknown keys are dropped: the builder only
+        reads declared params, so an extra callers-side key cannot affect
+        what the command does.
         """
-        return P.validate_params(self.param_specs or (), user_params or {})
+        return P.validate_params(self.param_specs or (), user_params or {}, reject_unknown=False)
 
     def build_cmd(self, user_params: dict) -> list | ShellCommand | None:
         """Build the command from validated parameters.

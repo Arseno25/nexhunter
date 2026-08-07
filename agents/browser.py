@@ -389,7 +389,7 @@ class BrowserAgent(Agent):
                 "link_count": len(links),
                 "script_count": len(driver.find_elements(By.TAG_NAME, "script")),
                 "generator": gen,
-                "technologies": _detect_tech(driver.page_source or "", headers),
+                "technologies": _detect_tech(driver.page_source or "", headers or {}),
                 "security_headers": sec,
                 "cookies": cookies,
                 "dom_depth": _measure_dom_depth(driver),

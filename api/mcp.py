@@ -639,22 +639,34 @@ def register_profile_tools(profile_name: str | None = None, tool_limit: int | No
     selected = _select_for_limit(mcp_profiles.tools_for(profile), tool_limit)
 
     # Drop registry tools no longer in this selection so a --profile/--tool-limit
-    # cap is real, not cosmetic. FastMCP 3.x removed the private _tool_manager;
-    # tools are removed through the public API (local_provider on 3.x, the
-    # deprecated top-level remove_tool as a fallback). Re-adding a still-selected
-    # tool below is a no-op replace, so only the drop needs doing here.
-    _remove = getattr(getattr(mcp, "local_provider", None), "remove_tool", None) or getattr(
-        mcp, "remove_tool", None
-    )
-    if _remove is None:  # pragma: no cover - fastmcp layout guard
-        log.warning("fastmcp tool removal unsupported; --profile/--tool-limit will be ignored")
+    # cap is real, not cosmetic.
+    #
+    # FastMCP 2.x: _tool_manager._tools is a plain dict keyed by tool name.
+    # FastMCP 3.x: removed _tool_manager; tools live in local_provider._tools.
+    # We try both layouts and fall back to a no-op with a warning so the bridge
+    # still starts even on a version we haven't seen yet.
+    def _get_tools_dict():
+        # 2.x layout
+        tm = getattr(mcp, "_tool_manager", None)
+        if tm is not None:
+            d = getattr(tm, "_tools", None)
+            if isinstance(d, dict):
+                return d
+        # 3.x layout
+        lp = getattr(mcp, "local_provider", None)
+        if lp is not None:
+            d = getattr(lp, "_tools", None)
+            if isinstance(d, dict):
+                return d
+        return None
+
+    _tools_dict = _get_tools_dict()
+    if _tools_dict is None:  # pragma: no cover - fastmcp layout guard
+        log.warning("fastmcp tool removal unsupported on this version; --profile/--tool-limit may be partially ignored")
     else:
         for name in list(_REGISTRY_TOOLS):
             if name not in selected:
-                try:
-                    _remove(name)
-                except Exception:  # noqa: S110 - pragma: no cover - already gone / version skew
-                    pass
+                _tools_dict.pop(name, None)
                 _REGISTRY_TOOLS.discard(name)
 
     for name, spec in selected.items():

@@ -2,7 +2,7 @@
   "mcpServers": {
     "nexhunter": {
       "type": "local",
-      "command": "/path/to/nexhunter/.venv/bin/python",
+      "command": "C:\\path\\to\\nexhunter\\.venv\\Scripts\\python.exe",
       "args": [
         "-m",
         "nexhunter.api.mcp",

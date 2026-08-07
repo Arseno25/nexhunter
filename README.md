@@ -464,22 +464,17 @@ See [.env.example](.env.example).
 ## Testing
 
 ```bash
-pytest                                                    # 358 tests
+pytest                                                    # 358 tests, all passing
 pytest --cov=nexhunter --cov-report=term-missing          # coverage
 ruff check .                                              # zero lint errors
-mypy --explicit-package-bases .                           # 5 known errors, see below
+mypy --explicit-package-bases .                           # zero type errors
 ```
 
 The CI matrix runs Python 3.10–3.13 on Ubuntu and Windows with the same
-commands. Known gaps, not silently claimed clean:
-
-- One test failure: `test_registration_generated_from_registry` — MCP profile
-  filtering is unsupported on FastMCP 3.x, `--profile`/`--tool-limit` are
-  silently ignored (see [docs/mcp/](docs/mcp/)).
-- Five mypy errors, pre-existing and unrelated to each other: two missing
-  `list[...]` annotations in `agents/enhanced.py`, an `Optional[bool]` passed
-  where `bool` is expected in `api/visual.py`, and an `Optional[dict]` passed
-  where `dict` is expected in `agents/browser.py`.
+commands. MCP profile filtering (`--profile`/`--tool-limit`) works on both
+FastMCP 2.x and 3.x — the tool-removal path tries both internal layouts
+(`_tool_manager._tools` on 2.x, `local_provider._tools` on 3.x) instead of a
+public API neither version fully exposes.
 
 Coverage is measured, not claimed. The execution and findings layers are the
 best covered; legacy agent and engine code is thinner.
